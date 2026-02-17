@@ -1,0 +1,30 @@
+# Rust build artifacts
+/target
+Cargo.lock
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Environment files (never commit secrets!)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Flock session data (local to each machine)
+.flock-sessions/
+
+# Debug files
+*.log
+*.pdb
