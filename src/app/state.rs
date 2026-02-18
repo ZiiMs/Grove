@@ -3,57 +3,127 @@ use std::collections::{HashMap, VecDeque};
 use uuid::Uuid;
 
 use super::action::InputMode;
-use super::config::Config;
+use super::config::{AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, ProjectConfig};
 use crate::agent::Agent;
 
-/// Maximum number of system metrics samples to keep for the graphs
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsSection {
+    Global,
+    Project,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsField {
+    AiAgent,
+    GitProvider,
+    LogLevel,
+    BranchPrefix,
+    MainBranch,
+}
+
+impl SettingsField {
+    pub fn section(&self) -> SettingsSection {
+        match self {
+            SettingsField::AiAgent | SettingsField::GitProvider | SettingsField::LogLevel => {
+                SettingsSection::Global
+            }
+            SettingsField::BranchPrefix | SettingsField::MainBranch => SettingsSection::Project,
+        }
+    }
+
+    pub fn all_for_section(section: SettingsSection) -> &'static [SettingsField] {
+        match section {
+            SettingsSection::Global => &[
+                SettingsField::AiAgent,
+                SettingsField::GitProvider,
+                SettingsField::LogLevel,
+            ],
+            SettingsSection::Project => &[SettingsField::BranchPrefix, SettingsField::MainBranch],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DropdownState {
+    Closed,
+    Open { selected_index: usize },
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsState {
+    pub active: bool,
+    pub section: SettingsSection,
+    pub field_index: usize,
+    pub dropdown: DropdownState,
+    pub editing_text: bool,
+    pub text_buffer: String,
+    pub pending_ai_agent: AiAgent,
+    pub pending_git_provider: GitProvider,
+    pub pending_log_level: ConfigLogLevel,
+    pub project_config: ProjectConfig,
+}
+
+impl Default for SettingsState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            section: SettingsSection::Global,
+            field_index: 0,
+            dropdown: DropdownState::Closed,
+            editing_text: false,
+            text_buffer: String::new(),
+            pending_ai_agent: AiAgent::default(),
+            pending_git_provider: GitProvider::default(),
+            pending_log_level: ConfigLogLevel::default(),
+            project_config: ProjectConfig::default(),
+        }
+    }
+}
+
+impl SettingsState {
+    pub fn current_field(&self) -> SettingsField {
+        SettingsField::all_for_section(self.section)
+            .get(self.field_index)
+            .copied()
+            .unwrap_or(SettingsField::AiAgent)
+    }
+
+    pub fn is_dropdown_open(&self) -> bool {
+        matches!(self.dropdown, DropdownState::Open { .. })
+    }
+
+    pub fn total_fields(&self) -> usize {
+        SettingsField::all_for_section(self.section).len()
+    }
+}
 
 /// The single source of truth for application state.
 #[derive(Debug)]
 pub struct AppState {
-    /// All managed agents, keyed by ID
     pub agents: HashMap<Uuid, Agent>,
-    /// Ordered list of agent IDs for display
     pub agent_order: Vec<Uuid>,
-    /// Currently selected agent index
     pub selected_index: usize,
-    /// Application configuration
     pub config: Config,
-    /// Whether the app is running
     pub running: bool,
-    /// Current error message to display
     pub error_message: Option<String>,
-    /// Whether help overlay is shown
     pub show_help: bool,
-    /// Whether diff view is active
     pub show_diff: bool,
-    /// Current input mode (for text input)
     pub input_mode: Option<InputMode>,
-    /// Current input buffer
     pub input_buffer: String,
-    /// Scroll offset for output view
     pub output_scroll: usize,
-    /// Path to the main repository
     pub repo_path: String,
-    /// Log messages for debugging
     pub logs: Vec<LogEntry>,
-    /// Whether to show log panel
     pub show_logs: bool,
-    /// Animation frame counter (0-9, cycles for spinner)
     pub animation_frame: usize,
-    /// Global CPU usage history (percentage 0-100)
     pub cpu_history: VecDeque<f32>,
-    /// Global memory usage history (percentage 0-100)
     pub memory_history: VecDeque<f32>,
-    /// Current memory used in bytes
     pub memory_used: u64,
-    /// Total memory in bytes
     pub memory_total: u64,
-    /// Loading message (shown as overlay when Some)
     pub loading_message: Option<String>,
-    /// Preview content for the selected agent (with ANSI codes)
     pub preview_content: Option<String>,
+    pub settings: SettingsState,
 }
 
 /// A log entry with timestamp and level
@@ -74,6 +144,7 @@ pub enum LogLevel {
 
 impl AppState {
     pub fn new(config: Config, repo_path: String) -> Self {
+        let project_config = ProjectConfig::load(&repo_path).unwrap_or_default();
         Self {
             agents: HashMap::new(),
             agent_order: Vec::new(),
@@ -88,7 +159,7 @@ impl AppState {
             output_scroll: 0,
             repo_path,
             logs: Vec::new(),
-            show_logs: true, // Show logs by default for debugging
+            show_logs: true,
             animation_frame: 0,
             cpu_history: VecDeque::with_capacity(SYSTEM_METRICS_HISTORY_SIZE),
             memory_history: VecDeque::with_capacity(SYSTEM_METRICS_HISTORY_SIZE),
@@ -96,6 +167,13 @@ impl AppState {
             memory_total: 0,
             loading_message: None,
             preview_content: None,
+            settings: SettingsState {
+                pending_ai_agent: AiAgent::default(),
+                pending_git_provider: GitProvider::default(),
+                pending_log_level: ConfigLogLevel::default(),
+                project_config,
+                ..Default::default()
+            },
         }
     }
 

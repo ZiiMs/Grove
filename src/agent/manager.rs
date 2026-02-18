@@ -3,6 +3,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use super::{Agent, AgentStatus};
+use crate::app::config::AiAgent;
 use crate::git::Worktree;
 use crate::tmux::TmuxSession;
 
@@ -19,20 +20,17 @@ impl AgentManager {
     }
 
     /// Create a new agent with worktree and tmux session.
-    pub fn create_agent(&self, name: &str, branch: &str) -> Result<Agent> {
-        // Create worktree
+    pub fn create_agent(&self, name: &str, branch: &str, ai_agent: &AiAgent) -> Result<Agent> {
         let worktree = Worktree::new(&self.repo_path);
         let worktree_path = worktree
             .create(branch)
             .context("Failed to create worktree")?;
 
-        // Create agent
         let agent = Agent::new(name.to_string(), branch.to_string(), worktree_path.clone());
 
-        // Create tmux session
         let session = TmuxSession::new(&agent.tmux_session);
         session
-            .create(&worktree_path)
+            .create(&worktree_path, ai_agent.command())
             .context("Failed to create tmux session")?;
 
         Ok(agent)
@@ -102,21 +100,19 @@ impl AgentManager {
         session.exists()
     }
 
-    /// Restart an agent's Claude session.
-    pub fn restart_agent(&self, agent: &Agent) -> Result<()> {
+    /// Restart an agent's AI session.
+    pub fn restart_agent(&self, agent: &Agent, ai_agent: &AiAgent) -> Result<()> {
         let session = TmuxSession::new(&agent.tmux_session);
 
         if !session.exists() {
-            // Recreate the session
-            session.create(&agent.worktree_path)?;
+            session.create(&agent.worktree_path, ai_agent.command())?;
         } else {
-            // Send ctrl-c to interrupt and restart
             let _ = std::process::Command::new("tmux")
                 .args(["send-keys", "-t", &agent.tmux_session, "C-c"])
                 .output();
 
             std::thread::sleep(std::time::Duration::from_millis(100));
-            session.send_keys("claude")?;
+            session.send_keys(ai_agent.command())?;
         }
 
         Ok(())

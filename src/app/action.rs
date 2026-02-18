@@ -153,6 +153,18 @@ pub enum Action {
     RefreshAll,
     Tick,
     Quit,
+
+    // Settings
+    ToggleSettings,
+    SettingsSwitchSection,
+    SettingsSelectNext,
+    SettingsSelectPrev,
+    SettingsSelectField,
+    SettingsConfirmSelection,
+    SettingsCancelSelection,
+    SettingsInputChar(char),
+    SettingsBackspace,
+    SettingsSave,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

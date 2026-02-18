@@ -1,30 +1,13 @@
 use std::collections::HashSet;
 use std::io;
-use std::io::Write;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use arboard::Clipboard;
 use sysinfo::System;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
-/// Copy text to system clipboard (macOS)
-fn copy_to_clipboard(text: &str) -> Result<()> {
-    let mut child = Command::new("pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()
-        .context("Failed to run pbcopy")?;
-
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin
-            .write_all(text.as_bytes())
-            .context("Failed to write to pbcopy")?;
-    }
-
-    child.wait().context("pbcopy failed")?;
-    Ok(())
-}
 use crossterm::{
     event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
@@ -35,7 +18,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 use flock::agent::{
-    detect_checklist_progress, detect_mr_url, detect_status_with_process, Agent, AgentManager,
+    detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
     AgentStatus, ForegroundProcess,
 };
 use flock::app::{Action, AppState, Config, InputMode};
@@ -81,12 +64,26 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = Config::load().unwrap_or_default();
 
+    // Check if this is first launch (no config file exists)
+    let is_first_launch = Config::config_path().map(|p| !p.exists()).unwrap_or(false);
+
     // Initialize storage
     let storage = SessionStorage::new(&repo_path)?;
 
     // Create app state
     let mut state = AppState::new(config.clone(), repo_path.clone());
     state.log_info(format!("Flock started in {}", repo_path));
+
+    // Show settings on first launch
+    if is_first_launch {
+        state.settings.active = true;
+        state.settings.section = flock::app::SettingsSection::Global;
+        state.settings.field_index = 0;
+        state.settings.pending_ai_agent = config.global.ai_agent.clone();
+        state.settings.pending_git_provider = config.global.git_provider.clone();
+        state.settings.pending_log_level = config.global.log_level;
+        state.log_info("First launch - showing settings".to_string());
+    }
 
     // Load existing session if any
     if let Ok(Some(session)) = storage.load() {
@@ -145,8 +142,9 @@ async fn main() -> Result<()> {
     // Start background polling task for agent status
     let agent_poll_tx = action_tx.clone();
     let selected_rx_clone = selected_watch_rx.clone();
+    let ai_agent = config.global.ai_agent.clone();
     tokio::spawn(async move {
-        poll_agents(agent_watch_rx, selected_rx_clone, agent_poll_tx).await;
+        poll_agents(agent_watch_rx, selected_rx_clone, agent_poll_tx, ai_agent).await;
     });
 
     // Start background polling task for global system metrics (CPU/memory)
@@ -314,6 +312,11 @@ async fn main() -> Result<()> {
 
 /// Convert key events to actions.
 fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
+    // Handle settings mode first
+    if state.settings.active {
+        return handle_settings_key(key, state);
+    }
+
     // Handle input mode
     if state.is_input_mode() {
         return handle_input_mode_key(key.code, state);
@@ -398,6 +401,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
             .map(|id| Action::RequestSummary { id }),
         KeyCode::Char('/') => Some(Action::ToggleDiffView),
         KeyCode::Char('L') => Some(Action::ToggleLogs),
+        KeyCode::Char('S') => Some(Action::ToggleSettings),
 
         // GitLab operations
         KeyCode::Char('o') => state
@@ -470,7 +474,45 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
     }
 }
 
+/// Handle key events in settings mode.
+fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
+    use flock::app::DropdownState;
+
+    // Handle text editing mode
+    if state.settings.editing_text {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCancelSelection),
+            KeyCode::Enter => Some(Action::SettingsConfirmSelection),
+            KeyCode::Backspace => Some(Action::SettingsBackspace),
+            KeyCode::Char(c) => Some(Action::SettingsInputChar(c)),
+            _ => None,
+        };
+    }
+
+    // Handle dropdown mode
+    if let DropdownState::Open { .. } = &state.settings.dropdown {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCancelSelection),
+            KeyCode::Enter => Some(Action::SettingsConfirmSelection),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
+            _ => None,
+        };
+    }
+
+    // Normal settings navigation
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Some(Action::SettingsSave),
+        KeyCode::Tab => Some(Action::SettingsSwitchSection),
+        KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
+        KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
+        KeyCode::Enter => Some(Action::SettingsSelectField),
+        _ => None,
+    }
+}
+
 /// Process an action and update state.
+#[allow(clippy::too_many_arguments)]
 async fn process_action(
     action: Action,
     state: &mut AppState,
@@ -515,7 +557,8 @@ async fn process_action(
         // Agent lifecycle
         Action::CreateAgent { name, branch } => {
             state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
-            match agent_manager.create_agent(&name, &branch) {
+            let ai_agent = state.config.global.ai_agent.clone();
+            match agent_manager.create_agent(&name, &branch, &ai_agent) {
                 Ok(agent) => {
                     state.log_info(format!("Agent '{}' created successfully", agent.name));
                     state.add_agent(agent);
@@ -754,13 +797,11 @@ async fn process_action(
                         .args(["worktree", "prune"])
                         .output();
 
-                    // 4. Copy branch name to clipboard
-                    let clipboard_result = copy_to_clipboard(&branch_clone);
+                    // 4. Copy checkout command to clipboard
+                    let checkout_cmd = format!("git checkout {}", branch_clone);
+                    let clipboard_result = Clipboard::new().and_then(|mut c| c.set_text(&checkout_cmd));
                     let message = if clipboard_result.is_ok() {
-                        format!(
-                            "Paused. Branch '{}' copied. Press 'r' to resume.",
-                            branch_clone
-                        )
+                        "Paused. Checkout command copied. Press 'r' to resume.".to_string()
                     } else {
                         format!("Paused '{}'. Press 'r' to resume.", name_clone)
                     };
@@ -776,7 +817,6 @@ async fn process_action(
         }
 
         Action::ResumeAgent { id } => {
-            // Get agent info before spawning background task
             let agent_info = state.agents.get(&id).map(|a| {
                 (
                     a.name.clone(),
@@ -790,9 +830,9 @@ async fn process_action(
                 state.log_info(format!("Resuming agent '{}'...", name));
                 state.loading_message = Some(format!("Resuming '{}'...", name));
 
-                // Spawn background task
                 let tx = action_tx.clone();
                 let name_clone = name.clone();
+                let ai_agent = state.config.global.ai_agent.clone();
                 tokio::spawn(async move {
                     // Check if worktree already exists
                     let worktree_exists = std::path::Path::new(&worktree_path).exists();
@@ -829,11 +869,9 @@ async fn process_action(
                         }
                     }
 
-                    // Check if tmux session already exists (preserves Claude context!)
                     let session = flock::tmux::TmuxSession::new(&tmux_session);
                     if !session.exists() {
-                        // Create tmux session and start claude (only if session doesn't exist)
-                        if let Err(e) = session.create(&worktree_path) {
+                        if let Err(e) = session.create(&worktree_path, ai_agent.command()) {
                             let _ = tx.send(Action::ResumeAgentComplete {
                                 id,
                                 success: false,
@@ -886,27 +924,50 @@ async fn process_action(
         }
 
         Action::PushBranch { id } => {
-            // Clone data we need before mutable borrows
             let agent_info = state
                 .agents
                 .get(&id)
                 .map(|a| (a.name.clone(), a.tmux_session.clone()));
 
             if let Some((name, tmux_session)) = agent_info {
-                // Send /push command to Claude
                 let session = flock::tmux::TmuxSession::new(&tmux_session);
-                match session.send_keys("/push") {
-                    Ok(()) => {
-                        if let Some(agent) = state.agents.get_mut(&id) {
-                            agent.custom_note = Some("pushing...".to_string());
+                let agent_type = state.config.global.ai_agent.clone();
+                let push_cmd = agent_type.push_command();
+                let push_prompt = agent_type.push_prompt();
+
+                let mut success = false;
+
+                if let Some(cmd) = push_cmd {
+                    match session.send_keys(cmd) {
+                        Ok(()) => {
+                            state.log_info(format!("Sent {} to agent '{}'", cmd, name));
+                            success = true;
                         }
-                        state.log_info(format!("Sent /push to agent '{}'", name));
-                        state.error_message = Some("Sent /push to Claude".to_string());
+                        Err(e) => {
+                            state.log_error(format!("Failed to send {}: {}", cmd, e));
+                            state.error_message = Some(format!("Failed to send {}: {}", cmd, e));
+                        }
                     }
-                    Err(e) => {
-                        state.log_error(format!("Failed to send /push: {}", e));
-                        state.error_message = Some(format!("Failed to send /push: {}", e));
+                }
+
+                if let Some(prompt) = push_prompt {
+                    match session.send_keys(prompt) {
+                        Ok(()) => {
+                            state.log_info(format!("Sent push prompt to agent '{}'", name));
+                            success = true;
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Failed to send push prompt: {}", e));
+                            state.error_message = Some(format!("Failed to send push prompt: {}", e));
+                        }
                     }
+                }
+
+                if success {
+                    if let Some(agent) = state.agents.get_mut(&id) {
+                        agent.custom_note = Some("pushing...".to_string());
+                    }
+                    state.error_message = Some(format!("Sent push command to {}", agent_type.display_name()));
                 }
             }
         }
@@ -959,7 +1020,7 @@ async fn process_action(
             let should_log = state
                 .agents
                 .get(&id)
-                .map(|agent| {
+                .and_then(|agent| {
                     let was_none =
                         matches!(agent.mr_status, flock::gitlab::MergeRequestStatus::None);
                     let is_open = matches!(&status, flock::gitlab::MergeRequestStatus::Open { .. });
@@ -972,8 +1033,7 @@ async fn process_action(
                     } else {
                         None
                     }
-                })
-                .flatten();
+                });
 
             // Auto-update note based on MR transitions
             let auto_note = state.agents.get(&id).and_then(|agent| {
@@ -1014,7 +1074,7 @@ async fn process_action(
                 if let Some(url) = agent.mr_status.url() {
                     match std::process::Command::new("open").arg(url).spawn() {
                         Ok(_) => {
-                            state.log_info(format!("Opening MR in browser"));
+                            state.log_info("Opening MR in browser".to_string());
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
@@ -1204,7 +1264,7 @@ async fn process_action(
         Action::CopyAgentName { id } => {
             if let Some(agent) = state.agents.get(&id) {
                 let name = agent.name.clone();
-                match copy_to_clipboard(&name) {
+                match Clipboard::new().and_then(|mut c| c.set_text(&name)) {
                     Ok(()) => {
                         state.error_message = Some(format!("Copied '{}'", name));
                     }
@@ -1320,6 +1380,176 @@ async fn process_action(
             }
             state.error_message = Some(message);
         }
+
+        // Settings actions
+        Action::ToggleSettings => {
+            if state.settings.active {
+                state.settings.active = false;
+            } else {
+                state.settings.active = true;
+                state.settings.section = flock::app::SettingsSection::Global;
+                state.settings.field_index = 0;
+                state.settings.dropdown = flock::app::DropdownState::Closed;
+                state.settings.editing_text = false;
+                state.settings.pending_ai_agent = state.config.global.ai_agent.clone();
+                state.settings.pending_git_provider = state.config.global.git_provider.clone();
+                state.settings.pending_log_level = state.config.global.log_level;
+            }
+        }
+
+        Action::SettingsSwitchSection => {
+            state.settings.section = match state.settings.section {
+                flock::app::SettingsSection::Global => flock::app::SettingsSection::Project,
+                flock::app::SettingsSection::Project => flock::app::SettingsSection::Global,
+            };
+            state.settings.field_index = 0;
+            state.settings.dropdown = flock::app::DropdownState::Closed;
+            state.settings.editing_text = false;
+        }
+
+        Action::SettingsSelectNext => {
+            let field = state.settings.current_field();
+            if let flock::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
+                let max = match field {
+                    flock::app::SettingsField::AiAgent => flock::app::AiAgent::all().len(),
+                    flock::app::SettingsField::GitProvider => flock::app::GitProvider::all().len(),
+                    flock::app::SettingsField::LogLevel => flock::app::ConfigLogLevel::all().len(),
+                    _ => 0,
+                };
+                state.settings.dropdown = flock::app::DropdownState::Open {
+                    selected_index: (*selected_index + 1).min(max.saturating_sub(1)),
+                };
+            } else if state.settings.editing_text {
+                // No navigation in text mode
+            } else {
+                let total = state.settings.total_fields();
+                state.settings.field_index = (state.settings.field_index + 1) % total;
+            }
+        }
+
+        Action::SettingsSelectPrev => {
+            if let flock::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
+                state.settings.dropdown = flock::app::DropdownState::Open {
+                    selected_index: selected_index.saturating_sub(1),
+                };
+            } else if state.settings.editing_text {
+                // No navigation in text mode
+            } else {
+                let total = state.settings.total_fields();
+                state.settings.field_index = if state.settings.field_index == 0 {
+                    total.saturating_sub(1)
+                } else {
+                    state.settings.field_index - 1
+                };
+            }
+        }
+
+        Action::SettingsSelectField => {
+            let field = state.settings.current_field();
+            match field {
+                flock::app::SettingsField::AiAgent => {
+                    let current = &state.settings.pending_ai_agent;
+                    let idx = flock::app::AiAgent::all()
+                        .iter()
+                        .position(|a| a == current)
+                        .unwrap_or(0);
+                    state.settings.dropdown = flock::app::DropdownState::Open { selected_index: idx };
+                }
+                flock::app::SettingsField::GitProvider => {
+                    let current = &state.settings.pending_git_provider;
+                    let idx = flock::app::GitProvider::all()
+                        .iter()
+                        .position(|g| g == current)
+                        .unwrap_or(0);
+                    state.settings.dropdown = flock::app::DropdownState::Open { selected_index: idx };
+                }
+                flock::app::SettingsField::LogLevel => {
+                    let current = &state.settings.pending_log_level;
+                    let idx = flock::app::ConfigLogLevel::all()
+                        .iter()
+                        .position(|l| l == current)
+                        .unwrap_or(0);
+                    state.settings.dropdown = flock::app::DropdownState::Open { selected_index: idx };
+                }
+                flock::app::SettingsField::BranchPrefix => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state.settings.project_config.branch_prefix.clone();
+                }
+                flock::app::SettingsField::MainBranch => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state.settings.project_config.main_branch.clone();
+                }
+            }
+        }
+
+        Action::SettingsConfirmSelection => {
+            if state.settings.editing_text {
+                let field = state.settings.current_field();
+                match field {
+                    flock::app::SettingsField::BranchPrefix => {
+                        state.settings.project_config.branch_prefix = state.settings.text_buffer.clone();
+                    }
+                    flock::app::SettingsField::MainBranch => {
+                        state.settings.project_config.main_branch = state.settings.text_buffer.clone();
+                    }
+                    _ => {}
+                }
+                state.settings.editing_text = false;
+                state.settings.text_buffer.clear();
+            } else if let flock::app::DropdownState::Open { selected_index } = state.settings.dropdown {
+                let field = state.settings.current_field();
+                match field {
+                    flock::app::SettingsField::AiAgent => {
+                        if let Some(agent) = flock::app::AiAgent::all().get(selected_index) {
+                            state.settings.pending_ai_agent = agent.clone();
+                        }
+                    }
+                    flock::app::SettingsField::GitProvider => {
+                        if let Some(provider) = flock::app::GitProvider::all().get(selected_index) {
+                            state.settings.pending_git_provider = provider.clone();
+                        }
+                    }
+                    flock::app::SettingsField::LogLevel => {
+                        if let Some(level) = flock::app::ConfigLogLevel::all().get(selected_index) {
+                            state.settings.pending_log_level = *level;
+                        }
+                    }
+                    _ => {}
+                }
+                state.settings.dropdown = flock::app::DropdownState::Closed;
+            }
+        }
+
+        Action::SettingsCancelSelection => {
+            state.settings.dropdown = flock::app::DropdownState::Closed;
+            state.settings.editing_text = false;
+            state.settings.text_buffer.clear();
+        }
+
+        Action::SettingsInputChar(c) => {
+            state.settings.text_buffer.push(c);
+        }
+
+        Action::SettingsBackspace => {
+            state.settings.text_buffer.pop();
+        }
+
+        Action::SettingsSave => {
+            state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
+            state.config.global.git_provider = state.settings.pending_git_provider.clone();
+            state.config.global.log_level = state.settings.pending_log_level;
+
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+
+            if let Err(e) = state.settings.project_config.save(&state.repo_path) {
+                state.log_error(format!("Failed to save project config: {}", e));
+            }
+
+            state.settings.active = false;
+            state.log_info("Settings saved".to_string());
+        }
     }
 
     Ok(false)
@@ -1330,6 +1560,7 @@ async fn poll_agents(
     agent_rx: watch::Receiver<HashSet<Uuid>>,
     selected_rx: watch::Receiver<Option<Uuid>>,
     tx: mpsc::UnboundedSender<Action>,
+    ai_agent: flock::app::config::AiAgent,
 ) {
     use std::collections::HashMap;
 
@@ -1398,12 +1629,12 @@ async fn poll_agents(
                         match cmd_output {
                             Ok(o) if o.status.success() => {
                                 let cmd = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                                ForegroundProcess::from_command(&cmd)
+                                ForegroundProcess::from_command_for_agent(&cmd, ai_agent.clone())
                             }
                             _ => ForegroundProcess::Unknown,
                         }
                     };
-                    let status = detect_status_with_process(&content, foreground);
+                    let status = detect_status_for_agent(&content, foreground, ai_agent.clone());
 
                     let _ = tx.send(Action::UpdateAgentStatus { id, status });
 
@@ -1425,7 +1656,7 @@ async fn poll_agents(
             }
 
             // Deep MR URL scan: capture 500 lines every ~5s for agents without MR detected
-            if deep_scan_counter % 20 == 0 && !agents_with_mr.contains(&id) {
+            if deep_scan_counter.is_multiple_of(20) && !agents_with_mr.contains(&id) {
                 if let Ok(output) = std::process::Command::new("tmux")
                     .args([
                         "capture-pane",

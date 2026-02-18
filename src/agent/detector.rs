@@ -2,6 +2,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 use super::AgentStatus;
+use crate::app::config::AiAgent;
 use crate::gitlab::{MergeRequestStatus, PipelineStatus};
 
 /// Classification of the foreground process in the tmux pane.
@@ -10,9 +11,11 @@ use crate::gitlab::{MergeRequestStatus, PipelineStatus};
 pub enum ForegroundProcess {
     /// Claude Code is alive (node, claude, npx)
     ClaudeRunning,
+    /// Opencode is alive (node, opencode, npx)
+    OpencodeRunning,
     /// At a shell prompt (bash, zsh, sh, fish, dash)
     Shell,
-    /// Claude spawned a subprocess (cargo, git, python, etc.)
+    /// AI agent spawned a subprocess (cargo, git, python, etc.)
     OtherProcess(String),
     /// Could not determine (tmux error or unavailable)
     Unknown,
@@ -20,17 +23,39 @@ pub enum ForegroundProcess {
 
 impl ForegroundProcess {
     /// Classify a process command name into a `ForegroundProcess` variant.
-    pub fn from_command(cmd: &str) -> Self {
+    /// Uses the configured agent type to determine which AI process names to recognize.
+    pub fn from_command_for_agent(cmd: &str, agent_type: AiAgent) -> Self {
         let cmd_lower = cmd.to_lowercase();
-        // Extract just the binary name (strip path if present)
         let binary = cmd_lower.rsplit('/').next().unwrap_or(&cmd_lower);
 
+        if agent_type.process_names().contains(&binary) {
+            return match agent_type {
+                AiAgent::ClaudeCode => ForegroundProcess::ClaudeRunning,
+                AiAgent::Opencode => ForegroundProcess::OpencodeRunning,
+                AiAgent::Codex | AiAgent::Gemini => {
+                    ForegroundProcess::OtherProcess(binary.to_string())
+                }
+            };
+        }
+
         match binary {
-            "node" | "claude" | "npx" => ForegroundProcess::ClaudeRunning,
             "bash" | "zsh" | "sh" | "fish" | "dash" => ForegroundProcess::Shell,
             "" => ForegroundProcess::Unknown,
             other => ForegroundProcess::OtherProcess(other.to_string()),
         }
+    }
+
+    /// Legacy method for backward compatibility (assumes Claude Code)
+    pub fn from_command(cmd: &str) -> Self {
+        Self::from_command_for_agent(cmd, AiAgent::ClaudeCode)
+    }
+
+    /// Check if this represents any AI agent running
+    pub fn is_agent_running(&self) -> bool {
+        matches!(
+            self,
+            ForegroundProcess::ClaudeRunning | ForegroundProcess::OpencodeRunning
+        )
     }
 }
 
@@ -99,6 +124,16 @@ static ERROR_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"(?i)command failed").unwrap(),
     ]
 });
+
+// OpenCode-specific patterns
+
+/// Pattern for OpenCode progress dots (animation when working)
+static OPENCODE_PROGRESS_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\.{4,}").unwrap());
+
+/// Braille spinner characters (used by various AI tools including OpenCode)
+static OPENCODE_SPINNER_CHARS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[⣾⣽⣻⢿⡿⣟⣯⣷⠁⠃⠇⡇⡏⡟⡿⣿⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]").unwrap());
 
 /// Detect GitLab MR URL in tmux output and return MergeRequestStatus if found.
 pub fn detect_mr_url(output: &str) -> Option<MergeRequestStatus> {
@@ -176,12 +211,24 @@ pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
 
         // Look for checklist item patterns at the start of lines (with possible tree characters)
         // Tree chars: │ ├ └ ─ followed by space, then the checkbox
-        let check_part = trimmed
-            .trim_start_matches(|c| c == '│' || c == '├' || c == '└' || c == '─' || c == ' ');
+        let check_part = trimmed.trim_start_matches(['│', '├', '└', '─', ' ']);
 
+        // OpenCode format: [✓], [•], [ ] in brackets
+        if check_part.starts_with("[✓]")
+            || check_part.starts_with("[✔]")
+            || check_part.starts_with("[✅]")
+        {
+            completed += 1;
+            total += 1;
+        } else if check_part.starts_with("[•]")
+            || check_part.starts_with("[○]")
+            || check_part.starts_with("[ ]")
+        {
+            total += 1;
+        }
         // Check for completed items (checkmarks) - various Unicode checkmarks
         // ✓ U+2713, ✔ U+2714, ☑ U+2611
-        if check_part.starts_with('✓')
+        else if check_part.starts_with('✓')
             || check_part.starts_with('✔')
             || check_part.starts_with('☑')
             || check_part.starts_with('✅')
@@ -189,18 +236,14 @@ pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
             completed += 1;
             total += 1;
         }
-        // Check for in-progress items (filled shapes)
-        // ◼ U+25FC (Claude Code uses this), ■ U+25A0, ▪ U+25AA
+        // Check for in-progress items (filled shapes) or not-started items (empty shapes)
+        // In-progress: ◼ U+25FC (Claude Code uses this), ■ U+25A0, ▪ U+25AA, ●
+        // Not-started: ◻ U+25FB (Claude Code uses this), □ U+25A1, ☐ U+2610, ○
         else if check_part.starts_with('◼')
             || check_part.starts_with('■')
             || check_part.starts_with('▪')
             || check_part.starts_with('●')
-        {
-            total += 1;
-        }
-        // Check for not-started items (empty shapes)
-        // ◻ U+25FB (Claude Code uses this), □ U+25A1, ☐ U+2610
-        else if check_part.starts_with('◻')
+            || check_part.starts_with('◻')
             || check_part.starts_with('□')
             || check_part.starts_with('☐')
             || check_part.starts_with('○')
@@ -238,7 +281,7 @@ pub fn detect_status(output: &str) -> AgentStatus {
     let recent_text = recent_lines.join("\n");
 
     // Get the last few lines (where spinners and prompts appear)
-    let last_line = lines.last().map(|s| *s).unwrap_or("");
+    let _last_line = lines.last().copied().unwrap_or("");
     let last_3_lines: Vec<&str> = lines.iter().rev().take(3).cloned().collect();
     let last_3_text = last_3_lines.join("\n");
 
@@ -334,6 +377,7 @@ pub fn detect_status(output: &str) -> AgentStatus {
 pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -> AgentStatus {
     match foreground {
         ForegroundProcess::ClaudeRunning => detect_status_claude_running(output),
+        ForegroundProcess::OpencodeRunning => detect_status_opencode(output, foreground),
         ForegroundProcess::Shell => detect_status_at_shell(output),
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown => detect_status(output),
@@ -450,9 +494,163 @@ fn detect_status_at_shell(output: &str) -> AgentStatus {
     AgentStatus::Idle
 }
 
+/// Agent-aware status detection using process-level ground truth.
+/// Routes to the appropriate agent-specific detection function.
+pub fn detect_status_for_agent(
+    output: &str,
+    foreground: ForegroundProcess,
+    agent_type: AiAgent,
+) -> AgentStatus {
+    match agent_type {
+        AiAgent::ClaudeCode => detect_status_with_process(output, foreground),
+        AiAgent::Opencode => detect_status_opencode(output, foreground),
+        AiAgent::Codex | AiAgent::Gemini => detect_status_with_process(output, foreground),
+    }
+}
+
+/// Status detection for OpenCode agent.
+/// Simple detection: "Permission required" = AwaitingInput, "esc interrupt" = Running, else Idle
+fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+    let clean_output = strip_ansi(output);
+    let lines: Vec<&str> = clean_output.lines().collect();
+
+    if lines.is_empty() {
+        return AgentStatus::Stopped;
+    }
+
+    // Use full output for question/permission detection (these can appear anywhere)
+    let full_lower = clean_output.to_lowercase();
+
+    // Also check last 5 lines for working indicators (bottom of screen where status appears)
+    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    let last_5_text = last_5_lines.join("\n").to_lowercase();
+
+    // 1. Check for permission panel (highest priority)
+    if full_lower.contains("permission required") {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 2. Check for plan mode / multi-question panel
+    // Look for "Type your own answer" or keyboard hints like "tab" + "select" + "confirm"
+    let is_question_panel = full_lower.contains("type your own answer")
+        || full_lower.contains("esc dismiss")
+        || (full_lower.contains("tab")
+            && full_lower.contains("select")
+            && full_lower.contains("confirm"))
+        || (full_lower.contains("asked") && full_lower.contains("question"));
+
+    if is_question_panel {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 3. Check for working indicator ("esc interrupt" or progress animation at bottom)
+    if last_5_text.contains("esc") && last_5_text.contains("interrupt") {
+        return AgentStatus::Running;
+    }
+    // Check for progress animation (multiple consecutive dots)
+    if OPENCODE_PROGRESS_PATTERN.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+    // Check for braille spinner characters
+    if OPENCODE_SPINNER_CHARS.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // 4. Check for errors
+    for pattern in ERROR_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            for line in lines.iter().rev().take(15) {
+                if pattern.is_match(line) {
+                    let msg = line.trim().chars().take(40).collect::<String>();
+                    return AgentStatus::Error(msg);
+                }
+            }
+            return AgentStatus::Error("Error detected".to_string());
+        }
+    }
+
+    // 5. Check for completion patterns
+    for pattern in COMPLETION_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            return AgentStatus::Completed;
+        }
+    }
+
+    // 6. Check for shell prompt (indicates AI has exited)
+    // A shell prompt is typically a short line ending with $ or # at the very end of output
+    let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
+    let is_shell_prompt = last_line.len() <= 50
+        && (last_line.ends_with('$')
+            || last_line.ends_with('#')
+            || last_line == ">"
+            || last_line.starts_with("➜"));
+
+    // 7. Process-based fallback
+    // - Shell prompt visible = Stopped (AI has exited)
+    // - OpencodeRunning + no working indicators = Idle (AI alive, waiting for input)
+    // - Shell process = Stopped (AI has exited, at shell prompt)
+    if is_shell_prompt && foreground != ForegroundProcess::OpencodeRunning {
+        return AgentStatus::Stopped;
+    }
+
+    match foreground {
+        ForegroundProcess::OpencodeRunning => AgentStatus::Idle,
+        ForegroundProcess::Shell => AgentStatus::Stopped,
+        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::Unknown | ForegroundProcess::ClaudeRunning => {
+            if clean_output.trim().is_empty() {
+                AgentStatus::Stopped
+            } else {
+                AgentStatus::Idle
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_opencode_plan_mode_awaiting_input() {
+        let output = r#"     → Asked 4 questions
+  ┃  5. Type your own answer
+  ┃  ⇆ tab  ↑↓ select  enter confirm  esc dismiss
+  ┃  • OpenCode 1.2.6"#;
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_opencode_plan_mode_with_ansi_codes() {
+        // Simulate output with ANSI color codes
+        let output = "\x1b[36m     → Asked 4 questions\x1b[0m\n  ┃  \x1b[32m5. Type your own answer\x1b[0m\n  ┃  ⇆ tab  ↑↓ select  enter confirm  esc dismiss";
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput with ANSI codes, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_opencode_checklist_progress() {
+        let output = r#"  [✓] Create types.ts with Todo interface
+  [✓] Create storage.ts localStorage helpers
+  [•] Update index.tsx and styles
+  [ ] Test and verify"#;
+        let progress = detect_checklist_progress(output);
+        assert_eq!(
+            progress,
+            Some((2, 4)),
+            "Expected (2, 4), got {:?}",
+            progress
+        );
+    }
 
     #[test]
     fn test_spinner_running() {

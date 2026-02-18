@@ -14,8 +14,8 @@ impl TmuxSession {
     }
 
     /// Create a new tmux session with the given working directory.
-    /// Starts claude in the session.
-    pub fn create(&self, working_dir: &str) -> Result<()> {
+    /// Starts the specified command in the session.
+    pub fn create(&self, working_dir: &str, command: &str) -> Result<()> {
         let output = Command::new("tmux")
             .args(["new-session", "-d", "-s", &self.name, "-c", working_dir])
             .output()
@@ -26,8 +26,7 @@ impl TmuxSession {
             anyhow::bail!("Failed to create tmux session: {}", stderr);
         }
 
-        // Start claude in the session
-        self.send_keys("claude")?;
+        self.send_keys(command)?;
 
         Ok(())
     }
@@ -175,7 +174,7 @@ impl TmuxSession {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let parts: Vec<&str> = stdout.trim().split_whitespace().collect();
+        let parts: Vec<&str> = stdout.split_whitespace().collect();
 
         if parts.len() >= 2 {
             let width = parts[0].parse().unwrap_or(80);

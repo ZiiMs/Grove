@@ -18,7 +18,7 @@ impl HelpOverlay {
 
         let help_text = vec![
             Line::from(Span::styled(
-                "Flock - Claude Agent Manager",
+                "Flock - AI Agent Manager",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -55,8 +55,8 @@ impl HelpOverlay {
             )),
             Line::from("  c        Pause & copy checkout command"),
             Line::from("  r        Resume paused agent"),
-            Line::from("  m        Send merge main request to Claude"),
-            Line::from("  p        Send /push to Claude"),
+            Line::from("  m        Merge main into branch"),
+            Line::from("  p        Push changes"),
             Line::from("  f        Fetch remote"),
             Line::from(""),
             Line::from(Span::styled(

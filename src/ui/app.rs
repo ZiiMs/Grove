@@ -10,7 +10,7 @@ use crate::app::{AppState, InputMode, LogLevel};
 
 use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, EmptyOutputWidget, HelpOverlay,
-    LoadingOverlay, OutputViewWidget, StatusBarWidget, SystemMetricsWidget,
+    LoadingOverlay, OutputViewWidget, SettingsModal, StatusBarWidget, SystemMetricsWidget,
 };
 
 /// ASCII art banner for FLOCK (with padding)
@@ -116,18 +116,27 @@ impl<'a> AppWidget<'a> {
             } else {
                 self.render_footer(frame, main_chunks[5]);
             }
+        } else if has_message {
+            self.render_message(frame, main_chunks[4]);
+            self.render_footer(frame, main_chunks[5]);
         } else {
-            if has_message {
-                self.render_message(frame, main_chunks[4]);
-                self.render_footer(frame, main_chunks[5]);
-            } else {
-                self.render_footer(frame, main_chunks[4]);
-            }
+            self.render_footer(frame, main_chunks[4]);
         }
 
         // Render help overlay if active
         if self.state.show_help {
             HelpOverlay::render(frame, size);
+        }
+
+        // Render settings modal if active
+        if self.state.settings.active {
+            SettingsModal::new(
+                &self.state.settings,
+                &self.state.settings.pending_ai_agent,
+                &self.state.settings.pending_git_provider,
+                &self.state.settings.pending_log_level,
+            )
+            .render(frame);
         }
 
         // Render modal if in input mode
@@ -196,7 +205,7 @@ impl<'a> AppWidget<'a> {
                 render_confirm_modal(
                     frame,
                     "Push",
-                    &format!("Send /push to '{}'?", agent_name),
+                    &format!("Push changes from '{}'?", agent_name),
                     "y",
                     "Esc",
                 );
