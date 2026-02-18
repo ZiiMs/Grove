@@ -175,13 +175,19 @@ static OPENCODE_TODO_PATTERN: LazyLock<Regex> =
 /// Width of the side panel region (characters from right side of line)
 const SIDE_PANEL_WIDTH: usize = 60;
 
+/// Detect checklist progress based on agent type.
+/// Routes to the appropriate detection function for each AI agent.
+pub fn detect_checklist_progress(output: &str, ai_agent: AiAgent) -> Option<(u32, u32)> {
+    match ai_agent {
+        AiAgent::ClaudeCode => detect_checklist_claude_code(output),
+        AiAgent::Opencode => detect_checklist_opencode(output),
+        AiAgent::Codex | AiAgent::Gemini => detect_checklist_generic(output),
+    }
+}
+
 /// Detect checklist progress from Claude Code output.
-/// Returns (completed, total) if a checklist is found.
-/// Checklist items:
-/// - ■ ▪ ● (filled shapes) = in progress (counts as incomplete)
-/// - □ ☐ ○ (empty shapes) = not started (incomplete)
-/// - ✓ ✔ ☑ (checkmarks) = completed
-pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
+/// Checks: task summary lines, collapsed counts, and line-start checkboxes.
+fn detect_checklist_claude_code(output: &str) -> Option<(u32, u32)> {
     let clean_output = strip_ansi(output);
 
     // First, try to find the authoritative task summary line
@@ -199,7 +205,6 @@ pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
         }
     }
 
-    // Fallback: count individual checklist items
     let mut completed = 0u32;
     let mut total = 0u32;
 
@@ -217,31 +222,7 @@ pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
             }
         }
 
-        // Extract the side panel region (rightmost chars) to avoid counting
-        // todos mentioned in chat conversation vs side panel display
-        let side_panel = if trimmed.len() > SIDE_PANEL_WIDTH {
-            &trimmed[trimmed.len() - SIDE_PANEL_WIDTH..]
-        } else {
-            trimmed
-        };
-
-        // Check for OpenCode bracketed todos in side panel region
-        // Each line can have at most one todo in side panel
-        if let Some(caps) = OPENCODE_TODO_PATTERN.captures(side_panel) {
-            if let Some(match_val) = caps.get(1) {
-                let symbol = match_val.as_str();
-                if symbol == "✓" || symbol == "✔" || symbol == "✅" {
-                    completed += 1;
-                    total += 1;
-                } else {
-                    // [•], [○], or [ ] = incomplete
-                    total += 1;
-                }
-                continue;
-            }
-        }
-
-        // Fallback: check line start for Claude Code style checkboxes
+        // Check line start for Claude Code style checkboxes
         // Tree chars: │ ├ └ ─ followed by space, then the checkbox
         let check_part = trimmed.trim_start_matches(['│', '├', '└', '─', ' ']);
 
@@ -285,6 +266,54 @@ pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
     } else {
         None
     }
+}
+
+/// Detect checklist progress from OpenCode side panel.
+/// Only checks the rightmost portion of lines where the side panel is rendered.
+fn detect_checklist_opencode(output: &str) -> Option<(u32, u32)> {
+    let clean_output = strip_ansi(output);
+
+    let mut completed = 0u32;
+    let mut total = 0u32;
+
+    for line in clean_output.lines() {
+        let trimmed = line.trim();
+
+        // Extract the side panel region (rightmost chars) to avoid counting
+        // todos mentioned in chat conversation vs side panel display
+        let side_panel = if trimmed.len() > SIDE_PANEL_WIDTH {
+            &trimmed[trimmed.len() - SIDE_PANEL_WIDTH..]
+        } else {
+            trimmed
+        };
+
+        // Check for OpenCode bracketed todos in side panel region
+        // Each line can have at most one todo in side panel
+        if let Some(caps) = OPENCODE_TODO_PATTERN.captures(side_panel) {
+            if let Some(match_val) = caps.get(1) {
+                let symbol = match_val.as_str();
+                if symbol == "✓" || symbol == "✔" || symbol == "✅" {
+                    completed += 1;
+                    total += 1;
+                } else {
+                    // [•], [○], or [ ] = incomplete
+                    total += 1;
+                }
+            }
+        }
+    }
+
+    if total > 0 {
+        Some((completed, total))
+    } else {
+        None
+    }
+}
+
+/// Generic checklist detection for Codex/Gemini agents.
+/// Uses Claude Code style detection as a fallback.
+fn detect_checklist_generic(output: &str) -> Option<(u32, u32)> {
+    detect_checklist_claude_code(output)
 }
 
 /// Detect the status of a Claude Code agent from its tmux output.
@@ -671,7 +700,7 @@ mod tests {
   [✓] Create storage.ts localStorage helpers
   [•] Update index.tsx and styles
   [ ] Test and verify"#;
-        let progress = detect_checklist_progress(output);
+        let progress = detect_checklist_progress(output, AiAgent::Opencode);
         assert_eq!(
             progress,
             Some((2, 4)),
@@ -689,7 +718,7 @@ mod tests {
   ┃                                                                                                                                                   [•] Create src/hooks/useTodos.ts
   ┃  Let me fix these and continue creating components.                                                                                               [ ] Create src/components/Terminal.tsx
   ┃                                                                                                                                                   [ ] Create src/components/TodoItem.tsx"#;
-        let progress = detect_checklist_progress(output);
+        let progress = detect_checklist_progress(output, AiAgent::Opencode);
         assert_eq!(
             progress,
             Some((2, 5)),
@@ -704,10 +733,54 @@ mod tests {
         // Only side panel todos (rightmost 60 chars) should count
         // Line must be >60 chars with checkbox appearing before the last 60 chars
         let chat_line = "  ┃  I am discussing [✓] Create types.ts in the chat conversation                                                    some regular content here";
-        let progress = detect_checklist_progress(chat_line);
+        let progress = detect_checklist_progress(chat_line, AiAgent::Opencode);
         assert_eq!(
             progress, None,
             "Chat-only todos should not be counted, got {:?}",
+            progress
+        );
+    }
+
+    #[test]
+    fn test_claude_code_checklist_progress() {
+        // Claude Code style: todos at line start, various checkbox formats
+        let output = r#"  ✓ Create types.ts with Todo interface
+  ✓ Create storage.ts localStorage helpers
+  ◼ Update index.tsx and styles
+  ◻ Test and verify"#;
+        let progress = detect_checklist_progress(output, AiAgent::ClaudeCode);
+        assert_eq!(
+            progress,
+            Some((2, 4)),
+            "Expected (2, 4) for Claude Code, got {:?}",
+            progress
+        );
+    }
+
+    #[test]
+    fn test_claude_code_task_summary() {
+        // Claude Code shows authoritative task summary line
+        let output = "Some output here\n11 tasks (9 done, 1 in progress, 1 open)\nMore output";
+        let progress = detect_checklist_progress(output, AiAgent::ClaudeCode);
+        assert_eq!(
+            progress,
+            Some((9, 11)),
+            "Expected (9, 11) from task summary, got {:?}",
+            progress
+        );
+    }
+
+    #[test]
+    fn test_claude_code_bracketed_todos() {
+        // Claude Code also supports bracketed format at line start
+        let output = r#"  [✓] Create types.ts
+  [✓] Create storage.ts
+  [ ] Test and verify"#;
+        let progress = detect_checklist_progress(output, AiAgent::ClaudeCode);
+        assert_eq!(
+            progress,
+            Some((2, 3)),
+            "Expected (2, 3) for bracketed todos, got {:?}",
             progress
         );
     }

@@ -1681,7 +1681,7 @@ async fn poll_agents(
                     }
 
                     // Check for checklist progress
-                    let progress = detect_checklist_progress(&content);
+                    let progress = detect_checklist_progress(&content, ai_agent.clone());
                     let _ = tx.send(Action::UpdateChecklistProgress { id, progress });
                 }
             }
