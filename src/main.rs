@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
         .append(true)
         .open("/tmp/flock-debug.log")
         .ok();
-    
+
     if let Some(file) = log_file {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -98,6 +98,7 @@ async fn main() -> Result<()> {
         state.settings.field_index = 0;
         state.settings.pending_ai_agent = config.global.ai_agent.clone();
         state.settings.pending_log_level = config.global.log_level;
+        state.settings.pending_ui = config.ui.clone();
         state.log_info("First launch - showing settings".to_string());
     }
 
@@ -129,7 +130,9 @@ async fn main() -> Result<()> {
     let github_token_set = Config::github_token().is_some();
     let github_log_msg = format!(
         "GitHub config: owner={:?}, repo={:?}, token={}",
-        github_owner, github_repo, if github_token_set { "set" } else { "NOT SET" }
+        github_owner,
+        github_repo,
+        if github_token_set { "set" } else { "NOT SET" }
     );
     state.log_info(github_log_msg.clone());
     tracing::info!("{}", github_log_msg);
@@ -205,12 +208,20 @@ async fn main() -> Result<()> {
         let branch_rx_clone = branch_watch_rx.clone();
         state.log_info("GitHub integration enabled".to_string());
         tokio::spawn(async move {
-            poll_github_prs(branch_rx_clone, github_client_clone, github_poll_tx, github_refresh_secs).await;
+            poll_github_prs(
+                branch_rx_clone,
+                github_client_clone,
+                github_poll_tx,
+                github_refresh_secs,
+            )
+            .await;
         });
     } else {
         let msg = format!(
             "GitHub not configured (owner={:?}, repo={:?}, token={})",
-            github_owner, github_repo, if github_token_set { "set" } else { "NOT SET" }
+            github_owner,
+            github_repo,
+            if github_token_set { "set" } else { "NOT SET" }
         );
         state.log_debug(msg);
     }
@@ -561,7 +572,8 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
 
     // Normal settings navigation
     match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => Some(Action::SettingsSave),
+        KeyCode::Esc => Some(Action::SettingsClose),
+        KeyCode::Char('q') => Some(Action::SettingsSave),
         KeyCode::Tab => Some(Action::SettingsSwitchSection),
         KeyCode::BackTab => Some(Action::SettingsSwitchSectionBack),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
@@ -1198,9 +1210,7 @@ async fn process_action(
                         Some("pushed".to_string())
                     }
                     flock::github::PullRequestStatus::Merged { .. } => Some("merged".to_string()),
-                    _ if was_merging => {
-                        Some("main merged".to_string())
-                    }
+                    _ if was_merging => Some("main merged".to_string()),
                     _ => None,
                 }
             });
@@ -1543,6 +1553,7 @@ async fn process_action(
                 state.settings.editing_text = false;
                 state.settings.pending_ai_agent = state.config.global.ai_agent.clone();
                 state.settings.pending_log_level = state.config.global.log_level;
+                state.settings.pending_ui = state.config.ui.clone();
             }
         }
 
@@ -1710,6 +1721,26 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                flock::app::SettingsField::ShowPreview => {
+                    state.settings.pending_ui.show_preview =
+                        !state.settings.pending_ui.show_preview;
+                    state.config.ui.show_preview = state.settings.pending_ui.show_preview;
+                    state.show_logs = state.config.ui.show_logs;
+                }
+                flock::app::SettingsField::ShowMetrics => {
+                    state.settings.pending_ui.show_metrics =
+                        !state.settings.pending_ui.show_metrics;
+                    state.config.ui.show_metrics = state.settings.pending_ui.show_metrics;
+                }
+                flock::app::SettingsField::ShowLogs => {
+                    state.settings.pending_ui.show_logs = !state.settings.pending_ui.show_logs;
+                    state.config.ui.show_logs = state.settings.pending_ui.show_logs;
+                    state.show_logs = state.config.ui.show_logs;
+                }
+                flock::app::SettingsField::ShowBanner => {
+                    state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
+                    state.config.ui.show_banner = state.settings.pending_ui.show_banner;
+                }
             }
         }
 
@@ -1779,6 +1810,7 @@ async fn process_action(
                     flock::app::SettingsField::AiAgent => {
                         if let Some(agent) = flock::app::AiAgent::all().get(selected_index) {
                             state.settings.pending_ai_agent = agent.clone();
+                            state.config.global.ai_agent = agent.clone();
                         }
                     }
                     flock::app::SettingsField::GitProvider => {
@@ -1789,6 +1821,7 @@ async fn process_action(
                     flock::app::SettingsField::LogLevel => {
                         if let Some(level) = flock::app::ConfigLogLevel::all().get(selected_index) {
                             state.settings.pending_log_level = *level;
+                            state.config.global.log_level = *level;
                         }
                     }
                     _ => {}
@@ -1811,9 +1844,20 @@ async fn process_action(
             state.settings.text_buffer.pop();
         }
 
+        Action::SettingsClose => {
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+            if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                state.log_error(format!("Failed to save repo config: {}", e));
+            }
+            state.settings.active = false;
+        }
+
         Action::SettingsSave => {
             state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
             state.config.global.log_level = state.settings.pending_log_level;
+            state.config.ui = state.settings.pending_ui.clone();
 
             if let Err(e) = state.config.save() {
                 state.log_error(format!("Failed to save config: {}", e));
@@ -1823,6 +1867,7 @@ async fn process_action(
                 state.log_error(format!("Failed to save repo config: {}", e));
             }
 
+            state.show_logs = state.config.ui.show_logs;
             state.settings.active = false;
             state.log_info("Settings saved".to_string());
         }

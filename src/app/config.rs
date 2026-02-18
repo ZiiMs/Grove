@@ -193,6 +193,18 @@ pub struct UiConfig {
     pub tick_rate_ms: u64,
     #[serde(default = "default_output_buffer")]
     pub output_buffer_lines: usize,
+    #[serde(default = "default_true")]
+    pub show_preview: bool,
+    #[serde(default = "default_true")]
+    pub show_metrics: bool,
+    #[serde(default = "default_true")]
+    pub show_logs: bool,
+    #[serde(default = "default_true")]
+    pub show_banner: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_frame_rate() -> u32 {
@@ -213,6 +225,10 @@ impl Default for UiConfig {
             frame_rate: default_frame_rate(),
             tick_rate_ms: default_tick_rate(),
             output_buffer_lines: default_output_buffer(),
+            show_preview: default_true(),
+            show_metrics: default_true(),
+            show_logs: default_true(),
+            show_banner: default_true(),
         }
     }
 }

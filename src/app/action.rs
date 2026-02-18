@@ -174,6 +174,7 @@ pub enum Action {
     SettingsCancelSelection,
     SettingsInputChar(char),
     SettingsBackspace,
+    SettingsClose,
     SettingsSave,
 }
 

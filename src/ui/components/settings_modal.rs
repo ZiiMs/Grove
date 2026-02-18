@@ -6,12 +6,16 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AiAgent, ConfigLogLevel, GitProvider, SettingsField, SettingsState, SettingsTab};
+use crate::app::{
+    AiAgent, ConfigLogLevel, GitProvider, SettingsCategory, SettingsField, SettingsItem,
+    SettingsState, SettingsTab, UiConfig,
+};
 
 pub struct SettingsModal<'a> {
     state: &'a SettingsState,
     ai_agent: &'a AiAgent,
     log_level: &'a ConfigLogLevel,
+    ui_config: &'a UiConfig,
 }
 
 impl<'a> SettingsModal<'a> {
@@ -19,11 +23,13 @@ impl<'a> SettingsModal<'a> {
         state: &'a SettingsState,
         ai_agent: &'a AiAgent,
         log_level: &'a ConfigLogLevel,
+        ui_config: &'a UiConfig,
     ) -> Self {
         Self {
             state,
             ai_agent,
             log_level,
+            ui_config,
         }
     }
 
@@ -95,164 +101,46 @@ impl<'a> SettingsModal<'a> {
     }
 
     fn render_fields(&self, frame: &mut Frame, area: Rect) {
-        match self.state.tab {
-            SettingsTab::General => self.render_general_fields(frame, area),
-            SettingsTab::Git => self.render_git_fields(frame, area),
-            SettingsTab::ProjectMgmt => self.render_asana_fields(frame, area),
-        }
-    }
+        let items = self.state.all_items();
+        let navigable = self.state.navigable_items();
 
-    fn render_general_fields(&self, frame: &mut Frame, area: Rect) {
-        let fields = [
-            ("AI Agent", self.ai_agent.display_name()),
-            ("Log Level", self.log_level.display_name()),
-        ];
-
-        let lines: Vec<Line> = fields
-            .iter()
-            .enumerate()
-            .map(|(i, (label, value))| {
-                let is_selected = self.state.field_index == i;
-                self.render_field_line(label, value, is_selected, false)
-            })
-            .collect();
-
-        let paragraph = Paragraph::new(lines);
-        frame.render_widget(paragraph, area);
-    }
-
-    fn render_git_fields(&self, frame: &mut Frame, area: Rect) {
-        let provider = self.state.repo_config.git.provider;
-        let fields = SettingsField::all_for_tab(SettingsTab::Git, provider);
+        let selected_field_idx = navigable
+            .get(self.state.field_index)
+            .map(|(idx, _)| *idx)
+            .unwrap_or(0);
 
         let mut lines = Vec::new();
 
-        for (i, field) in fields.iter().enumerate() {
-            let is_selected = self.state.field_index == i;
-            let (label, value) = self.get_git_field_display(field);
-            let is_editable = !matches!(field, SettingsField::GitProvider);
-            lines.push(self.render_field_line(&label, &value, is_selected, is_editable));
+        for (item_idx, item) in items.iter().enumerate() {
+            match item {
+                SettingsItem::Category(cat) => {
+                    lines.push(self.render_category_line(cat));
+                }
+                SettingsItem::Field(field) => {
+                    let is_selected = item_idx == selected_field_idx;
+                    lines.push(self.render_field_line(field, is_selected));
+                }
+            }
         }
 
         let paragraph = Paragraph::new(lines);
         frame.render_widget(paragraph, area);
     }
 
-    fn get_git_field_display(&self, field: &SettingsField) -> (String, String) {
-        match field {
-            SettingsField::GitProvider => (
-                "Provider".to_string(),
-                self.state
-                    .repo_config
-                    .git
-                    .provider
-                    .display_name()
-                    .to_string(),
+    fn render_category_line(&self, cat: &SettingsCategory) -> Line<'static> {
+        Line::from(vec![
+            Span::styled("\n", Style::default()),
+            Span::styled(
+                format!("  ── {} ", cat.display_name()),
+                Style::default().fg(Color::DarkGray),
             ),
-            SettingsField::GitLabProjectId => (
-                "Project ID".to_string(),
-                self.state
-                    .repo_config
-                    .git
-                    .gitlab
-                    .project_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_default(),
-            ),
-            SettingsField::GitLabBaseUrl => (
-                "Base URL".to_string(),
-                self.state.repo_config.git.gitlab.base_url.clone(),
-            ),
-            SettingsField::GitHubOwner => (
-                "Owner".to_string(),
-                self.state
-                    .repo_config
-                    .git
-                    .github
-                    .owner
-                    .clone()
-                    .unwrap_or_default(),
-            ),
-            SettingsField::GitHubRepo => (
-                "Repo".to_string(),
-                self.state
-                    .repo_config
-                    .git
-                    .github
-                    .repo
-                    .clone()
-                    .unwrap_or_default(),
-            ),
-            SettingsField::BranchPrefix => (
-                "Branch Prefix".to_string(),
-                self.state.repo_config.git.branch_prefix.clone(),
-            ),
-            SettingsField::MainBranch => (
-                "Main Branch".to_string(),
-                self.state.repo_config.git.main_branch.clone(),
-            ),
-            SettingsField::WorktreeSymlinks => (
-                "Symlinks".to_string(),
-                self.state.repo_config.git.worktree_symlinks.join(", "),
-            ),
-            _ => ("Unknown".to_string(), String::new()),
-        }
+            Span::styled("─".repeat(30), Style::default().fg(Color::DarkGray)),
+        ])
     }
 
-    fn render_asana_fields(&self, frame: &mut Frame, area: Rect) {
-        let project_gid = self
-            .state
-            .repo_config
-            .asana
-            .project_gid
-            .as_deref()
-            .unwrap_or("");
-        let in_progress_gid = self
-            .state
-            .repo_config
-            .asana
-            .in_progress_section_gid
-            .as_deref()
-            .unwrap_or("");
-        let done_gid = self
-            .state
-            .repo_config
-            .asana
-            .done_section_gid
-            .as_deref()
-            .unwrap_or("");
+    fn render_field_line(&self, field: &SettingsField, is_selected: bool) -> Line<'static> {
+        let (label, value, is_toggle) = self.get_field_display(field);
 
-        let fields = [
-            ("Project GID", project_gid),
-            ("In Progress GID", in_progress_gid),
-            ("Done GID", done_gid),
-        ];
-
-        let lines: Vec<Line> = fields
-            .iter()
-            .enumerate()
-            .map(|(i, (label, value))| {
-                let is_selected = self.state.field_index == i;
-                let display_value = if self.state.editing_text && is_selected {
-                    &self.state.text_buffer
-                } else {
-                    *value
-                };
-                self.render_field_line(label, display_value, is_selected, true)
-            })
-            .collect();
-
-        let paragraph = Paragraph::new(lines);
-        frame.render_widget(paragraph, area);
-    }
-
-    fn render_field_line(
-        &self,
-        label: &str,
-        value: &str,
-        is_selected: bool,
-        _is_editable: bool,
-    ) -> Line<'static> {
         let label_style = if is_selected {
             Style::default()
                 .fg(Color::Yellow)
@@ -269,6 +157,14 @@ impl<'a> SettingsModal<'a> {
             Style::default().fg(Color::Gray)
         };
 
+        let toggle_style = if is_selected {
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+
         let cursor = if is_selected && self.state.editing_text {
             "█"
         } else if is_selected {
@@ -277,21 +173,171 @@ impl<'a> SettingsModal<'a> {
             ""
         };
 
-        let truncated_value = if value.len() > 30 {
-            format!("{}...", &value[..27])
-        } else if self.state.editing_text && is_selected {
+        let display_value = if self.state.editing_text && is_selected {
             self.state.text_buffer.clone()
+        } else if value.len() > 30 {
+            format!("{}...", &value[..27])
         } else {
-            value.to_string()
+            value.clone()
         };
 
+        let final_style = if is_toggle { toggle_style } else { value_style };
+
         Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(format!("{:16}", label), label_style),
+            Span::styled("    ", Style::default()),
+            Span::styled(format!("{:14}", label), label_style),
             Span::styled(": ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:34}", truncated_value), value_style),
+            Span::styled(format!("{:34}", display_value), final_style),
             Span::styled(cursor.to_string(), Style::default().fg(Color::White)),
         ])
+    }
+
+    fn get_field_display(&self, field: &SettingsField) -> (String, String, bool) {
+        match field {
+            SettingsField::AiAgent => (
+                "AI Agent".to_string(),
+                self.ai_agent.display_name().to_string(),
+                false,
+            ),
+            SettingsField::LogLevel => (
+                "Log Level".to_string(),
+                self.log_level.display_name().to_string(),
+                false,
+            ),
+            SettingsField::ShowPreview => (
+                "Preview".to_string(),
+                if self.ui_config.show_preview {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
+                true,
+            ),
+            SettingsField::ShowMetrics => (
+                "Metrics".to_string(),
+                if self.ui_config.show_metrics {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
+                true,
+            ),
+            SettingsField::ShowLogs => (
+                "Logs".to_string(),
+                if self.ui_config.show_logs {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
+                true,
+            ),
+            SettingsField::ShowBanner => (
+                "Banner".to_string(),
+                if self.ui_config.show_banner {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
+                true,
+            ),
+            SettingsField::GitProvider => (
+                "Provider".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .provider
+                    .display_name()
+                    .to_string(),
+                false,
+            ),
+            SettingsField::GitLabProjectId => (
+                "Project ID".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .gitlab
+                    .project_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::GitLabBaseUrl => (
+                "Base URL".to_string(),
+                self.state.repo_config.git.gitlab.base_url.clone(),
+                false,
+            ),
+            SettingsField::GitHubOwner => (
+                "Owner".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .github
+                    .owner
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::GitHubRepo => (
+                "Repo".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .github
+                    .repo
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::BranchPrefix => (
+                "Branch Prefix".to_string(),
+                self.state.repo_config.git.branch_prefix.clone(),
+                false,
+            ),
+            SettingsField::MainBranch => (
+                "Main Branch".to_string(),
+                self.state.repo_config.git.main_branch.clone(),
+                false,
+            ),
+            SettingsField::WorktreeSymlinks => (
+                "Symlinks".to_string(),
+                self.state.repo_config.git.worktree_symlinks.join(", "),
+                false,
+            ),
+            SettingsField::AsanaProjectGid => (
+                "Project GID".to_string(),
+                self.state
+                    .repo_config
+                    .asana
+                    .project_gid
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::AsanaInProgressGid => (
+                "In Progress GID".to_string(),
+                self.state
+                    .repo_config
+                    .asana
+                    .in_progress_section_gid
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::AsanaDoneGid => (
+                "Done GID".to_string(),
+                self.state
+                    .repo_config
+                    .asana
+                    .done_section_gid
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+        }
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
@@ -300,7 +346,19 @@ impl<'a> SettingsModal<'a> {
         } else if self.state.is_dropdown_open() {
             "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
         } else {
-            "[Tab] Switch tab  [Enter] Edit  [↑/↓] Navigate  [Esc] Close  [q] Save & Close"
+            let field = self.state.current_field();
+            let is_toggle = matches!(
+                field,
+                SettingsField::ShowPreview
+                    | SettingsField::ShowMetrics
+                    | SettingsField::ShowLogs
+                    | SettingsField::ShowBanner
+            );
+            if is_toggle {
+                "[Tab] Switch tab  [Enter] Toggle  [↑/↓] Navigate  [Esc] Close"
+            } else {
+                "[Tab] Switch tab  [Enter] Edit  [↑/↓] Navigate  [Esc] Close  [q] Save"
+            }
         };
 
         let paragraph = Paragraph::new(Line::from(Span::styled(
@@ -326,7 +384,13 @@ impl<'a> SettingsModal<'a> {
             _ => return,
         };
 
-        let area = get_dropdown_position(frame.area(), self.state.field_index);
+        let navigable = self.state.navigable_items();
+        let selected_item_idx = navigable
+            .get(self.state.field_index)
+            .map(|(idx, _)| *idx)
+            .unwrap_or(0);
+
+        let area = get_dropdown_position(frame.area(), selected_item_idx);
         frame.render_widget(Clear, area);
 
         let lines: Vec<Line> = options
@@ -377,9 +441,9 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn get_dropdown_position(frame_area: Rect, field_index: usize) -> Rect {
+fn get_dropdown_position(frame_area: Rect, item_index: usize) -> Rect {
     let modal_area = centered_rect(70, 80, frame_area);
     let base_y = modal_area.y + 4;
-    let row_offset = field_index as u16;
+    let row_offset = item_index as u16;
     Rect::new(modal_area.x + 22, base_y + row_offset, 20, 10)
 }

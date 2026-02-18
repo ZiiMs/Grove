@@ -66,7 +66,10 @@ impl GitHubClient {
         }
 
         let body = response.text().await.context("Failed to read response")?;
-        tracing::info!("GitHub API response body: {}", &body.chars().take(500).collect::<String>());
+        tracing::info!(
+            "GitHub API response body: {}",
+            &body.chars().take(500).collect::<String>()
+        );
 
         let prs: Vec<PullRequestResponse> = match serde_json::from_str(&body) {
             Ok(p) => p,
@@ -113,7 +116,10 @@ impl GitHubClient {
             return Ok(PullRequestStatus::Closed { number: pr.number });
         }
 
-        let checks = self.get_checks_status(&pr.head.sha).await.unwrap_or(CheckStatus::None);
+        let checks = self
+            .get_checks_status(&pr.head.sha)
+            .await
+            .unwrap_or(CheckStatus::None);
 
         if pr.draft {
             return Ok(PullRequestStatus::Draft {
@@ -161,10 +167,8 @@ impl GitHubClient {
         let mut has_failure = false;
 
         for check in &checks.check_runs {
-            let status = CheckStatus::from_github_status(
-                &check.status,
-                check.conclusion.as_deref(),
-            );
+            let status =
+                CheckStatus::from_github_status(&check.status, check.conclusion.as_deref());
 
             match status {
                 CheckStatus::Failure | CheckStatus::TimedOut => has_failure = true,
@@ -203,10 +207,7 @@ impl GitHubClient {
     }
 
     pub async fn test_connection(&self) -> Result<()> {
-        let url = format!(
-            "{}/repos/{}/{}",
-            GITHUB_API_URL, self.owner, self.repo
-        );
+        let url = format!("{}/repos/{}/{}", GITHUB_API_URL, self.owner, self.repo);
 
         let response = self
             .client

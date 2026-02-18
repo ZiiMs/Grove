@@ -3,7 +3,9 @@ use std::collections::{HashMap, VecDeque};
 use uuid::Uuid;
 
 use super::action::InputMode;
-use super::config::{AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, RepoConfig};
+use super::config::{
+    AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, RepoConfig, UiConfig,
+};
 use crate::agent::Agent;
 
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
@@ -53,6 +55,10 @@ impl SettingsTab {
 pub enum SettingsField {
     AiAgent,
     LogLevel,
+    ShowPreview,
+    ShowMetrics,
+    ShowLogs,
+    ShowBanner,
     GitProvider,
     GitLabProjectId,
     GitLabBaseUrl,
@@ -66,10 +72,30 @@ pub enum SettingsField {
     AsanaDoneGid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsCategory {
+    Agent,
+    Display,
+    GitProvider,
+    GitConfig,
+    Asana,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsItem {
+    Category(SettingsCategory),
+    Field(SettingsField),
+}
+
 impl SettingsField {
     pub fn tab(&self) -> SettingsTab {
         match self {
-            SettingsField::AiAgent | SettingsField::LogLevel => SettingsTab::General,
+            SettingsField::AiAgent
+            | SettingsField::LogLevel
+            | SettingsField::ShowPreview
+            | SettingsField::ShowMetrics
+            | SettingsField::ShowLogs
+            | SettingsField::ShowBanner => SettingsTab::General,
             SettingsField::GitProvider
             | SettingsField::GitLabProjectId
             | SettingsField::GitLabBaseUrl
@@ -83,34 +109,73 @@ impl SettingsField {
             | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
         }
     }
+}
 
-    pub fn all_for_tab(tab: SettingsTab, provider: GitProvider) -> Vec<SettingsField> {
+impl SettingsCategory {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SettingsCategory::Agent => "Agent",
+            SettingsCategory::Display => "Display",
+            SettingsCategory::GitProvider => "Provider",
+            SettingsCategory::GitConfig => "Configuration",
+            SettingsCategory::Asana => "Asana",
+        }
+    }
+}
+
+impl SettingsItem {
+    pub fn all_for_tab(tab: SettingsTab, provider: GitProvider) -> Vec<SettingsItem> {
         match tab {
-            SettingsTab::General => vec![SettingsField::AiAgent, SettingsField::LogLevel],
+            SettingsTab::General => vec![
+                SettingsItem::Category(SettingsCategory::Agent),
+                SettingsItem::Field(SettingsField::AiAgent),
+                SettingsItem::Field(SettingsField::LogLevel),
+                SettingsItem::Category(SettingsCategory::Display),
+                SettingsItem::Field(SettingsField::ShowPreview),
+                SettingsItem::Field(SettingsField::ShowMetrics),
+                SettingsItem::Field(SettingsField::ShowLogs),
+                SettingsItem::Field(SettingsField::ShowBanner),
+            ],
             SettingsTab::Git => {
-                let mut fields = vec![SettingsField::GitProvider];
+                let mut items = vec![
+                    SettingsItem::Category(SettingsCategory::GitProvider),
+                    SettingsItem::Field(SettingsField::GitProvider),
+                ];
                 match provider {
                     GitProvider::GitLab => {
-                        fields.push(SettingsField::GitLabProjectId);
-                        fields.push(SettingsField::GitLabBaseUrl);
+                        items.push(SettingsItem::Field(SettingsField::GitLabProjectId));
+                        items.push(SettingsItem::Field(SettingsField::GitLabBaseUrl));
                     }
                     GitProvider::GitHub => {
-                        fields.push(SettingsField::GitHubOwner);
-                        fields.push(SettingsField::GitHubRepo);
+                        items.push(SettingsItem::Field(SettingsField::GitHubOwner));
+                        items.push(SettingsItem::Field(SettingsField::GitHubRepo));
                     }
                     GitProvider::Bitbucket => {}
                 }
-                fields.push(SettingsField::BranchPrefix);
-                fields.push(SettingsField::MainBranch);
-                fields.push(SettingsField::WorktreeSymlinks);
-                fields
+                items.push(SettingsItem::Category(SettingsCategory::GitConfig));
+                items.push(SettingsItem::Field(SettingsField::BranchPrefix));
+                items.push(SettingsItem::Field(SettingsField::MainBranch));
+                items.push(SettingsItem::Field(SettingsField::WorktreeSymlinks));
+                items
             }
             SettingsTab::ProjectMgmt => vec![
-                SettingsField::AsanaProjectGid,
-                SettingsField::AsanaInProgressGid,
-                SettingsField::AsanaDoneGid,
+                SettingsItem::Category(SettingsCategory::Asana),
+                SettingsItem::Field(SettingsField::AsanaProjectGid),
+                SettingsItem::Field(SettingsField::AsanaInProgressGid),
+                SettingsItem::Field(SettingsField::AsanaDoneGid),
             ],
         }
+    }
+
+    pub fn navigable_items(items: &[SettingsItem]) -> Vec<(usize, SettingsField)> {
+        items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| match item {
+                SettingsItem::Field(f) => Some((i, *f)),
+                SettingsItem::Category(_) => None,
+            })
+            .collect()
     }
 }
 
@@ -130,6 +195,7 @@ pub struct SettingsState {
     pub text_buffer: String,
     pub pending_ai_agent: AiAgent,
     pub pending_log_level: ConfigLogLevel,
+    pub pending_ui: UiConfig,
     pub repo_config: RepoConfig,
 }
 
@@ -144,17 +210,26 @@ impl Default for SettingsState {
             text_buffer: String::new(),
             pending_ai_agent: AiAgent::default(),
             pending_log_level: ConfigLogLevel::default(),
+            pending_ui: UiConfig::default(),
             repo_config: RepoConfig::default(),
         }
     }
 }
 
 impl SettingsState {
+    pub fn all_items(&self) -> Vec<SettingsItem> {
+        SettingsItem::all_for_tab(self.tab, self.repo_config.git.provider)
+    }
+
+    pub fn navigable_items(&self) -> Vec<(usize, SettingsField)> {
+        SettingsItem::navigable_items(&self.all_items())
+    }
+
     pub fn current_field(&self) -> SettingsField {
-        let fields = SettingsField::all_for_tab(self.tab, self.repo_config.git.provider);
-        fields
+        let navigable = self.navigable_items();
+        navigable
             .get(self.field_index)
-            .copied()
+            .map(|(_, f)| *f)
             .unwrap_or(SettingsField::AiAgent)
     }
 
@@ -163,7 +238,7 @@ impl SettingsState {
     }
 
     pub fn total_fields(&self) -> usize {
-        SettingsField::all_for_tab(self.tab, self.repo_config.git.provider).len()
+        self.navigable_items().len()
     }
 
     pub fn next_tab(&self) -> SettingsTab {
@@ -221,6 +296,7 @@ pub enum LogLevel {
 impl AppState {
     pub fn new(config: Config, repo_path: String) -> Self {
         let repo_config = RepoConfig::load(&repo_path).unwrap_or_default();
+        let show_logs = config.ui.show_logs;
         Self {
             agents: HashMap::new(),
             agent_order: Vec::new(),
@@ -235,7 +311,7 @@ impl AppState {
             output_scroll: 0,
             repo_path,
             logs: Vec::new(),
-            show_logs: true,
+            show_logs,
             animation_frame: 0,
             cpu_history: VecDeque::with_capacity(SYSTEM_METRICS_HISTORY_SIZE),
             memory_history: VecDeque::with_capacity(SYSTEM_METRICS_HISTORY_SIZE),
