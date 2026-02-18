@@ -75,6 +75,15 @@ pub enum Action {
         id: Uuid,
     },
 
+    // GitHub operations
+    UpdatePrStatus {
+        id: Uuid,
+        status: crate::github::PullRequestStatus,
+    },
+    OpenPrInBrowser {
+        id: Uuid,
+    },
+
     // Asana operations
     AssignAsanaTask {
         id: Uuid,
@@ -157,6 +166,7 @@ pub enum Action {
     // Settings
     ToggleSettings,
     SettingsSwitchSection,
+    SettingsSwitchSectionBack,
     SettingsSelectNext,
     SettingsSelectPrev,
     SettingsSelectField,

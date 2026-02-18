@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::asana::AsanaTaskStatus;
 use crate::git::GitSyncStatus;
+use crate::github::PullRequestStatus;
 use crate::gitlab::MergeRequestStatus;
 
 /// Maximum number of activity ticks to track for sparkline
@@ -72,6 +73,8 @@ pub struct Agent {
     pub git_status: Option<GitSyncStatus>,
     #[serde(skip)]
     pub mr_status: MergeRequestStatus,
+    #[serde(skip)]
+    pub pr_status: PullRequestStatus,
     pub created_at: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
     /// Activity history for sparkline (last 20 ticks, true = had activity)
@@ -105,6 +108,7 @@ impl Agent {
             output_buffer: Vec::new(),
             git_status: None,
             mr_status: MergeRequestStatus::None,
+            pr_status: PullRequestStatus::None,
             created_at: Utc::now(),
             last_activity: Utc::now(),
             activity_history: VecDeque::with_capacity(ACTIVITY_HISTORY_SIZE),

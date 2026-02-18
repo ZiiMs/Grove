@@ -70,7 +70,7 @@ impl AiAgent {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum GitProvider {
     #[default]
@@ -132,8 +132,6 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub ai_agent: AiAgent,
     #[serde(default)]
-    pub git_provider: GitProvider,
-    #[serde(default)]
     pub log_level: LogLevel,
 }
 
@@ -153,9 +151,6 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsanaConfig {
-    pub project_gid: Option<String>,
-    pub in_progress_section_gid: Option<String>,
-    pub done_section_gid: Option<String>,
     #[serde(default = "default_asana_refresh")]
     pub refresh_secs: u64,
 }
@@ -167,9 +162,6 @@ fn default_asana_refresh() -> u64 {
 impl Default for AsanaConfig {
     fn default() -> Self {
         Self {
-            project_gid: None,
-            in_progress_section_gid: None,
-            done_section_gid: None,
             refresh_secs: default_asana_refresh(),
         }
     }
@@ -179,25 +171,16 @@ impl Default for AsanaConfig {
 pub struct GitLabConfig {
     #[serde(default = "default_gitlab_url")]
     pub base_url: String,
-    pub project_id: Option<u64>,
-    #[serde(default = "default_main_branch")]
-    pub main_branch: String,
 }
 
 fn default_gitlab_url() -> String {
     "https://gitlab.com".to_string()
 }
 
-fn default_main_branch() -> String {
-    "main".to_string()
-}
-
 impl Default for GitLabConfig {
     fn default() -> Self {
         Self {
             base_url: default_gitlab_url(),
-            project_id: None,
-            main_branch: default_main_branch(),
         }
     }
 }
@@ -242,6 +225,8 @@ pub struct PerformanceConfig {
     pub git_refresh_secs: u64,
     #[serde(default = "default_gitlab_refresh")]
     pub gitlab_refresh_secs: u64,
+    #[serde(default = "default_github_refresh")]
+    pub github_refresh_secs: u64,
 }
 
 fn default_agent_poll() -> u64 {
@@ -256,12 +241,17 @@ fn default_gitlab_refresh() -> u64 {
     60
 }
 
+fn default_github_refresh() -> u64 {
+    60
+}
+
 impl Default for PerformanceConfig {
     fn default() -> Self {
         Self {
             agent_poll_ms: default_agent_poll(),
             git_refresh_secs: default_git_refresh(),
             gitlab_refresh_secs: default_gitlab_refresh(),
+            github_refresh_secs: default_github_refresh(),
         }
     }
 }
@@ -309,72 +299,117 @@ impl Config {
         std::env::var("GITLAB_TOKEN").ok()
     }
 
+    pub fn github_token() -> Option<String> {
+        std::env::var("GITHUB_TOKEN").ok()
+    }
+
     pub fn asana_token() -> Option<String> {
         std::env::var("ASANA_TOKEN").ok()
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoConfig {
+    #[serde(default)]
+    pub git: RepoGitConfig,
+    #[serde(default)]
+    pub asana: RepoAsanaConfig,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectConfig {
+pub struct RepoGitConfig {
+    #[serde(default)]
+    pub provider: GitProvider,
     #[serde(default = "default_branch_prefix")]
     pub branch_prefix: String,
     #[serde(default = "default_main_branch")]
     pub main_branch: String,
     #[serde(default)]
     pub worktree_symlinks: Vec<String>,
+    #[serde(default)]
+    pub gitlab: RepoGitLabConfig,
+    #[serde(default)]
+    pub github: RepoGitHubConfig,
 }
 
 fn default_branch_prefix() -> String {
     "feature/".to_string()
 }
 
-impl Default for ProjectConfig {
+fn default_main_branch() -> String {
+    "main".to_string()
+}
+
+impl Default for RepoGitConfig {
     fn default() -> Self {
         Self {
+            provider: GitProvider::default(),
             branch_prefix: default_branch_prefix(),
             main_branch: default_main_branch(),
             worktree_symlinks: Vec::new(),
+            gitlab: RepoGitLabConfig::default(),
+            github: RepoGitHubConfig::default(),
         }
     }
 }
 
-impl ProjectConfig {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoGitLabConfig {
+    pub project_id: Option<u64>,
+    #[serde(default = "default_gitlab_url")]
+    pub base_url: String,
+}
+
+impl Default for RepoGitLabConfig {
+    fn default() -> Self {
+        Self {
+            project_id: None,
+            base_url: default_gitlab_url(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoGitHubConfig {
+    pub owner: Option<String>,
+    pub repo: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoAsanaConfig {
+    pub project_gid: Option<String>,
+    pub in_progress_section_gid: Option<String>,
+    pub done_section_gid: Option<String>,
+}
+
+impl RepoConfig {
     pub fn load(repo_path: &str) -> Result<Self> {
         let config_path = Self::config_path(repo_path)?;
 
         if config_path.exists() {
             let content =
-                std::fs::read_to_string(&config_path).context("Failed to read project config")?;
-            toml::from_str(&content).context("Failed to parse project config")
+                std::fs::read_to_string(&config_path).context("Failed to read repo config")?;
+            toml::from_str(&content).context("Failed to parse repo config")
         } else {
             Ok(Self::default())
         }
     }
 
     pub fn save(&self, repo_path: &str) -> Result<()> {
-        let dir = Self::config_dir(repo_path)?;
-        if !dir.exists() {
-            std::fs::create_dir_all(&dir).context("Failed to create project config directory")?;
+        let config_dir = Self::config_dir(repo_path)?;
+        if !config_dir.exists() {
+            std::fs::create_dir_all(&config_dir).context("Failed to create .flock directory")?;
         }
         let config_path = Self::config_path(repo_path)?;
-        let content = toml::to_string_pretty(self).context("Failed to serialize project config")?;
-        std::fs::write(&config_path, content).context("Failed to write project config")
+        let content = toml::to_string_pretty(self).context("Failed to serialize repo config")?;
+        std::fs::write(&config_path, content).context("Failed to write repo config")
     }
 
     fn config_dir(repo_path: &str) -> Result<PathBuf> {
-        let hash = Self::hash_repo_path(repo_path);
-        Ok(Config::config_dir()?.join("projects").join(hash))
+        Ok(PathBuf::from(repo_path).join(".flock"))
     }
 
     fn config_path(repo_path: &str) -> Result<PathBuf> {
-        Ok(Self::config_dir(repo_path)?.join("config.toml"))
-    }
-
-    fn hash_repo_path(repo_path: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        repo_path.hash(&mut hasher);
-        format!("{:x}", hasher.finish())
+        Ok(Self::config_dir(repo_path)?.join("project.toml"))
     }
 }

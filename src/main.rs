@@ -24,6 +24,7 @@ use flock::agent::{
 use flock::app::{Action, AppState, Config, InputMode};
 use flock::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use flock::git::GitSync;
+use flock::github::OptionalGitHubClient;
 use flock::gitlab::OptionalGitLabClient;
 use flock::storage::{save_session, SessionStorage};
 use flock::tmux::is_tmux_available;
@@ -31,14 +32,31 @@ use flock::ui::AppWidget;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("flock=info".parse().unwrap()),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/flock-debug.log")
+        .ok();
+    
+    if let Some(file) = log_file {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("flock=debug".parse().unwrap()),
+            )
+            .with_writer(std::sync::Arc::new(file))
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("flock=info".parse().unwrap()),
+            )
+            .with_writer(std::io::stderr)
+            .init();
+    }
+
+    tracing::info!("=== Flock starting ===");
 
     // Check prerequisites
     if !is_tmux_available() {
@@ -74,18 +92,15 @@ async fn main() -> Result<()> {
     let mut state = AppState::new(config.clone(), repo_path.clone());
     state.log_info(format!("Flock started in {}", repo_path));
 
-    // Show settings on first launch
     if is_first_launch {
         state.settings.active = true;
-        state.settings.section = flock::app::SettingsSection::Global;
+        state.settings.tab = flock::app::SettingsTab::General;
         state.settings.field_index = 0;
         state.settings.pending_ai_agent = config.global.ai_agent.clone();
-        state.settings.pending_git_provider = config.global.git_provider.clone();
         state.settings.pending_log_level = config.global.log_level;
         state.log_info("First launch - showing settings".to_string());
     }
 
-    // Load existing session if any
     if let Ok(Some(session)) = storage.load() {
         let count = session.agents.len();
         for agent in session.agents {
@@ -97,20 +112,36 @@ async fn main() -> Result<()> {
         state.log_info(format!("Loaded {} agents from session", count));
     }
 
-    // Create agent manager
     let agent_manager = Arc::new(AgentManager::new(&repo_path));
 
-    // Create GitLab client
+    let gitlab_base_url = &state.settings.repo_config.git.gitlab.base_url;
+    let gitlab_project_id = state.settings.repo_config.git.gitlab.project_id;
+    let asana_project_gid = state.settings.repo_config.asana.project_gid.clone();
+
     let gitlab_client = Arc::new(OptionalGitLabClient::new(
-        &config.gitlab.base_url,
-        config.gitlab.project_id,
+        gitlab_base_url,
+        gitlab_project_id,
         Config::gitlab_token().as_deref(),
     ));
 
-    // Create Asana client
+    let github_owner = state.settings.repo_config.git.github.owner.clone();
+    let github_repo = state.settings.repo_config.git.github.repo.clone();
+    let github_token_set = Config::github_token().is_some();
+    let github_log_msg = format!(
+        "GitHub config: owner={:?}, repo={:?}, token={}",
+        github_owner, github_repo, if github_token_set { "set" } else { "NOT SET" }
+    );
+    state.log_info(github_log_msg.clone());
+    tracing::info!("{}", github_log_msg);
+    let github_client = Arc::new(OptionalGitHubClient::new(
+        github_owner.as_deref(),
+        github_repo.as_deref(),
+        Config::github_token().as_deref(),
+    ));
+
     let asana_client = Arc::new(OptionalAsanaClient::new(
         Config::asana_token().as_deref(),
-        config.asana.project_gid.clone(),
+        asana_project_gid,
     ));
 
     // Setup terminal
@@ -157,12 +188,31 @@ async fn main() -> Result<()> {
     if gitlab_client.is_configured() {
         let gitlab_poll_tx = action_tx.clone();
         let gitlab_client_clone = Arc::clone(&gitlab_client);
+        let branch_rx_clone = branch_watch_rx.clone();
         tokio::spawn(async move {
-            poll_gitlab_mrs(branch_watch_rx, gitlab_client_clone, gitlab_poll_tx).await;
+            poll_gitlab_mrs(branch_rx_clone, gitlab_client_clone, gitlab_poll_tx).await;
         });
         state.log_info("GitLab integration enabled".to_string());
     } else {
         state.log_debug("GitLab not configured (set GITLAB_TOKEN and project_id)".to_string());
+    }
+
+    // Start GitHub polling task (if configured)
+    if github_client.is_configured() {
+        let github_poll_tx = action_tx.clone();
+        let github_client_clone = Arc::clone(&github_client);
+        let github_refresh_secs = config.performance.github_refresh_secs;
+        let branch_rx_clone = branch_watch_rx.clone();
+        state.log_info("GitHub integration enabled".to_string());
+        tokio::spawn(async move {
+            poll_github_prs(branch_rx_clone, github_client_clone, github_poll_tx, github_refresh_secs).await;
+        });
+    } else {
+        let msg = format!(
+            "GitHub not configured (owner={:?}, repo={:?}, token={})",
+            github_owner, github_repo, if github_token_set { "set" } else { "NOT SET" }
+        );
+        state.log_debug(msg);
     }
 
     // Create watch channel for Asana task tracking (agent_id, task_gid) pairs
@@ -403,10 +453,19 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         KeyCode::Char('L') => Some(Action::ToggleLogs),
         KeyCode::Char('S') => Some(Action::ToggleSettings),
 
-        // GitLab operations
-        KeyCode::Char('o') => state
-            .selected_agent_id()
-            .map(|id| Action::OpenMrInBrowser { id }),
+        // Git provider operations
+        KeyCode::Char('o') => {
+            let provider = state.settings.repo_config.git.provider;
+            match provider {
+                flock::app::GitProvider::GitLab => state
+                    .selected_agent_id()
+                    .map(|id| Action::OpenMrInBrowser { id }),
+                flock::app::GitProvider::GitHub => state
+                    .selected_agent_id()
+                    .map(|id| Action::OpenPrInBrowser { id }),
+                flock::app::GitProvider::Bitbucket => None,
+            }
+        }
 
         // Asana operations
         KeyCode::Char('a') => Some(Action::EnterInputMode(InputMode::AssignAsana)),
@@ -504,6 +563,7 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Some(Action::SettingsSave),
         KeyCode::Tab => Some(Action::SettingsSwitchSection),
+        KeyCode::BackTab => Some(Action::SettingsSwitchSectionBack),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
         KeyCode::Enter => Some(Action::SettingsSelectField),
@@ -558,7 +618,7 @@ async fn process_action(
         Action::CreateAgent { name, branch } => {
             state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
             let ai_agent = state.config.global.ai_agent.clone();
-            let worktree_symlinks = state.settings.project_config.worktree_symlinks.clone();
+            let worktree_symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
             match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks) {
                 Ok(agent) => {
                     state.log_info(format!("Agent '{}' created successfully", agent.name));
@@ -644,7 +704,7 @@ async fn process_action(
                 if let Some(task_gid) = agent.asana_task_status.gid() {
                     let gid = task_gid.to_string();
                     let client = Arc::clone(asana_client);
-                    let done_gid = state.config.asana.done_section_gid.clone();
+                    let done_gid = state.settings.repo_config.asana.done_section_gid.clone();
                     tokio::spawn(async move {
                         let _ = client.move_to_done(&gid, done_gid.as_deref()).await;
                         let _ = client.complete_task(&gid).await;
@@ -712,7 +772,12 @@ async fn process_action(
                         };
                     }
                     let client = Arc::clone(asana_client);
-                    let override_gid = state.config.asana.in_progress_section_gid.clone();
+                    let override_gid = state
+                        .settings
+                        .repo_config
+                        .asana
+                        .in_progress_section_gid
+                        .clone();
                     let tx = action_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = client
@@ -844,7 +909,7 @@ async fn process_action(
                 let name_clone = name.clone();
                 let ai_agent = state.config.global.ai_agent.clone();
                 let repo_path = state.repo_path.clone();
-                let worktree_symlinks = state.settings.project_config.worktree_symlinks.clone();
+                let worktree_symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
                 tokio::spawn(async move {
                     // Check if worktree already exists
                     let worktree_exists = std::path::Path::new(&worktree_path).exists();
@@ -913,7 +978,7 @@ async fn process_action(
 
         Action::MergeMain { id } => {
             // Clone data we need before mutable borrows
-            let main_branch = state.config.gitlab.main_branch.clone();
+            let main_branch = state.settings.repo_config.git.main_branch.clone();
             let agent_info = state
                 .agents
                 .get(&id)
@@ -1092,7 +1157,7 @@ async fn process_action(
         Action::OpenMrInBrowser { id } => {
             if let Some(agent) = state.agents.get(&id) {
                 if let Some(url) = agent.mr_status.url() {
-                    match std::process::Command::new("open").arg(url).spawn() {
+                    match open::that(url) {
                         Ok(_) => {
                             state.log_info("Opening MR in browser".to_string());
                         }
@@ -1103,6 +1168,70 @@ async fn process_action(
                     }
                 } else {
                     state.error_message = Some("No MR available for this agent".to_string());
+                }
+            }
+        }
+
+        // GitHub operations
+        Action::UpdatePrStatus { id, status } => {
+            let should_log = state.agents.get(&id).and_then(|agent| {
+                let was_none = matches!(agent.pr_status, flock::github::PullRequestStatus::None);
+                let is_open = matches!(&status, flock::github::PullRequestStatus::Open { .. });
+                if was_none && is_open {
+                    if let flock::github::PullRequestStatus::Open { number, url, .. } = &status {
+                        Some((agent.name.clone(), *number, url.clone()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            });
+
+            let auto_note = state.agents.get(&id).and_then(|agent| {
+                let was_none = matches!(agent.pr_status, flock::github::PullRequestStatus::None);
+                let was_pushing = agent.custom_note.as_deref() == Some("pushing...");
+                let was_merging = agent.custom_note.as_deref() == Some("merging main...");
+
+                match &status {
+                    flock::github::PullRequestStatus::Open { .. } if was_none || was_pushing => {
+                        Some("pushed".to_string())
+                    }
+                    flock::github::PullRequestStatus::Merged { .. } => Some("merged".to_string()),
+                    _ if was_merging => {
+                        Some("main merged".to_string())
+                    }
+                    _ => None,
+                }
+            });
+
+            if let Some(agent) = state.agents.get_mut(&id) {
+                agent.pr_status = status;
+                if let Some(note) = auto_note {
+                    agent.custom_note = Some(note);
+                }
+            }
+
+            if let Some((name, number, url)) = should_log {
+                state.log_info(format!("PR #{} detected for '{}'", number, name));
+                state.error_message = Some(format!("PR #{}: {}", number, url));
+            }
+        }
+
+        Action::OpenPrInBrowser { id } => {
+            if let Some(agent) = state.agents.get(&id) {
+                if let Some(url) = agent.pr_status.url() {
+                    match open::that(url) {
+                        Ok(_) => {
+                            state.log_info("Opening PR in browser".to_string());
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Failed to open browser: {}", e));
+                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                        }
+                    }
+                } else {
+                    state.error_message = Some("No PR available for this agent".to_string());
                 }
             }
         }
@@ -1176,7 +1305,7 @@ async fn process_action(
         Action::OpenAsanaInBrowser { id } => {
             if let Some(agent) = state.agents.get(&id) {
                 if let Some(url) = agent.asana_task_status.url() {
-                    match std::process::Command::new("open").arg(url).spawn() {
+                    match open::that(url) {
                         Ok(_) => {
                             state.log_info("Opening Asana task in browser".to_string());
                         }
@@ -1303,7 +1432,8 @@ async fn process_action(
             // Refresh git status for selected agent
             if let Some(agent) = state.selected_agent() {
                 let git_sync = GitSync::new(&agent.worktree_path);
-                if let Ok(status) = git_sync.get_status(&state.config.gitlab.main_branch) {
+                if let Ok(status) = git_sync.get_status(&state.settings.repo_config.git.main_branch)
+                {
                     let id = agent.id;
                     action_tx.send(Action::UpdateGitStatus { id, status })?;
                 }
@@ -1407,21 +1537,24 @@ async fn process_action(
                 state.settings.active = false;
             } else {
                 state.settings.active = true;
-                state.settings.section = flock::app::SettingsSection::Global;
+                state.settings.tab = flock::app::SettingsTab::General;
                 state.settings.field_index = 0;
                 state.settings.dropdown = flock::app::DropdownState::Closed;
                 state.settings.editing_text = false;
                 state.settings.pending_ai_agent = state.config.global.ai_agent.clone();
-                state.settings.pending_git_provider = state.config.global.git_provider.clone();
                 state.settings.pending_log_level = state.config.global.log_level;
             }
         }
 
         Action::SettingsSwitchSection => {
-            state.settings.section = match state.settings.section {
-                flock::app::SettingsSection::Global => flock::app::SettingsSection::Project,
-                flock::app::SettingsSection::Project => flock::app::SettingsSection::Global,
-            };
+            state.settings.tab = state.settings.next_tab();
+            state.settings.field_index = 0;
+            state.settings.dropdown = flock::app::DropdownState::Closed;
+            state.settings.editing_text = false;
+        }
+
+        Action::SettingsSwitchSectionBack => {
+            state.settings.tab = state.settings.prev_tab();
             state.settings.field_index = 0;
             state.settings.dropdown = flock::app::DropdownState::Closed;
             state.settings.editing_text = false;
@@ -1440,7 +1573,6 @@ async fn process_action(
                     selected_index: (*selected_index + 1).min(max.saturating_sub(1)),
                 };
             } else if state.settings.editing_text {
-                // No navigation in text mode
             } else {
                 let total = state.settings.total_fields();
                 state.settings.field_index = (state.settings.field_index + 1) % total;
@@ -1453,7 +1585,6 @@ async fn process_action(
                     selected_index: selected_index.saturating_sub(1),
                 };
             } else if state.settings.editing_text {
-                // No navigation in text mode
             } else {
                 let total = state.settings.total_fields();
                 state.settings.field_index = if state.settings.field_index == 0 {
@@ -1478,7 +1609,7 @@ async fn process_action(
                     };
                 }
                 flock::app::SettingsField::GitProvider => {
-                    let current = &state.settings.pending_git_provider;
+                    let current = &state.settings.repo_config.git.provider;
                     let idx = flock::app::GitProvider::all()
                         .iter()
                         .position(|g| g == current)
@@ -1500,11 +1631,84 @@ async fn process_action(
                 flock::app::SettingsField::BranchPrefix => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer =
-                        state.settings.project_config.branch_prefix.clone();
+                        state.settings.repo_config.git.branch_prefix.clone();
                 }
                 flock::app::SettingsField::MainBranch => {
                     state.settings.editing_text = true;
-                    state.settings.text_buffer = state.settings.project_config.main_branch.clone();
+                    state.settings.text_buffer = state.settings.repo_config.git.main_branch.clone();
+                }
+                flock::app::SettingsField::WorktreeSymlinks => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer =
+                        state.settings.repo_config.git.worktree_symlinks.join(", ");
+                }
+                flock::app::SettingsField::GitLabProjectId => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .git
+                        .gitlab
+                        .project_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::GitLabBaseUrl => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer =
+                        state.settings.repo_config.git.gitlab.base_url.clone();
+                }
+                flock::app::SettingsField::GitHubOwner => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .git
+                        .github
+                        .owner
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::GitHubRepo => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .git
+                        .github
+                        .repo
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::AsanaProjectGid => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .asana
+                        .project_gid
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::AsanaInProgressGid => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .asana
+                        .in_progress_section_gid
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::AsanaDoneGid => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .asana
+                        .done_section_gid
+                        .clone()
+                        .unwrap_or_default();
                 }
             }
         }
@@ -1514,12 +1718,54 @@ async fn process_action(
                 let field = state.settings.current_field();
                 match field {
                     flock::app::SettingsField::BranchPrefix => {
-                        state.settings.project_config.branch_prefix =
+                        state.settings.repo_config.git.branch_prefix =
                             state.settings.text_buffer.clone();
                     }
                     flock::app::SettingsField::MainBranch => {
-                        state.settings.project_config.main_branch =
+                        state.settings.repo_config.git.main_branch =
                             state.settings.text_buffer.clone();
+                    }
+                    flock::app::SettingsField::WorktreeSymlinks => {
+                        state.settings.repo_config.git.worktree_symlinks = state
+                            .settings
+                            .text_buffer
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                    flock::app::SettingsField::GitLabProjectId => {
+                        state.settings.repo_config.git.gitlab.project_id =
+                            state.settings.text_buffer.parse().ok();
+                    }
+                    flock::app::SettingsField::GitLabBaseUrl => {
+                        state.settings.repo_config.git.gitlab.base_url =
+                            state.settings.text_buffer.clone();
+                    }
+                    flock::app::SettingsField::GitHubOwner => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.git.github.owner =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::GitHubRepo => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.git.github.repo =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::AsanaProjectGid => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.asana.project_gid =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::AsanaInProgressGid => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.asana.in_progress_section_gid =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::AsanaDoneGid => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.asana.done_section_gid =
+                            if val.is_empty() { None } else { Some(val) };
                     }
                     _ => {}
                 }
@@ -1537,7 +1783,7 @@ async fn process_action(
                     }
                     flock::app::SettingsField::GitProvider => {
                         if let Some(provider) = flock::app::GitProvider::all().get(selected_index) {
-                            state.settings.pending_git_provider = provider.clone();
+                            state.settings.repo_config.git.provider = *provider;
                         }
                     }
                     flock::app::SettingsField::LogLevel => {
@@ -1567,15 +1813,14 @@ async fn process_action(
 
         Action::SettingsSave => {
             state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
-            state.config.global.git_provider = state.settings.pending_git_provider.clone();
             state.config.global.log_level = state.settings.pending_log_level;
 
             if let Err(e) = state.config.save() {
                 state.log_error(format!("Failed to save config: {}", e));
             }
 
-            if let Err(e) = state.settings.project_config.save(&state.repo_path) {
-                state.log_error(format!("Failed to save project config: {}", e));
+            if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                state.log_error(format!("Failed to save repo config: {}", e));
             }
 
             state.settings.active = false;
@@ -1867,6 +2112,37 @@ async fn poll_gitlab_mrs(
             // Only send update if there's an actual MR
             if !matches!(status, flock::gitlab::MergeRequestStatus::None) {
                 let _ = tx.send(Action::UpdateMrStatus { id, status });
+            }
+        }
+    }
+}
+
+/// Background task to poll GitHub for PR status.
+async fn poll_github_prs(
+    branch_rx: watch::Receiver<Vec<(Uuid, String)>>,
+    github_client: Arc<OptionalGitHubClient>,
+    tx: mpsc::UnboundedSender<Action>,
+    refresh_secs: u64,
+) {
+    let mut first_run = true;
+
+    loop {
+        if first_run {
+            first_run = false;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        } else {
+            tokio::time::sleep(Duration::from_secs(refresh_secs)).await;
+        }
+
+        let branches = branch_rx.borrow().clone();
+        tracing::info!("GitHub poll: checking {} branches", branches.len());
+
+        for (id, branch) in branches {
+            tracing::info!("GitHub poll: checking branch {}", branch);
+            let status = github_client.get_pr_for_branch(&branch).await;
+            tracing::info!("GitHub poll: branch {} -> {:?}", branch, status);
+            if !matches!(status, flock::github::PullRequestStatus::None) {
+                let _ = tx.send(Action::UpdatePrStatus { id, status });
             }
         }
     }

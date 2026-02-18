@@ -133,7 +133,6 @@ impl<'a> AppWidget<'a> {
             SettingsModal::new(
                 &self.state.settings,
                 &self.state.settings.pending_ai_agent,
-                &self.state.settings.pending_git_provider,
                 &self.state.settings.pending_log_level,
             )
             .render(frame);
@@ -281,6 +280,7 @@ impl<'a> AppWidget<'a> {
                 &agents,
                 self.state.selected_index,
                 self.state.animation_frame,
+                self.state.settings.repo_config.git.provider,
             )
             .with_count(self.state.agents.len())
             .render(frame, area);

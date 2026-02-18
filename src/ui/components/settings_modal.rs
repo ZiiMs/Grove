@@ -6,14 +6,11 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{
-    AiAgent, ConfigLogLevel, GitProvider, SettingsField, SettingsSection, SettingsState,
-};
+use crate::app::{AiAgent, ConfigLogLevel, GitProvider, SettingsField, SettingsState, SettingsTab};
 
 pub struct SettingsModal<'a> {
     state: &'a SettingsState,
     ai_agent: &'a AiAgent,
-    git_provider: &'a GitProvider,
     log_level: &'a ConfigLogLevel,
 }
 
@@ -21,19 +18,17 @@ impl<'a> SettingsModal<'a> {
     pub fn new(
         state: &'a SettingsState,
         ai_agent: &'a AiAgent,
-        git_provider: &'a GitProvider,
         log_level: &'a ConfigLogLevel,
     ) -> Self {
         Self {
             state,
             ai_agent,
-            git_provider,
             log_level,
         }
     }
 
     pub fn render(self, frame: &mut Frame) {
-        let area = centered_rect(60, 60, frame.area());
+        let area = centered_rect(70, 80, frame.area());
         frame.render_widget(Clear, area);
 
         let block = Block::default()
@@ -47,49 +42,69 @@ impl<'a> SettingsModal<'a> {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
+                Constraint::Length(3),
+                Constraint::Min(10),
                 Constraint::Length(2),
-                Constraint::Length(8),
-                Constraint::Length(2),
-                Constraint::Length(6),
-                Constraint::Min(2),
             ])
             .split(inner);
 
-        self.render_section_header(frame, chunks[0], SettingsSection::Global);
-        self.render_global_fields(frame, chunks[1]);
-        self.render_section_header(frame, chunks[2], SettingsSection::Project);
-        self.render_project_fields(frame, chunks[3]);
-        self.render_footer(frame, chunks[4]);
+        self.render_tabs(frame, chunks[0]);
+        self.render_fields(frame, chunks[1]);
+        self.render_footer(frame, chunks[2]);
 
         if let crate::app::DropdownState::Open { selected_index } = self.state.dropdown {
             self.render_dropdown(frame, selected_index);
         }
     }
 
-    fn render_section_header(&self, frame: &mut Frame, area: Rect, section: SettingsSection) {
-        let is_active = self.state.section == section;
-        let style = if is_active {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
+    fn render_tabs(&self, frame: &mut Frame, area: Rect) {
+        let tabs = SettingsTab::all();
+        let tab_width = area.width / tabs.len() as u16;
 
-        let title = match section {
-            SettingsSection::Global => "GLOBAL",
-            SettingsSection::Project => "PROJECT",
-        };
+        let spans: Vec<Span> = tabs
+            .iter()
+            .flat_map(|tab| {
+                let is_active = *tab == self.state.tab;
+                let style = if is_active {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let name = tab.display_name();
+                let padding =
+                    " ".repeat((tab_width.saturating_sub(name.len() as u16 + 2) / 2) as usize);
+                vec![
+                    Span::styled(format!("{}{}{}", padding, name, padding), style),
+                    Span::raw(" "),
+                ]
+            })
+            .collect();
 
-        let paragraph =
-            Paragraph::new(Line::from(Span::styled(title, style))).alignment(Alignment::Left);
+        let paragraph = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         frame.render_widget(paragraph, area);
+
+        let tab_line = Rect::new(area.x, area.y + 2, area.width, 1);
+        let divider = Paragraph::new(Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(Color::DarkGray),
+        )));
+        frame.render_widget(divider, tab_line);
     }
 
-    fn render_global_fields(&self, frame: &mut Frame, area: Rect) {
+    fn render_fields(&self, frame: &mut Frame, area: Rect) {
+        match self.state.tab {
+            SettingsTab::General => self.render_general_fields(frame, area),
+            SettingsTab::Git => self.render_git_fields(frame, area),
+            SettingsTab::ProjectMgmt => self.render_asana_fields(frame, area),
+        }
+    }
+
+    fn render_general_fields(&self, frame: &mut Frame, area: Rect) {
         let fields = [
             ("AI Agent", self.ai_agent.display_name()),
-            ("Git Provider", self.git_provider.display_name()),
             ("Log Level", self.log_level.display_name()),
         ];
 
@@ -97,9 +112,8 @@ impl<'a> SettingsModal<'a> {
             .iter()
             .enumerate()
             .map(|(i, (label, value))| {
-                let is_selected =
-                    self.state.section == SettingsSection::Global && self.state.field_index == i;
-                self.render_field_line(label, value, is_selected)
+                let is_selected = self.state.field_index == i;
+                self.render_field_line(label, value, is_selected, false)
             })
             .collect();
 
@@ -107,30 +121,124 @@ impl<'a> SettingsModal<'a> {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_project_fields(&self, frame: &mut Frame, area: Rect) {
+    fn render_git_fields(&self, frame: &mut Frame, area: Rect) {
+        let provider = self.state.repo_config.git.provider;
+        let fields = SettingsField::all_for_tab(SettingsTab::Git, provider);
+
+        let mut lines = Vec::new();
+
+        for (i, field) in fields.iter().enumerate() {
+            let is_selected = self.state.field_index == i;
+            let (label, value) = self.get_git_field_display(field);
+            let is_editable = !matches!(field, SettingsField::GitProvider);
+            lines.push(self.render_field_line(&label, &value, is_selected, is_editable));
+        }
+
+        let paragraph = Paragraph::new(lines);
+        frame.render_widget(paragraph, area);
+    }
+
+    fn get_git_field_display(&self, field: &SettingsField) -> (String, String) {
+        match field {
+            SettingsField::GitProvider => (
+                "Provider".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .provider
+                    .display_name()
+                    .to_string(),
+            ),
+            SettingsField::GitLabProjectId => (
+                "Project ID".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .gitlab
+                    .project_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_default(),
+            ),
+            SettingsField::GitLabBaseUrl => (
+                "Base URL".to_string(),
+                self.state.repo_config.git.gitlab.base_url.clone(),
+            ),
+            SettingsField::GitHubOwner => (
+                "Owner".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .github
+                    .owner
+                    .clone()
+                    .unwrap_or_default(),
+            ),
+            SettingsField::GitHubRepo => (
+                "Repo".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .github
+                    .repo
+                    .clone()
+                    .unwrap_or_default(),
+            ),
+            SettingsField::BranchPrefix => (
+                "Branch Prefix".to_string(),
+                self.state.repo_config.git.branch_prefix.clone(),
+            ),
+            SettingsField::MainBranch => (
+                "Main Branch".to_string(),
+                self.state.repo_config.git.main_branch.clone(),
+            ),
+            SettingsField::WorktreeSymlinks => (
+                "Symlinks".to_string(),
+                self.state.repo_config.git.worktree_symlinks.join(", "),
+            ),
+            _ => ("Unknown".to_string(), String::new()),
+        }
+    }
+
+    fn render_asana_fields(&self, frame: &mut Frame, area: Rect) {
+        let project_gid = self
+            .state
+            .repo_config
+            .asana
+            .project_gid
+            .as_deref()
+            .unwrap_or("");
+        let in_progress_gid = self
+            .state
+            .repo_config
+            .asana
+            .in_progress_section_gid
+            .as_deref()
+            .unwrap_or("");
+        let done_gid = self
+            .state
+            .repo_config
+            .asana
+            .done_section_gid
+            .as_deref()
+            .unwrap_or("");
+
         let fields = [
-            (
-                "Branch Prefix",
-                self.state.project_config.branch_prefix.as_str(),
-            ),
-            (
-                "Main Branch",
-                self.state.project_config.main_branch.as_str(),
-            ),
+            ("Project GID", project_gid),
+            ("In Progress GID", in_progress_gid),
+            ("Done GID", done_gid),
         ];
 
         let lines: Vec<Line> = fields
             .iter()
             .enumerate()
             .map(|(i, (label, value))| {
-                let is_selected =
-                    self.state.section == SettingsSection::Project && self.state.field_index == i;
+                let is_selected = self.state.field_index == i;
                 let display_value = if self.state.editing_text && is_selected {
                     &self.state.text_buffer
                 } else {
                     *value
                 };
-                self.render_field_line(label, display_value, is_selected)
+                self.render_field_line(label, display_value, is_selected, true)
             })
             .collect();
 
@@ -138,7 +246,13 @@ impl<'a> SettingsModal<'a> {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_field_line(&self, label: &str, value: &str, is_selected: bool) -> Line<'static> {
+    fn render_field_line(
+        &self,
+        label: &str,
+        value: &str,
+        is_selected: bool,
+        _is_editable: bool,
+    ) -> Line<'static> {
         let label_style = if is_selected {
             Style::default()
                 .fg(Color::Yellow)
@@ -163,11 +277,19 @@ impl<'a> SettingsModal<'a> {
             ""
         };
 
+        let truncated_value = if value.len() > 30 {
+            format!("{}...", &value[..27])
+        } else if self.state.editing_text && is_selected {
+            self.state.text_buffer.clone()
+        } else {
+            value.to_string()
+        };
+
         Line::from(vec![
             Span::styled("  ", Style::default()),
-            Span::styled(format!("{:14}", label), label_style),
+            Span::styled(format!("{:16}", label), label_style),
             Span::styled(": ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:20}", value), value_style),
+            Span::styled(format!("{:34}", truncated_value), value_style),
             Span::styled(cursor.to_string(), Style::default().fg(Color::White)),
         ])
     }
@@ -178,7 +300,7 @@ impl<'a> SettingsModal<'a> {
         } else if self.state.is_dropdown_open() {
             "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
         } else {
-            "[Tab] Switch section  [Enter] Edit  [↑/↓] Navigate  [Esc] Close  [q] Save & Close"
+            "[Tab] Switch tab  [Enter] Edit  [↑/↓] Navigate  [Esc] Close  [q] Save & Close"
         };
 
         let paragraph = Paragraph::new(Line::from(Span::styled(
@@ -204,7 +326,7 @@ impl<'a> SettingsModal<'a> {
             _ => return,
         };
 
-        let area = get_dropdown_position(frame.area(), self.state.section, self.state.field_index);
+        let area = get_dropdown_position(frame.area(), self.state.field_index);
         frame.render_widget(Clear, area);
 
         let lines: Vec<Line> = options
@@ -255,15 +377,9 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn get_dropdown_position(frame_area: Rect, section: SettingsSection, field_index: usize) -> Rect {
-    let modal_area = centered_rect(60, 60, frame_area);
-
-    let base_y = match section {
-        SettingsSection::Global => modal_area.y + 4,
-        SettingsSection::Project => modal_area.y + 14,
-    };
-
+fn get_dropdown_position(frame_area: Rect, field_index: usize) -> Rect {
+    let modal_area = centered_rect(70, 80, frame_area);
+    let base_y = modal_area.y + 4;
     let row_offset = field_index as u16;
-
-    Rect::new(modal_area.x + 20, base_y + row_offset, 20, 10)
+    Rect::new(modal_area.x + 22, base_y + row_offset, 20, 10)
 }

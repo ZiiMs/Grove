@@ -3,44 +3,113 @@ use std::collections::{HashMap, VecDeque};
 use uuid::Uuid;
 
 use super::action::InputMode;
-use super::config::{AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, ProjectConfig};
+use super::config::{AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, RepoConfig};
 use crate::agent::Agent;
 
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsSection {
-    Global,
-    Project,
+pub enum SettingsTab {
+    General,
+    Git,
+    ProjectMgmt,
+}
+
+impl SettingsTab {
+    pub fn all() -> &'static [SettingsTab] {
+        &[
+            SettingsTab::General,
+            SettingsTab::Git,
+            SettingsTab::ProjectMgmt,
+        ]
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SettingsTab::General => "General",
+            SettingsTab::Git => "Git",
+            SettingsTab::ProjectMgmt => "Project Mgmt",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            SettingsTab::General => SettingsTab::Git,
+            SettingsTab::Git => SettingsTab::ProjectMgmt,
+            SettingsTab::ProjectMgmt => SettingsTab::General,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            SettingsTab::General => SettingsTab::ProjectMgmt,
+            SettingsTab::Git => SettingsTab::General,
+            SettingsTab::ProjectMgmt => SettingsTab::Git,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsField {
     AiAgent,
-    GitProvider,
     LogLevel,
+    GitProvider,
+    GitLabProjectId,
+    GitLabBaseUrl,
+    GitHubOwner,
+    GitHubRepo,
     BranchPrefix,
     MainBranch,
+    WorktreeSymlinks,
+    AsanaProjectGid,
+    AsanaInProgressGid,
+    AsanaDoneGid,
 }
 
 impl SettingsField {
-    pub fn section(&self) -> SettingsSection {
+    pub fn tab(&self) -> SettingsTab {
         match self {
-            SettingsField::AiAgent | SettingsField::GitProvider | SettingsField::LogLevel => {
-                SettingsSection::Global
-            }
-            SettingsField::BranchPrefix | SettingsField::MainBranch => SettingsSection::Project,
+            SettingsField::AiAgent | SettingsField::LogLevel => SettingsTab::General,
+            SettingsField::GitProvider
+            | SettingsField::GitLabProjectId
+            | SettingsField::GitLabBaseUrl
+            | SettingsField::GitHubOwner
+            | SettingsField::GitHubRepo
+            | SettingsField::BranchPrefix
+            | SettingsField::MainBranch
+            | SettingsField::WorktreeSymlinks => SettingsTab::Git,
+            SettingsField::AsanaProjectGid
+            | SettingsField::AsanaInProgressGid
+            | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
         }
     }
 
-    pub fn all_for_section(section: SettingsSection) -> &'static [SettingsField] {
-        match section {
-            SettingsSection::Global => &[
-                SettingsField::AiAgent,
-                SettingsField::GitProvider,
-                SettingsField::LogLevel,
+    pub fn all_for_tab(tab: SettingsTab, provider: GitProvider) -> Vec<SettingsField> {
+        match tab {
+            SettingsTab::General => vec![SettingsField::AiAgent, SettingsField::LogLevel],
+            SettingsTab::Git => {
+                let mut fields = vec![SettingsField::GitProvider];
+                match provider {
+                    GitProvider::GitLab => {
+                        fields.push(SettingsField::GitLabProjectId);
+                        fields.push(SettingsField::GitLabBaseUrl);
+                    }
+                    GitProvider::GitHub => {
+                        fields.push(SettingsField::GitHubOwner);
+                        fields.push(SettingsField::GitHubRepo);
+                    }
+                    GitProvider::Bitbucket => {}
+                }
+                fields.push(SettingsField::BranchPrefix);
+                fields.push(SettingsField::MainBranch);
+                fields.push(SettingsField::WorktreeSymlinks);
+                fields
+            }
+            SettingsTab::ProjectMgmt => vec![
+                SettingsField::AsanaProjectGid,
+                SettingsField::AsanaInProgressGid,
+                SettingsField::AsanaDoneGid,
             ],
-            SettingsSection::Project => &[SettingsField::BranchPrefix, SettingsField::MainBranch],
         }
     }
 }
@@ -54,37 +123,36 @@ pub enum DropdownState {
 #[derive(Debug, Clone)]
 pub struct SettingsState {
     pub active: bool,
-    pub section: SettingsSection,
+    pub tab: SettingsTab,
     pub field_index: usize,
     pub dropdown: DropdownState,
     pub editing_text: bool,
     pub text_buffer: String,
     pub pending_ai_agent: AiAgent,
-    pub pending_git_provider: GitProvider,
     pub pending_log_level: ConfigLogLevel,
-    pub project_config: ProjectConfig,
+    pub repo_config: RepoConfig,
 }
 
 impl Default for SettingsState {
     fn default() -> Self {
         Self {
             active: false,
-            section: SettingsSection::Global,
+            tab: SettingsTab::General,
             field_index: 0,
             dropdown: DropdownState::Closed,
             editing_text: false,
             text_buffer: String::new(),
             pending_ai_agent: AiAgent::default(),
-            pending_git_provider: GitProvider::default(),
             pending_log_level: ConfigLogLevel::default(),
-            project_config: ProjectConfig::default(),
+            repo_config: RepoConfig::default(),
         }
     }
 }
 
 impl SettingsState {
     pub fn current_field(&self) -> SettingsField {
-        SettingsField::all_for_section(self.section)
+        let fields = SettingsField::all_for_tab(self.tab, self.repo_config.git.provider);
+        fields
             .get(self.field_index)
             .copied()
             .unwrap_or(SettingsField::AiAgent)
@@ -95,7 +163,15 @@ impl SettingsState {
     }
 
     pub fn total_fields(&self) -> usize {
-        SettingsField::all_for_section(self.section).len()
+        SettingsField::all_for_tab(self.tab, self.repo_config.git.provider).len()
+    }
+
+    pub fn next_tab(&self) -> SettingsTab {
+        self.tab.next()
+    }
+
+    pub fn prev_tab(&self) -> SettingsTab {
+        self.tab.prev()
     }
 }
 
@@ -144,7 +220,7 @@ pub enum LogLevel {
 
 impl AppState {
     pub fn new(config: Config, repo_path: String) -> Self {
-        let project_config = ProjectConfig::load(&repo_path).unwrap_or_default();
+        let repo_config = RepoConfig::load(&repo_path).unwrap_or_default();
         Self {
             agents: HashMap::new(),
             agent_order: Vec::new(),
@@ -169,9 +245,8 @@ impl AppState {
             preview_content: None,
             settings: SettingsState {
                 pending_ai_agent: AiAgent::default(),
-                pending_git_provider: GitProvider::default(),
                 pending_log_level: ConfigLogLevel::default(),
-                project_config,
+                repo_config,
                 ..Default::default()
             },
         }

@@ -163,3 +163,66 @@ src/
 ├── tmux/            # tmux session management
 └── ui/              # TUI components
 ```
+
+## Configuration
+
+Flock uses a two-level configuration system:
+
+### Global Config (`~/.flock/config.toml`)
+
+User preferences stored globally:
+
+```toml
+[global]
+ai_agent = "claude-code"  # claude-code, opencode, codex, gemini
+log_level = "info"
+
+[ui]
+frame_rate = 30
+tick_rate_ms = 250
+output_buffer_lines = 5000
+
+[performance]
+agent_poll_ms = 500
+git_refresh_secs = 30
+gitlab_refresh_secs = 60
+```
+
+### Repo Config (`.flock/project.toml`)
+
+Project-specific settings stored in the repo (can be committed):
+
+```toml
+[git]
+provider = "gitlab"           # gitlab, github, bitbucket
+branch_prefix = "feature/"
+main_branch = "main"
+worktree_symlinks = ["node_modules", ".env"]
+
+[git.gitlab]
+project_id = 12345
+base_url = "https://gitlab.com"
+
+[git.github]
+owner = "myorg"
+repo = "myrepo"
+
+[asana]
+project_gid = "1201234567890"
+in_progress_section_gid = "1201234567891"
+done_section_gid = "1201234567892"
+```
+
+### Secrets (Environment Variables)
+
+API tokens are read from environment variables (never stored in config files):
+
+- `GITLAB_TOKEN` - GitLab personal access token
+- `ASANA_TOKEN` - Asana personal access token
+
+### Config Merge Order
+
+1. Global config provides defaults
+2. Repo config overrides project-specific fields
+3. Environment variables provide secrets
+
