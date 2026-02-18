@@ -110,4 +110,73 @@ impl Worktree {
             .join(".worktrees")
             .join(branch.replace('/', "-"))
     }
+
+    /// Create symlinks from worktree to main repo for configured files.
+    /// Files are symlinked as relative paths for portability.
+    pub fn create_symlinks(&self, worktree_path: &str, files: &[String]) -> Result<()> {
+        let worktree = Path::new(worktree_path);
+
+        for file in files {
+            let source = self.repo_path.join(file);
+            let target = worktree.join(file);
+
+            // Skip if source doesn't exist
+            if !source.exists() {
+                continue;
+            }
+
+            // Skip if target already exists (symlink or regular file)
+            if target.exists() || target.symlink_metadata().is_ok() {
+                continue;
+            }
+
+            // Create parent directories in worktree if needed
+            if let Some(parent) = target.parent() {
+                if !parent.exists() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("Failed to create directory {:?}", parent))?;
+                }
+            }
+
+            // Calculate relative path from worktree to source
+            // worktree is at .worktrees/branch-name, so we need ../../ to get to repo root
+            // Then append the file path
+            let relative_source = Path::new("../..").join(file);
+
+            // Create symlink
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&relative_source, &target).with_context(|| {
+                    format!(
+                        "Failed to create symlink from {:?} to {:?}",
+                        target, relative_source
+                    )
+                })?;
+            }
+            #[cfg(windows)]
+            {
+                if source.is_dir() {
+                    std::os::windows::fs::symlink_dir(&relative_source, &target).with_context(
+                        || {
+                            format!(
+                                "Failed to create symlink from {:?} to {:?}",
+                                target, relative_source
+                            )
+                        },
+                    )?;
+                } else {
+                    std::os::windows::fs::symlink_file(&relative_source, &target).with_context(
+                        || {
+                            format!(
+                                "Failed to create symlink from {:?} to {:?}",
+                                target, relative_source
+                            )
+                        },
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }

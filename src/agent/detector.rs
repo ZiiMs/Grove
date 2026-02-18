@@ -167,6 +167,14 @@ static COLLAPSED_TASKS_PATTERN: LazyLock<Regex> =
 static TASK_SUMMARY_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d+)\s+tasks?\s*\((\d+)\s+done").unwrap());
 
+/// Pattern to detect OpenCode side panel todos: [✓], [•], [ ]
+/// Matches bracketed checkmarks, bullet (in-progress), or space (pending)
+static OPENCODE_TODO_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[(✓|✔|✅|•|○| )\]").unwrap());
+
+/// Width of the side panel region (characters from right side of line)
+const SIDE_PANEL_WIDTH: usize = 60;
+
 /// Detect checklist progress from Claude Code output.
 /// Returns (completed, total) if a checklist is found.
 /// Checklist items:
@@ -209,11 +217,34 @@ pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
             }
         }
 
-        // Look for checklist item patterns at the start of lines (with possible tree characters)
+        // Extract the side panel region (rightmost chars) to avoid counting
+        // todos mentioned in chat conversation vs side panel display
+        let side_panel = if trimmed.len() > SIDE_PANEL_WIDTH {
+            &trimmed[trimmed.len() - SIDE_PANEL_WIDTH..]
+        } else {
+            trimmed
+        };
+
+        // Check for OpenCode bracketed todos in side panel region
+        // Each line can have at most one todo in side panel
+        if let Some(caps) = OPENCODE_TODO_PATTERN.captures(side_panel) {
+            if let Some(match_val) = caps.get(1) {
+                let symbol = match_val.as_str();
+                if symbol == "✓" || symbol == "✔" || symbol == "✅" {
+                    completed += 1;
+                    total += 1;
+                } else {
+                    // [•], [○], or [ ] = incomplete
+                    total += 1;
+                }
+                continue;
+            }
+        }
+
+        // Fallback: check line start for Claude Code style checkboxes
         // Tree chars: │ ├ └ ─ followed by space, then the checkbox
         let check_part = trimmed.trim_start_matches(['│', '├', '└', '─', ' ']);
 
-        // OpenCode format: [✓], [•], [ ] in brackets
         if check_part.starts_with("[✓]")
             || check_part.starts_with("[✔]")
             || check_part.starts_with("[✅]")
@@ -227,7 +258,6 @@ pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
             total += 1;
         }
         // Check for completed items (checkmarks) - various Unicode checkmarks
-        // ✓ U+2713, ✔ U+2714, ☑ U+2611
         else if check_part.starts_with('✓')
             || check_part.starts_with('✔')
             || check_part.starts_with('☑')
@@ -237,8 +267,6 @@ pub fn detect_checklist_progress(output: &str) -> Option<(u32, u32)> {
             total += 1;
         }
         // Check for in-progress items (filled shapes) or not-started items (empty shapes)
-        // In-progress: ◼ U+25FC (Claude Code uses this), ■ U+25A0, ▪ U+25AA, ●
-        // Not-started: ◻ U+25FB (Claude Code uses this), □ U+25A1, ☐ U+2610, ○
         else if check_part.starts_with('◼')
             || check_part.starts_with('■')
             || check_part.starts_with('▪')
@@ -648,6 +676,38 @@ mod tests {
             progress,
             Some((2, 4)),
             "Expected (2, 4), got {:?}",
+            progress
+        );
+    }
+
+    #[test]
+    fn test_opencode_side_panel_todos() {
+        // Simulates OpenCode UI where side panel is on the right side of lines
+        // Todos in side panel should be counted, chat content should be ignored
+        let output = r#"  ┃   40   return visible                                                                                                                             [✓] Create src/types.ts
+  ┃   41 }                                                                                                                                             [✓] Create src/lib/storage.ts
+  ┃                                                                                                                                                   [•] Create src/hooks/useTodos.ts
+  ┃  Let me fix these and continue creating components.                                                                                               [ ] Create src/components/Terminal.tsx
+  ┃                                                                                                                                                   [ ] Create src/components/TodoItem.tsx"#;
+        let progress = detect_checklist_progress(output);
+        assert_eq!(
+            progress,
+            Some((2, 5)),
+            "Expected (2, 5), got {:?}",
+            progress
+        );
+    }
+
+    #[test]
+    fn test_opencode_chat_todos_ignored() {
+        // When todos appear in chat (left side of long lines) they should NOT be counted
+        // Only side panel todos (rightmost 60 chars) should count
+        // Line must be >60 chars with checkbox appearing before the last 60 chars
+        let chat_line = "  ┃  I am discussing [✓] Create types.ts in the chat conversation                                                    some regular content here";
+        let progress = detect_checklist_progress(chat_line);
+        assert_eq!(
+            progress, None,
+            "Chat-only todos should not be counted, got {:?}",
             progress
         );
     }

@@ -20,11 +20,21 @@ impl AgentManager {
     }
 
     /// Create a new agent with worktree and tmux session.
-    pub fn create_agent(&self, name: &str, branch: &str, ai_agent: &AiAgent) -> Result<Agent> {
+    pub fn create_agent(
+        &self,
+        name: &str,
+        branch: &str,
+        ai_agent: &AiAgent,
+        worktree_symlinks: &[String],
+    ) -> Result<Agent> {
         let worktree = Worktree::new(&self.repo_path);
         let worktree_path = worktree
             .create(branch)
             .context("Failed to create worktree")?;
+
+        worktree
+            .create_symlinks(&worktree_path, worktree_symlinks)
+            .context("Failed to create worktree symlinks")?;
 
         let agent = Agent::new(name.to_string(), branch.to_string(), worktree_path.clone());
 

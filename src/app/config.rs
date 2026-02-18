@@ -320,6 +320,8 @@ pub struct ProjectConfig {
     pub branch_prefix: String,
     #[serde(default = "default_main_branch")]
     pub main_branch: String,
+    #[serde(default)]
+    pub worktree_symlinks: Vec<String>,
 }
 
 fn default_branch_prefix() -> String {
@@ -331,6 +333,7 @@ impl Default for ProjectConfig {
         Self {
             branch_prefix: default_branch_prefix(),
             main_branch: default_main_branch(),
+            worktree_symlinks: Vec::new(),
         }
     }
 }

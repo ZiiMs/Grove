@@ -558,7 +558,8 @@ async fn process_action(
         Action::CreateAgent { name, branch } => {
             state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
             let ai_agent = state.config.global.ai_agent.clone();
-            match agent_manager.create_agent(&name, &branch, &ai_agent) {
+            let worktree_symlinks = state.settings.project_config.worktree_symlinks.clone();
+            match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks) {
                 Ok(agent) => {
                     state.log_info(format!("Agent '{}' created successfully", agent.name));
                     state.add_agent(agent);
@@ -787,21 +788,30 @@ async fn process_action(
                     // 2. DON'T kill tmux session - just leave it running (preserves Claude context)
                     // The tmux session stays alive but detached
 
-                    // 3. Remove worktree (keeps branch)
-                    let _ = std::process::Command::new("git")
-                        .args(["worktree", "remove", "--force", &worktree_path])
-                        .output();
+                    // 3. DON'T remove worktree - keep it so agent stays functional
+                    // The worktree stays intact so the agent can continue working
 
-                    // Prune worktrees
-                    let _ = std::process::Command::new("git")
-                        .args(["worktree", "prune"])
-                        .output();
+                    // 4. Get HEAD commit SHA for checkout command
+                    let head_sha = std::process::Command::new("git")
+                        .args(["-C", &worktree_path, "rev-parse", "HEAD"])
+                        .output()
+                        .ok()
+                        .and_then(|output| {
+                            if output.status.success() {
+                                String::from_utf8(output.stdout).ok()
+                            } else {
+                                None
+                            }
+                        })
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|| branch_clone.clone());
 
-                    // 4. Copy checkout command to clipboard
-                    let checkout_cmd = format!("git checkout {}", branch_clone);
-                    let clipboard_result = Clipboard::new().and_then(|mut c| c.set_text(&checkout_cmd));
+                    // 5. Copy detach checkout command to clipboard
+                    let checkout_cmd = format!("git checkout --detach {}", head_sha);
+                    let clipboard_result =
+                        Clipboard::new().and_then(|mut c| c.set_text(&checkout_cmd));
                     let message = if clipboard_result.is_ok() {
-                        "Paused. Checkout command copied. Press 'r' to resume.".to_string()
+                        "Checkout command copied. Press 'r' to resume.".to_string()
                     } else {
                         format!("Paused '{}'. Press 'r' to resume.", name_clone)
                     };
@@ -833,6 +843,8 @@ async fn process_action(
                 let tx = action_tx.clone();
                 let name_clone = name.clone();
                 let ai_agent = state.config.global.ai_agent.clone();
+                let repo_path = state.repo_path.clone();
+                let worktree_symlinks = state.settings.project_config.worktree_symlinks.clone();
                 tokio::spawn(async move {
                     // Check if worktree already exists
                     let worktree_exists = std::path::Path::new(&worktree_path).exists();
@@ -866,6 +878,14 @@ async fn process_action(
                                 message,
                             });
                             return;
+                        }
+
+                        // Create symlinks for newly created worktree
+                        let worktree = flock::git::Worktree::new(&repo_path);
+                        if let Err(e) = worktree.create_symlinks(&worktree_path, &worktree_symlinks)
+                        {
+                            // Log but don't fail - symlinks are optional
+                            eprintln!("Warning: Failed to create symlinks: {}", e);
                         }
                     }
 
@@ -958,7 +978,8 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to send push prompt: {}", e));
-                            state.error_message = Some(format!("Failed to send push prompt: {}", e));
+                            state.error_message =
+                                Some(format!("Failed to send push prompt: {}", e));
                         }
                     }
                 }
@@ -967,7 +988,10 @@ async fn process_action(
                     if let Some(agent) = state.agents.get_mut(&id) {
                         agent.custom_note = Some("pushing...".to_string());
                     }
-                    state.error_message = Some(format!("Sent push command to {}", agent_type.display_name()));
+                    state.error_message = Some(format!(
+                        "Sent push command to {}",
+                        agent_type.display_name()
+                    ));
                 }
             }
         }
@@ -1017,23 +1041,19 @@ async fn process_action(
         // GitLab operations
         Action::UpdateMrStatus { id, status } => {
             // Check current state and extract needed data before mutable borrow
-            let should_log = state
-                .agents
-                .get(&id)
-                .and_then(|agent| {
-                    let was_none =
-                        matches!(agent.mr_status, flock::gitlab::MergeRequestStatus::None);
-                    let is_open = matches!(&status, flock::gitlab::MergeRequestStatus::Open { .. });
-                    if was_none && is_open {
-                        if let flock::gitlab::MergeRequestStatus::Open { iid, url, .. } = &status {
-                            Some((agent.name.clone(), *iid, url.clone()))
-                        } else {
-                            None
-                        }
+            let should_log = state.agents.get(&id).and_then(|agent| {
+                let was_none = matches!(agent.mr_status, flock::gitlab::MergeRequestStatus::None);
+                let is_open = matches!(&status, flock::gitlab::MergeRequestStatus::Open { .. });
+                if was_none && is_open {
+                    if let flock::gitlab::MergeRequestStatus::Open { iid, url, .. } = &status {
+                        Some((agent.name.clone(), *iid, url.clone()))
                     } else {
                         None
                     }
-                });
+                } else {
+                    None
+                }
+            });
 
             // Auto-update note based on MR transitions
             let auto_note = state.agents.get(&id).and_then(|agent| {
@@ -1453,7 +1473,9 @@ async fn process_action(
                         .iter()
                         .position(|a| a == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock::app::DropdownState::Open { selected_index: idx };
+                    state.settings.dropdown = flock::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
                 }
                 flock::app::SettingsField::GitProvider => {
                     let current = &state.settings.pending_git_provider;
@@ -1461,7 +1483,9 @@ async fn process_action(
                         .iter()
                         .position(|g| g == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock::app::DropdownState::Open { selected_index: idx };
+                    state.settings.dropdown = flock::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
                 }
                 flock::app::SettingsField::LogLevel => {
                     let current = &state.settings.pending_log_level;
@@ -1469,11 +1493,14 @@ async fn process_action(
                         .iter()
                         .position(|l| l == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock::app::DropdownState::Open { selected_index: idx };
+                    state.settings.dropdown = flock::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
                 }
                 flock::app::SettingsField::BranchPrefix => {
                     state.settings.editing_text = true;
-                    state.settings.text_buffer = state.settings.project_config.branch_prefix.clone();
+                    state.settings.text_buffer =
+                        state.settings.project_config.branch_prefix.clone();
                 }
                 flock::app::SettingsField::MainBranch => {
                     state.settings.editing_text = true;
@@ -1487,16 +1514,20 @@ async fn process_action(
                 let field = state.settings.current_field();
                 match field {
                     flock::app::SettingsField::BranchPrefix => {
-                        state.settings.project_config.branch_prefix = state.settings.text_buffer.clone();
+                        state.settings.project_config.branch_prefix =
+                            state.settings.text_buffer.clone();
                     }
                     flock::app::SettingsField::MainBranch => {
-                        state.settings.project_config.main_branch = state.settings.text_buffer.clone();
+                        state.settings.project_config.main_branch =
+                            state.settings.text_buffer.clone();
                     }
                     _ => {}
                 }
                 state.settings.editing_text = false;
                 state.settings.text_buffer.clear();
-            } else if let flock::app::DropdownState::Open { selected_index } = state.settings.dropdown {
+            } else if let flock::app::DropdownState::Open { selected_index } =
+                state.settings.dropdown
+            {
                 let field = state.settings.current_field();
                 match field {
                     flock::app::SettingsField::AiAgent => {
