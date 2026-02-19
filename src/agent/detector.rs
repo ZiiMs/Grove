@@ -167,11 +167,6 @@ static COLLAPSED_TASKS_PATTERN: LazyLock<Regex> =
 static TASK_SUMMARY_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d+)\s+tasks?\s*\((\d+)\s+done").unwrap());
 
-/// Pattern to detect OpenCode side panel todos: [✓], [•], [ ]
-/// Matches bracketed checkmarks, bullet (in-progress), or space (pending)
-static OPENCODE_TODO_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\[(✓|✔|✅|•|○| )\]").unwrap());
-
 /// Width of the side panel region (characters from right side of line)
 const SIDE_PANEL_WIDTH: usize = 60;
 
@@ -278,28 +273,27 @@ fn detect_checklist_opencode(output: &str) -> Option<(u32, u32)> {
 
     for line in clean_output.lines() {
         let trimmed = line.trim();
+        let chars: Vec<char> = trimmed.chars().collect();
 
         // Extract the side panel region (rightmost chars) to avoid counting
         // todos mentioned in chat conversation vs side panel display
-        let side_panel = if trimmed.len() > SIDE_PANEL_WIDTH {
-            &trimmed[trimmed.len() - SIDE_PANEL_WIDTH..]
+        // Use char-based indexing to handle multi-byte UTF-8 characters
+        let side_panel: String = if chars.len() > SIDE_PANEL_WIDTH {
+            chars[chars.len() - SIDE_PANEL_WIDTH..].iter().collect()
         } else {
-            trimmed
+            trimmed.to_string()
         };
 
-        // Check for OpenCode bracketed todos in side panel region
-        // Each line can have at most one todo in side panel
-        if let Some(caps) = OPENCODE_TODO_PATTERN.captures(side_panel) {
-            if let Some(match_val) = caps.get(1) {
-                let symbol = match_val.as_str();
-                if symbol == "✓" || symbol == "✔" || symbol == "✅" {
-                    completed += 1;
-                    total += 1;
-                } else {
-                    // [•], [○], or [ ] = incomplete
-                    total += 1;
-                }
-            }
+        // Simple string matching - avoid regex for performance
+        if side_panel.contains("[✓]") || side_panel.contains("[✔]") || side_panel.contains("[✅]")
+        {
+            completed += 1;
+            total += 1;
+        } else if side_panel.contains("[•]")
+            || side_panel.contains("[○]")
+            || side_panel.contains("[ ]")
+        {
+            total += 1;
         }
     }
 

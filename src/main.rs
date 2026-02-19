@@ -171,6 +171,12 @@ async fn main() -> Result<()> {
 
     // Create watch channel for selected agent (preview polling needs current selection)
     let initial_selected: Option<Uuid> = state.selected_agent_id();
+    tracing::info!(
+        "DEBUG watch channel: initial_selected={:?}, agent_order={:?}, selected_index={}",
+        initial_selected,
+        state.agent_order,
+        state.selected_index
+    );
     let (selected_watch_tx, selected_watch_rx) = watch::channel(initial_selected);
 
     // Start background polling task for agent status
@@ -178,7 +184,22 @@ async fn main() -> Result<()> {
     let selected_rx_clone = selected_watch_rx.clone();
     let ai_agent = config.global.ai_agent.clone();
     tokio::spawn(async move {
-        poll_agents(agent_watch_rx, selected_rx_clone, agent_poll_tx, ai_agent).await;
+        use std::panic::AssertUnwindSafe;
+        use futures::future::FutureExt;
+        
+        let result = AssertUnwindSafe(async {
+            poll_agents(agent_watch_rx, selected_rx_clone, agent_poll_tx, ai_agent).await
+        }).catch_unwind().await;
+        
+        if let Err(e) = result {
+            if let Some(msg) = e.downcast_ref::<&str>() {
+                tracing::error!("poll_agents task PANICKED (should not happen, inner catches): {}", msg);
+            } else if let Some(msg) = e.downcast_ref::<String>() {
+                tracing::error!("poll_agents task PANICKED (should not happen, inner catches): {}", msg);
+            } else {
+                tracing::error!("poll_agents task PANICKED (should not happen, inner catches): unknown error");
+            }
+        }
     });
 
     // Start background polling task for global system metrics (CPU/memory)
@@ -608,12 +629,22 @@ async fn process_action(
         Action::SelectNext => {
             state.error_message = None;
             state.select_next();
-            let _ = selected_watch_tx.send(state.selected_agent_id());
+            let new_selected = state.selected_agent_id();
+            tracing::info!("DEBUG SelectNext: new_selected={:?}", new_selected);
+            match selected_watch_tx.send(new_selected) {
+                Ok(_) => tracing::info!("DEBUG SelectNext: send succeeded"),
+                Err(e) => tracing::error!("DEBUG SelectNext: send FAILED: {}", e),
+            }
         }
         Action::SelectPrevious => {
             state.error_message = None;
             state.select_previous();
-            let _ = selected_watch_tx.send(state.selected_agent_id());
+            let new_selected = state.selected_agent_id();
+            tracing::info!("DEBUG SelectPrevious: new_selected={:?}", new_selected);
+            match selected_watch_tx.send(new_selected) {
+                Ok(_) => tracing::info!("DEBUG SelectPrevious: send succeeded"),
+                Err(e) => tracing::error!("DEBUG SelectPrevious: send FAILED: {}", e),
+            }
         }
         Action::SelectFirst => {
             state.error_message = None;
@@ -1480,6 +1511,7 @@ async fn process_action(
         }
 
         Action::UpdatePreviewContent(content) => {
+            tracing::info!("DEBUG UpdatePreviewContent: received content with len={:?}", content.as_ref().map(|c| c.len()));
             state.preview_content = content;
         }
 
@@ -1878,8 +1910,8 @@ async fn process_action(
 
 /// Background task to poll agent status from tmux sessions.
 async fn poll_agents(
-    agent_rx: watch::Receiver<HashSet<Uuid>>,
-    selected_rx: watch::Receiver<Option<Uuid>>,
+    mut agent_rx: watch::Receiver<HashSet<Uuid>>,
+    mut selected_rx: watch::Receiver<Option<Uuid>>,
     tx: mpsc::UnboundedSender<Action>,
     ai_agent: flock::app::config::AiAgent,
 ) {
@@ -1891,23 +1923,63 @@ async fn poll_agents(
     let mut agents_with_mr: HashSet<Uuid> = HashSet::new();
     // Counter for periodic deep MR URL scan (~every 5s = 20 ticks at 250ms)
     let mut deep_scan_counter: u32 = 0;
+    // Track previous selected_id to log changes
+    let mut prev_selected_id: Option<Uuid> = None;
 
     loop {
+        deep_scan_counter += 1;
+        
         // Poll every 250ms for responsive status updates
         tokio::time::sleep(Duration::from_millis(250)).await;
-        deep_scan_counter += 1;
 
         // Get current agent list and selected agent
-        let agent_ids = agent_rx.borrow().clone();
-        let selected_id = *selected_rx.borrow();
+        let agent_ids = agent_rx.borrow_and_update().clone();
+        let selected_id = *selected_rx.borrow_and_update();
+        
+        // Log when selected_id changes
+        if selected_id != prev_selected_id {
+            tracing::debug!("poll_agents: selected_id changed to {:?}", selected_id);
+            prev_selected_id = selected_id;
+        }
 
         for id in agent_ids {
             let is_selected = selected_id == Some(id);
             let session_name = format!("flock-{}", id.as_simple());
 
+            // PRIORITY 1: Capture preview for selected agent FIRST
+            // This ensures preview updates even if status detection crashes
+            if is_selected {
+                match std::process::Command::new("tmux")
+                    .args([
+                        "capture-pane",
+                        "-t",
+                        &session_name,
+                        "-p",
+                        "-e",
+                        "-J",
+                        "-S",
+                        "-1000",
+                    ])
+                    .output()
+                {
+                    Ok(output) => {
+                        if output.status.success() {
+                            let preview = String::from_utf8_lossy(&output.stdout).to_string();
+                            if let Err(e) = tx.send(Action::UpdatePreviewContent(Some(preview))) {
+                                tracing::error!("poll_agents: FAILED to send UpdatePreviewContent: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("poll_agents: tmux preview command FAILED: {}", e);
+                    }
+                }
+            }
+
+            // PRIORITY 2: Status detection (can be slow, may crash)
             // Always do a plain capture (no ANSI, consistent line count) for status detection
             // -J joins wrapped lines so URLs and long text aren't split across lines
-            if let Ok(output) = std::process::Command::new("tmux")
+            let capture_result = std::process::Command::new("tmux")
                 .args([
                     "capture-pane",
                     "-t",
@@ -1917,8 +1989,9 @@ async fn poll_agents(
                     "-S",
                     "-100",
                 ])
-                .output()
-            {
+                .output();
+            
+            if let Ok(output) = capture_result {
                 if output.status.success() {
                     let content = String::from_utf8_lossy(&output.stdout).to_string();
 
@@ -1955,11 +2028,16 @@ async fn poll_agents(
                             _ => ForegroundProcess::Unknown,
                         }
                     };
-                    let status = detect_status_for_agent(&content, foreground, ai_agent.clone());
+                    let status = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        detect_status_for_agent(&content, foreground, ai_agent.clone())
+                    })).unwrap_or_else(|e| {
+                        tracing::warn!("detect_status_for_agent panicked: {:?}", e);
+                        AgentStatus::Idle
+                    });
 
                     let _ = tx.send(Action::UpdateAgentStatus { id, status });
 
-                    // Check for MR URLs in the short capture (only if not already tracked)
+                    // Check for MR URLs detection
                     if !agents_with_mr.contains(&id) {
                         if let Some(mr_status) = detect_mr_url(&content) {
                             agents_with_mr.insert(id);
@@ -1970,10 +2048,17 @@ async fn poll_agents(
                         }
                     }
 
-                    // Check for checklist progress
-                    let progress = detect_checklist_progress(&content, ai_agent.clone());
+                    // Check for checklist progress (wrap in catch_unwind to prevent crashing the loop)
+                    let progress = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        detect_checklist_progress(&content, ai_agent.clone())
+                    })).unwrap_or_else(|e| {
+                        tracing::warn!("detect_checklist_progress panicked, skipping: {:?}", e);
+                        None
+                    });
                     let _ = tx.send(Action::UpdateChecklistProgress { id, progress });
                 }
+            } else {
+                tracing::warn!("poll_agents: capture-pane command FAILED for session {}", session_name);
             }
 
             // Deep MR URL scan: capture 500 lines every ~5s for agents without MR detected
@@ -1999,28 +2084,6 @@ async fn poll_agents(
                                 status: mr_status,
                             });
                         }
-                    }
-                }
-            }
-
-            // Separate ANSI capture for the selected agent's preview
-            if is_selected {
-                if let Ok(output) = std::process::Command::new("tmux")
-                    .args([
-                        "capture-pane",
-                        "-t",
-                        &session_name,
-                        "-p",
-                        "-e",
-                        "-J",
-                        "-S",
-                        "-1000",
-                    ])
-                    .output()
-                {
-                    if output.status.success() {
-                        let preview = String::from_utf8_lossy(&output.stdout).to_string();
-                        let _ = tx.send(Action::UpdatePreviewContent(Some(preview)));
                     }
                 }
             }
