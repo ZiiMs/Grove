@@ -35,10 +35,7 @@ impl ForgejoActionsClient {
             "Authorization",
             HeaderValue::from_str(&format!("token {}", token)).context("Invalid token")?,
         );
-        headers.insert(
-            "Accept",
-            HeaderValue::from_static("application/json"),
-        );
+        headers.insert("Accept", HeaderValue::from_static("application/json"));
 
         let client = reqwest::Client::builder()
             .default_headers(headers)

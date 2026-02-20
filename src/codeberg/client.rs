@@ -38,10 +38,7 @@ impl CodebergClient {
             "Authorization",
             HeaderValue::from_str(&format!("token {}", token)).context("Invalid token")?,
         );
-        headers.insert(
-            "Accept",
-            HeaderValue::from_static("application/json"),
-        );
+        headers.insert("Accept", HeaderValue::from_static("application/json"));
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
@@ -293,8 +290,16 @@ impl OptionalCodebergClient {
         let client = match (owner, repo, token) {
             (Some(o), Some(r), Some(t)) => {
                 let url = base_url.unwrap_or(DEFAULT_CODEBERG_URL);
-                CodebergClient::new(t, o, r, url, ci_provider, woodpecker_token, woodpecker_repo_id)
-                    .ok()
+                CodebergClient::new(
+                    t,
+                    o,
+                    r,
+                    url,
+                    ci_provider,
+                    woodpecker_token,
+                    woodpecker_repo_id,
+                )
+                .ok()
             }
             _ => None,
         };
