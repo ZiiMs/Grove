@@ -110,6 +110,9 @@ pub enum Action {
         id: Uuid,
         status: ProjectMgmtTaskStatus,
     },
+    CycleTaskStatus {
+        id: Uuid,
+    },
     OpenProjectTaskInBrowser {
         id: Uuid,
     },

@@ -76,6 +76,7 @@ impl HelpOverlay {
             Line::from("  a        Assign task by URL/ID"),
             Line::from("  A        Open task in browser"),
             Line::from("  t        Browse tasks from project"),
+            Line::from("  T        Cycle task status"),
             Line::from(""),
             Line::from(Span::styled(
                 "Other",

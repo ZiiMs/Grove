@@ -799,6 +799,16 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
             .selected_agent_id()
             .map(|id| Action::OpenProjectTaskInBrowser { id }),
         KeyCode::Char('t') => Some(Action::EnterInputMode(InputMode::BrowseTasks)),
+        KeyCode::Char('T') => state
+            .selected_agent_id()
+            .filter(|id| {
+                state
+                    .agents
+                    .get(id)
+                    .map(|a| a.pm_task_status.is_linked())
+                    .unwrap_or(false)
+            })
+            .map(|id| Action::CycleTaskStatus { id }),
 
         // Other
         KeyCode::Char('R') => Some(Action::RefreshAll),
@@ -1163,134 +1173,18 @@ async fn process_action(
         // Status updates
         Action::UpdateAgentStatus { id, status } => {
             if let Some(agent) = state.agents.get_mut(&id) {
-                // Don't overwrite Paused status - that's manually controlled
                 if matches!(agent.status, flock::agent::AgentStatus::Paused) {
                     return Ok(false);
                 }
 
-                let final_status = status;
-
                 let old_label = agent.status.label();
-                let new_label = final_status.label();
+                let new_label = status.label();
                 let name = agent.name.clone();
                 let changed = old_label != new_label;
 
-                let pm_transition_info = if changed && matches!(&final_status, AgentStatus::Running)
-                {
-                    match &agent.pm_task_status {
-                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
-                            gid,
-                            name,
-                            url,
-                        }) => Some((id, pm_provider, gid.clone(), name.clone(), url.clone())),
-                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
-                            page_id,
-                            name,
-                            url,
-                            status_option_id: _,
-                        }) => Some((id, pm_provider, page_id.clone(), name.clone(), url.clone())),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-
-                agent.set_status(final_status);
+                agent.set_status(status);
                 if changed {
                     state.log_debug(format!("Agent '{}': {} -> {}", name, old_label, new_label));
-                }
-
-                if let Some((agent_id, provider, task_id, task_name, task_url)) = pm_transition_info
-                {
-                    match provider {
-                        ProjectMgmtProvider::Asana => {
-                            if let Some(agent) = state.agents.get_mut(&agent_id) {
-                                agent.pm_task_status =
-                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
-                                        gid: task_id.clone(),
-                                        name: task_name.clone(),
-                                        url: task_url.clone(),
-                                    });
-                            }
-                            let client = Arc::clone(asana_client);
-                            let override_gid = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .asana
-                                .in_progress_section_gid
-                                .clone();
-                            let tx = action_tx.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = client
-                                    .move_to_in_progress(&task_id, override_gid.as_deref())
-                                    .await
-                                {
-                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
-                                        id: agent_id,
-                                        status: ProjectMgmtTaskStatus::Asana(
-                                            AsanaTaskStatus::Error {
-                                                gid: task_id,
-                                                message: format!(
-                                                    "Failed to move to In Progress: {}",
-                                                    e
-                                                ),
-                                            },
-                                        ),
-                                    });
-                                }
-                            });
-                        }
-                        ProjectMgmtProvider::Notion => {
-                            if let Some(agent) = state.agents.get_mut(&agent_id) {
-                                agent.pm_task_status =
-                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::InProgress {
-                                        page_id: task_id.clone(),
-                                        name: task_name.clone(),
-                                        url: task_url.clone(),
-                                        status_option_id: String::new(),
-                                    });
-                            }
-                            let client = Arc::clone(notion_client);
-                            let status_prop_name = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .notion
-                                .status_property_name
-                                .clone();
-                            let tx = action_tx.clone();
-                            tokio::spawn(async move {
-                                if let Ok(opts) = client.get_status_options().await {
-                                    if let Some(in_progress_id) = opts.in_progress_id {
-                                        let prop_name = status_prop_name
-                                            .unwrap_or_else(|| "Status".to_string());
-                                        if let Err(e) = client
-                                            .update_page_status(
-                                                &task_id,
-                                                &prop_name,
-                                                &in_progress_id,
-                                            )
-                                            .await
-                                        {
-                                            let _ = tx.send(Action::UpdateProjectTaskStatus {
-                                                id: agent_id,
-                                                status: ProjectMgmtTaskStatus::Notion(
-                                                    NotionTaskStatus::Error {
-                                                        page_id: task_id,
-                                                        message: format!(
-                                                            "Failed to move to In Progress: {}",
-                                                            e
-                                                        ),
-                                                    },
-                                                ),
-                                            });
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                    }
                 }
             }
         }
@@ -2012,6 +1906,300 @@ async fn process_action(
                 })
                 .collect();
             let _ = notion_watch_tx.send(notion_tasks);
+        }
+
+        Action::CycleTaskStatus { id } => {
+            if let Some(agent) = state.agents.get(&id) {
+                let current_status = agent.pm_task_status.clone();
+                match &current_status {
+                    ProjectMgmtTaskStatus::Asana(asana_status) => match asana_status {
+                        AsanaTaskStatus::NotStarted { gid, name, url } => {
+                            let gid = gid.clone();
+                            let name = name.clone();
+                            let url = url.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
+                                        gid: gid.clone(),
+                                        name: name.clone(),
+                                        url: url.clone(),
+                                    });
+                            }
+                            let client = Arc::clone(asana_client);
+                            let override_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .in_progress_section_gid
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client
+                                    .move_to_in_progress(&gid, override_gid.as_deref())
+                                    .await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Asana(
+                                            AsanaTaskStatus::Error {
+                                                gid,
+                                                message: format!(
+                                                    "Failed to move to In Progress: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Asana task '{}' → In Progress", name));
+                        }
+                        AsanaTaskStatus::InProgress { gid, name, .. } => {
+                            let gid = gid.clone();
+                            let name = name.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
+                                        gid: gid.clone(),
+                                        name: name.clone(),
+                                    });
+                            }
+                            let client = Arc::clone(asana_client);
+                            let done_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .done_section_gid
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client.complete_task(&gid).await {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Asana(
+                                            AsanaTaskStatus::Error {
+                                                gid,
+                                                message: format!("Failed to complete task: {}", e),
+                                            },
+                                        ),
+                                    });
+                                } else {
+                                    let _ = client.move_to_done(&gid, done_gid.as_deref()).await;
+                                }
+                            });
+                            state.log_info(format!("Asana task '{}' → Done", name));
+                        }
+                        AsanaTaskStatus::Completed { name, .. } => {
+                            let gid = match asana_status.gid() {
+                                Some(g) => g.to_string(),
+                                None => return Ok(false),
+                            };
+                            let name = name.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                        gid: gid.clone(),
+                                        name: name.clone(),
+                                        url: String::new(),
+                                    });
+                            }
+                            let client = Arc::clone(asana_client);
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client.uncomplete_task(&gid).await {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Asana(
+                                            AsanaTaskStatus::Error {
+                                                gid,
+                                                message: format!(
+                                                    "Failed to uncomplete task: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Asana task '{}' → Not Started", name));
+                        }
+                        AsanaTaskStatus::Error { .. } | AsanaTaskStatus::None => {}
+                    },
+                    ProjectMgmtTaskStatus::Notion(notion_status) => match notion_status {
+                        NotionTaskStatus::NotStarted {
+                            page_id,
+                            name,
+                            url,
+                            status_option_id: _,
+                        } => {
+                            let page_id = page_id.clone();
+                            let name = name.clone();
+                            let url = url.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::InProgress {
+                                        page_id: page_id.clone(),
+                                        name: name.clone(),
+                                        url: url.clone(),
+                                        status_option_id: String::new(),
+                                    });
+                            }
+                            let client = Arc::clone(notion_client);
+                            let status_prop_name = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Ok(opts) = client.get_status_options().await {
+                                    if let Some(in_progress_id) = opts.in_progress_id {
+                                        let prop_name = status_prop_name
+                                            .unwrap_or_else(|| "Status".to_string());
+                                        if let Err(e) = client
+                                            .update_page_status(
+                                                &page_id,
+                                                &prop_name,
+                                                &in_progress_id,
+                                            )
+                                            .await
+                                        {
+                                            let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                                id: agent_id,
+                                                status: ProjectMgmtTaskStatus::Notion(
+                                                    NotionTaskStatus::Error {
+                                                        page_id,
+                                                        message: format!(
+                                                            "Failed to move to In Progress: {}",
+                                                            e
+                                                        ),
+                                                    },
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
+                            });
+                            state.log_info(format!("Notion task '{}' → In Progress", name));
+                        }
+                        NotionTaskStatus::InProgress {
+                            page_id,
+                            name,
+                            url: _,
+                            status_option_id: _,
+                        } => {
+                            let page_id = page_id.clone();
+                            let name = name.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
+                                        page_id: page_id.clone(),
+                                        name: name.clone(),
+                                    });
+                            }
+                            let client = Arc::clone(notion_client);
+                            let status_prop_name = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Ok(opts) = client.get_status_options().await {
+                                    if let Some(done_id) = opts.done_id {
+                                        let prop_name = status_prop_name
+                                            .unwrap_or_else(|| "Status".to_string());
+                                        if let Err(e) = client
+                                            .update_page_status(&page_id, &prop_name, &done_id)
+                                            .await
+                                        {
+                                            let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                                id: agent_id,
+                                                status: ProjectMgmtTaskStatus::Notion(
+                                                    NotionTaskStatus::Error {
+                                                        page_id,
+                                                        message: format!(
+                                                            "Failed to move to Done: {}",
+                                                            e
+                                                        ),
+                                                    },
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
+                            });
+                            state.log_info(format!("Notion task '{}' → Done", name));
+                        }
+                        NotionTaskStatus::Completed { page_id, name } => {
+                            let page_id = page_id.clone();
+                            let name = name.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                                        page_id: page_id.clone(),
+                                        name: name.clone(),
+                                        url: String::new(),
+                                        status_option_id: String::new(),
+                                    });
+                            }
+                            let client = Arc::clone(notion_client);
+                            let status_prop_name = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Ok(opts) = client.get_status_options().await {
+                                    if let Some(not_started_id) = opts.not_started_id {
+                                        let prop_name = status_prop_name
+                                            .unwrap_or_else(|| "Status".to_string());
+                                        if let Err(e) = client
+                                            .update_page_status(
+                                                &page_id,
+                                                &prop_name,
+                                                &not_started_id,
+                                            )
+                                            .await
+                                        {
+                                            let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                                id: agent_id,
+                                                status: ProjectMgmtTaskStatus::Notion(
+                                                    NotionTaskStatus::Error {
+                                                        page_id,
+                                                        message: format!(
+                                                            "Failed to move to Not Started: {}",
+                                                            e
+                                                        ),
+                                                    },
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
+                            });
+                            state.log_info(format!("Notion task '{}' → Not Started", name));
+                        }
+                        NotionTaskStatus::Error { .. } | NotionTaskStatus::None => {}
+                    },
+                    ProjectMgmtTaskStatus::None => {}
+                }
+            }
         }
 
         Action::OpenProjectTaskInBrowser { id } => {
