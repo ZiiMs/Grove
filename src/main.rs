@@ -23,6 +23,7 @@ use flock::agent::{
 };
 use flock::app::{Action, AppState, Config, InputMode};
 use flock::asana::{AsanaTaskStatus, OptionalAsanaClient};
+use flock::codeberg::OptionalCodebergClient;
 use flock::git::GitSync;
 use flock::github::OptionalGitHubClient;
 use flock::gitlab::OptionalGitLabClient;
@@ -82,8 +83,15 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = Config::load().unwrap_or_default();
 
-    // Check if this is first launch (no config file exists)
-    let is_first_launch = Config::config_path().map(|p| !p.exists()).unwrap_or(false);
+    // Check if this is first launch (no ~/.flock directory exists)
+    let is_first_launch = !Config::exists();
+
+    // Check if project config exists
+    let repo_config_path = flock::app::RepoConfig::config_path(&repo_path).ok();
+    let project_needs_setup = repo_config_path
+        .as_ref()
+        .map(|p| !p.exists())
+        .unwrap_or(true);
 
     // Initialize storage
     let storage = SessionStorage::new(&repo_path)?;
@@ -92,14 +100,16 @@ async fn main() -> Result<()> {
     let mut state = AppState::new(config.clone(), repo_path.clone());
     state.log_info(format!("Flock started in {}", repo_path));
 
+    // Show global setup wizard if first launch
     if is_first_launch {
-        state.settings.active = true;
-        state.settings.tab = flock::app::SettingsTab::General;
-        state.settings.field_index = 0;
-        state.settings.pending_ai_agent = config.global.ai_agent.clone();
-        state.settings.pending_log_level = config.global.log_level;
-        state.settings.pending_ui = config.ui.clone();
-        state.log_info("First launch - showing settings".to_string());
+        state.show_global_setup = true;
+        state.global_setup = Some(flock::app::GlobalSetupState::default());
+        state.log_info("First launch - showing global setup wizard".to_string());
+    } else if project_needs_setup {
+        // Show project setup wizard if project not configured
+        state.show_project_setup = true;
+        state.project_setup = Some(flock::app::ProjectSetupState::default());
+        state.log_info("Project not configured - showing project setup wizard".to_string());
     }
 
     if let Ok(Some(session)) = storage.load() {
@@ -113,7 +123,7 @@ async fn main() -> Result<()> {
         state.log_info(format!("Loaded {} agents from session", count));
     }
 
-    let agent_manager = Arc::new(AgentManager::new(&repo_path));
+    let agent_manager = Arc::new(AgentManager::new(&repo_path, state.worktree_base.clone()));
 
     let gitlab_base_url = &state.settings.repo_config.git.gitlab.base_url;
     let gitlab_project_id = state.settings.repo_config.git.gitlab.project_id;
@@ -140,6 +150,34 @@ async fn main() -> Result<()> {
         github_owner.as_deref(),
         github_repo.as_deref(),
         Config::github_token().as_deref(),
+    ));
+
+    let codeberg_owner = state.settings.repo_config.git.codeberg.owner.clone();
+    let codeberg_repo = state.settings.repo_config.git.codeberg.repo.clone();
+    let codeberg_base_url = state.settings.repo_config.git.codeberg.base_url.clone();
+    let codeberg_ci_provider = state.settings.repo_config.git.codeberg.ci_provider;
+    let codeberg_woodpecker_repo_id = state.settings.repo_config.git.codeberg.woodpecker_repo_id;
+    let codeberg_token_set = Config::codeberg_token().is_some();
+    let woodpecker_token_set = Config::woodpecker_token().is_some();
+    let codeberg_log_msg = format!(
+        "Codeberg config: owner={:?}, repo={:?}, base_url={}, ci={:?}, token={}, woodpecker_token={}",
+        codeberg_owner,
+        codeberg_repo,
+        codeberg_base_url,
+        codeberg_ci_provider,
+        if codeberg_token_set { "set" } else { "NOT SET" },
+        if woodpecker_token_set { "set" } else { "NOT SET" }
+    );
+    state.log_info(codeberg_log_msg.clone());
+    tracing::info!("{}", codeberg_log_msg);
+    let codeberg_client = Arc::new(OptionalCodebergClient::new(
+        codeberg_owner.as_deref(),
+        codeberg_repo.as_deref(),
+        Some(&codeberg_base_url),
+        Config::codeberg_token().as_deref(),
+        codeberg_ci_provider,
+        Config::woodpecker_token().as_deref(),
+        codeberg_woodpecker_repo_id,
     ));
 
     let asana_client = Arc::new(OptionalAsanaClient::new(
@@ -184,20 +222,30 @@ async fn main() -> Result<()> {
     let selected_rx_clone = selected_watch_rx.clone();
     let ai_agent = config.global.ai_agent.clone();
     tokio::spawn(async move {
-        use std::panic::AssertUnwindSafe;
         use futures::future::FutureExt;
-        
+        use std::panic::AssertUnwindSafe;
+
         let result = AssertUnwindSafe(async {
             poll_agents(agent_watch_rx, selected_rx_clone, agent_poll_tx, ai_agent).await
-        }).catch_unwind().await;
-        
+        })
+        .catch_unwind()
+        .await;
+
         if let Err(e) = result {
             if let Some(msg) = e.downcast_ref::<&str>() {
-                tracing::error!("poll_agents task PANICKED (should not happen, inner catches): {}", msg);
+                tracing::error!(
+                    "poll_agents task PANICKED (should not happen, inner catches): {}",
+                    msg
+                );
             } else if let Some(msg) = e.downcast_ref::<String>() {
-                tracing::error!("poll_agents task PANICKED (should not happen, inner catches): {}", msg);
+                tracing::error!(
+                    "poll_agents task PANICKED (should not happen, inner catches): {}",
+                    msg
+                );
             } else {
-                tracing::error!("poll_agents task PANICKED (should not happen, inner catches): unknown error");
+                tracing::error!(
+                    "poll_agents task PANICKED (should not happen, inner catches): unknown error"
+                );
             }
         }
     });
@@ -212,9 +260,11 @@ async fn main() -> Result<()> {
     if gitlab_client.is_configured() {
         let gitlab_poll_tx = action_tx.clone();
         let gitlab_client_clone = Arc::clone(&gitlab_client);
+        let gitlab_refresh_secs = config.performance.gitlab_refresh_secs;
         let branch_rx_clone = branch_watch_rx.clone();
         tokio::spawn(async move {
-            poll_gitlab_mrs(branch_rx_clone, gitlab_client_clone, gitlab_poll_tx).await;
+            poll_gitlab_mrs(branch_rx_clone, gitlab_client_clone, gitlab_poll_tx, gitlab_refresh_secs)
+                .await;
         });
         state.log_info("GitLab integration enabled".to_string());
     } else {
@@ -243,6 +293,32 @@ async fn main() -> Result<()> {
             github_owner,
             github_repo,
             if github_token_set { "set" } else { "NOT SET" }
+        );
+        state.log_debug(msg);
+    }
+
+    // Start Codeberg polling task (if configured)
+    if codeberg_client.is_configured() {
+        let codeberg_poll_tx = action_tx.clone();
+        let codeberg_client_clone = Arc::clone(&codeberg_client);
+        let codeberg_refresh_secs = config.performance.codeberg_refresh_secs;
+        let branch_rx_clone = branch_watch_rx.clone();
+        state.log_info("Codeberg integration enabled".to_string());
+        tokio::spawn(async move {
+            poll_codeberg_prs(
+                branch_rx_clone,
+                codeberg_client_clone,
+                codeberg_poll_tx,
+                codeberg_refresh_secs,
+            )
+            .await;
+        });
+    } else {
+        let msg = format!(
+            "Codeberg not configured (owner={:?}, repo={:?}, token={})",
+            codeberg_owner,
+            codeberg_repo,
+            if codeberg_token_set { "set" } else { "NOT SET" }
         );
         state.log_debug(msg);
     }
@@ -350,6 +426,8 @@ async fn main() -> Result<()> {
                 &mut state,
                 &agent_manager,
                 &gitlab_client,
+                &github_client,
+                &codeberg_client,
                 &asana_client,
                 &storage,
                 &action_tx,
@@ -409,6 +487,106 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return Some(Action::ToggleHelp);
     }
 
+    // Handle global setup wizard
+    if state.show_global_setup {
+        if let Some(wizard) = &state.global_setup {
+            return match key.code {
+                KeyCode::Esc => {
+                    if wizard.dropdown_open {
+                        Some(Action::GlobalSetupToggleDropdown)
+                    } else if matches!(wizard.step, flock::app::GlobalSetupStep::AgentSettings) {
+                        Some(Action::GlobalSetupPrevStep)
+                    } else {
+                        None // Can't go back from first step
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if wizard.dropdown_open {
+                        Some(Action::GlobalSetupDropdownPrev)
+                    } else if matches!(wizard.step, flock::app::GlobalSetupStep::WorktreeLocation) {
+                        Some(Action::GlobalSetupSelectPrev)
+                    } else {
+                        Some(Action::GlobalSetupNavigateUp)
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if wizard.dropdown_open {
+                        Some(Action::GlobalSetupDropdownNext)
+                    } else if matches!(wizard.step, flock::app::GlobalSetupStep::WorktreeLocation) {
+                        Some(Action::GlobalSetupSelectNext)
+                    } else {
+                        Some(Action::GlobalSetupNavigateDown)
+                    }
+                }
+                KeyCode::Enter => {
+                    if wizard.dropdown_open {
+                        Some(Action::GlobalSetupConfirmDropdown)
+                    } else if matches!(wizard.step, flock::app::GlobalSetupStep::AgentSettings) {
+                        Some(Action::GlobalSetupToggleDropdown)
+                    } else {
+                        Some(Action::GlobalSetupNextStep)
+                    }
+                }
+                KeyCode::Char('c') => {
+                    if matches!(wizard.step, flock::app::GlobalSetupStep::AgentSettings)
+                        && !wizard.dropdown_open
+                    {
+                        Some(Action::GlobalSetupComplete)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+        }
+    }
+
+    // Handle project setup wizard
+    if state.show_project_setup {
+        if let Some(wizard) = &state.project_setup {
+            return match key.code {
+                KeyCode::Esc => {
+                    if wizard.editing_text {
+                        Some(Action::ProjectSetupCancelEdit)
+                    } else if wizard.dropdown_open {
+                        Some(Action::ProjectSetupToggleDropdown)
+                    } else {
+                        Some(Action::ProjectSetupSkip)
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if wizard.dropdown_open {
+                        Some(Action::ProjectSetupDropdownPrev)
+                    } else {
+                        Some(Action::ProjectSetupNavigatePrev)
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                    if wizard.dropdown_open {
+                        Some(Action::ProjectSetupDropdownNext)
+                    } else {
+                        Some(Action::ProjectSetupNavigateNext)
+                    }
+                }
+                KeyCode::Enter => {
+                    if wizard.editing_text {
+                        Some(Action::ProjectSetupConfirmEdit)
+                    } else if wizard.dropdown_open {
+                        Some(Action::ProjectSetupConfirmDropdown)
+                    } else {
+                        Some(Action::ProjectSetupEditField)
+                    }
+                }
+                KeyCode::Char(c) if wizard.editing_text => Some(Action::ProjectSetupInputChar(c)),
+                KeyCode::Backspace if wizard.editing_text => Some(Action::ProjectSetupBackspace),
+                KeyCode::Char('c') if !wizard.editing_text && !wizard.dropdown_open => {
+                    Some(Action::ProjectSetupComplete)
+                }
+                _ => None,
+            };
+        }
+    }
+
     // Check if selected agent is paused
     let is_paused = state
         .selected_agent()
@@ -431,6 +609,15 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         KeyCode::Char('r') if is_paused => state
             .selected_agent_id()
             .map(|id| Action::ResumeAgent { id }),
+
+        // Refresh selected agent status (only when not paused)
+        KeyCode::Char('r') if !is_paused => {
+            if state.selected_agent_id().is_some() {
+                Some(Action::RefreshSelected)
+            } else {
+                None
+            }
+        }
 
         // Yank (copy) agent name to clipboard
         KeyCode::Char('y') => state
@@ -495,7 +682,9 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                 flock::app::GitProvider::GitHub => state
                     .selected_agent_id()
                     .map(|id| Action::OpenPrInBrowser { id }),
-                flock::app::GitProvider::Bitbucket => None,
+                flock::app::GitProvider::Codeberg => state
+                    .selected_agent_id()
+                    .map(|id| Action::OpenCodebergPrInBrowser { id }),
             }
         }
 
@@ -610,7 +799,9 @@ async fn process_action(
     action: Action,
     state: &mut AppState,
     agent_manager: &Arc<AgentManager>,
-    _gitlab_client: &Arc<OptionalGitLabClient>,
+    gitlab_client: &Arc<OptionalGitLabClient>,
+    github_client: &Arc<OptionalGitHubClient>,
+    codeberg_client: &Arc<OptionalCodebergClient>,
     asana_client: &Arc<OptionalAsanaClient>,
     _storage: &SessionStorage,
     action_tx: &mpsc::UnboundedSender<Action>,
@@ -953,6 +1144,7 @@ async fn process_action(
                 let ai_agent = state.config.global.ai_agent.clone();
                 let repo_path = state.repo_path.clone();
                 let worktree_symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
+                let worktree_base = state.worktree_base.clone();
                 tokio::spawn(async move {
                     // Check if worktree already exists
                     let worktree_exists = std::path::Path::new(&worktree_path).exists();
@@ -989,7 +1181,7 @@ async fn process_action(
                         }
 
                         // Create symlinks for newly created worktree
-                        let worktree = flock::git::Worktree::new(&repo_path);
+                        let worktree = flock::git::Worktree::new(&repo_path, worktree_base);
                         if let Err(e) = worktree.create_symlinks(&worktree_path, &worktree_symlinks)
                         {
                             // Log but don't fail - symlinks are optional
@@ -1277,6 +1469,50 @@ async fn process_action(
             }
         }
 
+        // Codeberg operations
+        Action::UpdateCodebergPrStatus { id, status } => {
+            let should_log = state.agents.get(&id).and_then(|agent| {
+                let was_none = matches!(agent.codeberg_pr_status, flock::codeberg::PullRequestStatus::None);
+                let is_open = matches!(&status, flock::codeberg::PullRequestStatus::Open { .. });
+                if was_none && is_open {
+                    if let flock::codeberg::PullRequestStatus::Open { number, url, .. } = &status {
+                        Some((agent.name.clone(), *number, url.clone()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            });
+
+            if let Some(agent) = state.agents.get_mut(&id) {
+                agent.codeberg_pr_status = status;
+            }
+
+            if let Some((name, number, url)) = should_log {
+                state.log_info(format!("Codeberg PR #{} detected for '{}'", number, name));
+                state.error_message = Some(format!("PR #{}: {}", number, url));
+            }
+        }
+
+        Action::OpenCodebergPrInBrowser { id } => {
+            if let Some(agent) = state.agents.get(&id) {
+                if let Some(url) = agent.codeberg_pr_status.url() {
+                    match open::that(url) {
+                        Ok(_) => {
+                            state.log_info("Opening Codeberg PR in browser".to_string());
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Failed to open browser: {}", e));
+                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                        }
+                    }
+                } else {
+                    state.error_message = Some("No Codeberg PR available for this agent".to_string());
+                }
+            }
+        }
+
         // Asana operations
         Action::AssignAsanaTask { id, url_or_gid } => {
             let gid = parse_asana_task_gid(&url_or_gid);
@@ -1467,16 +1703,91 @@ async fn process_action(
 
         // Application
         Action::RefreshAll => {
-            // Trigger refresh of all status
             state.error_message = Some("Refreshing...".to_string());
 
-            // Refresh git status for selected agent
             if let Some(agent) = state.selected_agent() {
                 let git_sync = GitSync::new(&agent.worktree_path);
                 if let Ok(status) = git_sync.get_status(&state.settings.repo_config.git.main_branch)
                 {
                     let id = agent.id;
                     action_tx.send(Action::UpdateGitStatus { id, status })?;
+                }
+            }
+        }
+
+        Action::RefreshSelected => {
+            state.error_message = Some("Refreshing...".to_string());
+
+            if let Some(agent) = state.selected_agent() {
+                let id = agent.id;
+                let branch = agent.branch.clone();
+                let branch_for_gitlab = branch.clone();
+                let branch_for_github = branch.clone();
+                let branch_for_codeberg = branch.clone();
+                let worktree_path = agent.worktree_path.clone();
+                let main_branch = state.settings.repo_config.git.main_branch.clone();
+
+                // Refresh git status
+                let git_sync = GitSync::new(&worktree_path);
+                if let Ok(status) = git_sync.get_status(&main_branch) {
+                    action_tx.send(Action::UpdateGitStatus { id, status })?;
+                }
+
+                // Refresh GitLab MR status
+                let gitlab_client_clone = Arc::clone(gitlab_client);
+                let tx_clone = action_tx.clone();
+                tokio::spawn(async move {
+                    let status = gitlab_client_clone.get_mr_for_branch(&branch_for_gitlab).await;
+                    if !matches!(status, flock::gitlab::MergeRequestStatus::None) {
+                        let _ = tx_clone.send(Action::UpdateMrStatus { id, status });
+                    }
+                });
+
+                // Refresh GitHub PR status
+                let github_client_clone = Arc::clone(github_client);
+                let tx_clone = action_tx.clone();
+                tokio::spawn(async move {
+                    let status = github_client_clone.get_pr_for_branch(&branch_for_github).await;
+                    if !matches!(status, flock::github::PullRequestStatus::None) {
+                        let _ = tx_clone.send(Action::UpdatePrStatus { id, status });
+                    }
+                });
+
+                // Refresh Codeberg PR status
+                let codeberg_client_clone = Arc::clone(codeberg_client);
+                let tx_clone = action_tx.clone();
+                tokio::spawn(async move {
+                    let status = codeberg_client_clone.get_pr_for_branch(&branch_for_codeberg).await;
+                    if !matches!(status, flock::codeberg::PullRequestStatus::None) {
+                        let _ = tx_clone.send(Action::UpdateCodebergPrStatus { id, status });
+                    }
+                });
+
+                // Refresh Asana task status
+                if let Some(task_gid) = agent.asana_task_status.gid() {
+                    let asana_client_clone = Arc::clone(asana_client);
+                    let tx_clone = action_tx.clone();
+                    let gid = task_gid.to_string();
+                    tokio::spawn(async move {
+                        if let Ok(task) = asana_client_clone.get_task(&gid).await {
+                            let url = task
+                                .permalink_url
+                                .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
+                            let status = if task.completed {
+                                flock::asana::AsanaTaskStatus::Completed {
+                                    gid: task.gid,
+                                    name: task.name,
+                                }
+                            } else {
+                                flock::asana::AsanaTaskStatus::InProgress {
+                                    gid: task.gid,
+                                    name: task.name,
+                                    url,
+                                }
+                            };
+                            let _ = tx_clone.send(Action::UpdateAsanaTaskStatus { id, status });
+                        }
+                    });
                 }
             }
         }
@@ -1511,7 +1822,6 @@ async fn process_action(
         }
 
         Action::UpdatePreviewContent(content) => {
-            tracing::info!("DEBUG UpdatePreviewContent: received content with len={:?}", content.as_ref().map(|c| c.len()));
             state.preview_content = content;
         }
 
@@ -1585,6 +1895,7 @@ async fn process_action(
                 state.settings.editing_text = false;
                 state.settings.pending_ai_agent = state.config.global.ai_agent.clone();
                 state.settings.pending_log_level = state.config.global.log_level;
+                state.settings.pending_worktree_location = state.config.global.worktree_location;
                 state.settings.pending_ui = state.config.ui.clone();
             }
         }
@@ -1610,6 +1921,12 @@ async fn process_action(
                     flock::app::SettingsField::AiAgent => flock::app::AiAgent::all().len(),
                     flock::app::SettingsField::GitProvider => flock::app::GitProvider::all().len(),
                     flock::app::SettingsField::LogLevel => flock::app::ConfigLogLevel::all().len(),
+                    flock::app::SettingsField::WorktreeLocation => {
+                        flock::app::WorktreeLocation::all().len()
+                    }
+                    flock::app::SettingsField::CodebergCiProvider => {
+                        flock::app::CodebergCiProvider::all().len()
+                    }
                     _ => 0,
                 };
                 state.settings.dropdown = flock::app::DropdownState::Open {
@@ -1671,6 +1988,26 @@ async fn process_action(
                         selected_index: idx,
                     };
                 }
+                flock::app::SettingsField::WorktreeLocation => {
+                    let current = &state.settings.pending_worktree_location;
+                    let idx = flock::app::WorktreeLocation::all()
+                        .iter()
+                        .position(|w| w == current)
+                        .unwrap_or(0);
+                    state.settings.dropdown = flock::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
+                flock::app::SettingsField::CodebergCiProvider => {
+                    let current = &state.settings.repo_config.git.codeberg.ci_provider;
+                    let idx = flock::app::CodebergCiProvider::all()
+                        .iter()
+                        .position(|c| c == current)
+                        .unwrap_or(0);
+                    state.settings.dropdown = flock::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
                 flock::app::SettingsField::BranchPrefix => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer =
@@ -1722,6 +2059,33 @@ async fn process_action(
                         .repo
                         .clone()
                         .unwrap_or_default();
+                }
+                flock::app::SettingsField::CodebergOwner => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .git
+                        .codeberg
+                        .owner
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::CodebergRepo => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .git
+                        .codeberg
+                        .repo
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::CodebergBaseUrl => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer =
+                        state.settings.repo_config.git.codeberg.base_url.clone();
                 }
                 flock::app::SettingsField::AsanaProjectGid => {
                     state.settings.editing_text = true;
@@ -1815,6 +2179,20 @@ async fn process_action(
                         state.settings.repo_config.git.github.repo =
                             if val.is_empty() { None } else { Some(val) };
                     }
+                    flock::app::SettingsField::CodebergOwner => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.git.codeberg.owner =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::CodebergRepo => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.git.codeberg.repo =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::CodebergBaseUrl => {
+                        state.settings.repo_config.git.codeberg.base_url =
+                            state.settings.text_buffer.clone();
+                    }
                     flock::app::SettingsField::AsanaProjectGid => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.asana.project_gid =
@@ -1856,6 +2234,20 @@ async fn process_action(
                             state.config.global.log_level = *level;
                         }
                     }
+                    flock::app::SettingsField::WorktreeLocation => {
+                        if let Some(loc) = flock::app::WorktreeLocation::all().get(selected_index) {
+                            state.settings.pending_worktree_location = *loc;
+                            state.config.global.worktree_location = *loc;
+                            state.worktree_base = state.config.worktree_base_path(&state.repo_path);
+                        }
+                    }
+                    flock::app::SettingsField::CodebergCiProvider => {
+                        if let Some(provider) =
+                            flock::app::CodebergCiProvider::all().get(selected_index)
+                        {
+                            state.settings.repo_config.git.codeberg.ci_provider = *provider;
+                        }
+                    }
                     _ => {}
                 }
                 state.settings.dropdown = flock::app::DropdownState::Closed;
@@ -1889,6 +2281,7 @@ async fn process_action(
         Action::SettingsSave => {
             state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
             state.config.global.log_level = state.settings.pending_log_level;
+            state.config.global.worktree_location = state.settings.pending_worktree_location;
             state.config.ui = state.settings.pending_ui.clone();
 
             if let Err(e) = state.config.save() {
@@ -1900,12 +2293,380 @@ async fn process_action(
             }
 
             state.show_logs = state.config.ui.show_logs;
+            state.worktree_base = state.config.worktree_base_path(&state.repo_path);
             state.settings.active = false;
             state.log_info("Settings saved".to_string());
+        }
+
+        // Global Setup Wizard Actions
+        Action::GlobalSetupNextStep => {
+            if let Some(wizard) = &mut state.global_setup {
+                wizard.step = flock::app::GlobalSetupStep::AgentSettings;
+            }
+        }
+        Action::GlobalSetupPrevStep => {
+            if let Some(wizard) = &mut state.global_setup {
+                wizard.step = flock::app::GlobalSetupStep::WorktreeLocation;
+            }
+        }
+        Action::GlobalSetupSelectNext => {
+            if let Some(wizard) = &mut state.global_setup {
+                let all = flock::app::config::WorktreeLocation::all();
+                let current_idx = all
+                    .iter()
+                    .position(|l| *l == wizard.worktree_location)
+                    .unwrap_or(0);
+                let next_idx = (current_idx + 1) % all.len();
+                wizard.worktree_location = all[next_idx];
+            }
+        }
+        Action::GlobalSetupSelectPrev => {
+            if let Some(wizard) = &mut state.global_setup {
+                let all = flock::app::config::WorktreeLocation::all();
+                let current_idx = all
+                    .iter()
+                    .position(|l| *l == wizard.worktree_location)
+                    .unwrap_or(0);
+                let prev_idx = if current_idx == 0 {
+                    all.len() - 1
+                } else {
+                    current_idx - 1
+                };
+                wizard.worktree_location = all[prev_idx];
+            }
+        }
+        Action::GlobalSetupNavigateUp => {
+            if let Some(wizard) = &mut state.global_setup {
+                if wizard.field_index > 0 {
+                    wizard.field_index -= 1;
+                }
+            }
+        }
+        Action::GlobalSetupNavigateDown => {
+            if let Some(wizard) = &mut state.global_setup {
+                if wizard.field_index < 1 {
+                    wizard.field_index += 1;
+                }
+            }
+        }
+        Action::GlobalSetupToggleDropdown => {
+            if let Some(wizard) = &mut state.global_setup {
+                wizard.dropdown_open = !wizard.dropdown_open;
+                // Set dropdown_index to current value
+                if wizard.field_index == 0 {
+                    wizard.dropdown_index = flock::app::config::AiAgent::all()
+                        .iter()
+                        .position(|a| *a == wizard.ai_agent)
+                        .unwrap_or(0);
+                } else {
+                    wizard.dropdown_index = flock::app::config::LogLevel::all()
+                        .iter()
+                        .position(|l| *l == wizard.log_level)
+                        .unwrap_or(0);
+                }
+            }
+        }
+        Action::GlobalSetupDropdownPrev => {
+            if let Some(wizard) = &mut state.global_setup {
+                if wizard.dropdown_index > 0 {
+                    wizard.dropdown_index -= 1;
+                }
+            }
+        }
+        Action::GlobalSetupDropdownNext => {
+            if let Some(wizard) = &mut state.global_setup {
+                let max = if wizard.field_index == 0 {
+                    flock::app::config::AiAgent::all().len()
+                } else {
+                    flock::app::config::LogLevel::all().len()
+                };
+                if wizard.dropdown_index < max.saturating_sub(1) {
+                    wizard.dropdown_index += 1;
+                }
+            }
+        }
+        Action::GlobalSetupConfirmDropdown => {
+            if let Some(wizard) = &mut state.global_setup {
+                if wizard.field_index == 0 {
+                    let all_agents = flock::app::config::AiAgent::all();
+                    if wizard.dropdown_index < all_agents.len() {
+                        wizard.ai_agent = all_agents[wizard.dropdown_index].clone();
+                    }
+                } else {
+                    let all_levels = flock::app::config::LogLevel::all();
+                    if wizard.dropdown_index < all_levels.len() {
+                        wizard.log_level = all_levels[wizard.dropdown_index];
+                    }
+                }
+                wizard.dropdown_open = false;
+            }
+        }
+        Action::GlobalSetupComplete => {
+            if let Some(wizard) = state.global_setup.take() {
+                state.config.global.ai_agent = wizard.ai_agent;
+                state.config.global.log_level = wizard.log_level;
+                state.config.global.worktree_location = wizard.worktree_location;
+
+                state.worktree_base = state.config.worktree_base_path(&state.repo_path);
+
+                if let Err(e) = state.config.save() {
+                    state.log_error(format!("Failed to save config: {}", e));
+                }
+
+                state.show_global_setup = false;
+                state.log_info("Global setup complete".to_string());
+
+                // Show project setup if needed
+                let repo_config_path = flock::app::RepoConfig::config_path(&state.repo_path).ok();
+                let project_needs_setup = repo_config_path
+                    .as_ref()
+                    .map(|p| !p.exists())
+                    .unwrap_or(true);
+                if project_needs_setup {
+                    state.show_project_setup = true;
+                    state.project_setup = Some(flock::app::ProjectSetupState::default());
+                }
+            }
+        }
+
+        // Project Setup Wizard Actions
+        Action::ProjectSetupNavigateNext => {
+            if let Some(wizard) = &mut state.project_setup {
+                let max_fields = get_project_fields(&wizard.config.git.provider).len();
+                if wizard.field_index < max_fields.saturating_sub(1) {
+                    wizard.field_index += 1;
+                }
+            }
+        }
+        Action::ProjectSetupNavigatePrev => {
+            if let Some(wizard) = &mut state.project_setup {
+                if wizard.field_index > 0 {
+                    wizard.field_index -= 1;
+                }
+            }
+        }
+        Action::ProjectSetupEditField => {
+            if let Some(wizard) = &mut state.project_setup {
+                let fields = get_project_fields(&wizard.config.git.provider);
+                if let Some(field) = fields.get(wizard.field_index) {
+                    if *field == ProjectSetupField::GitProvider {
+                        wizard.dropdown_open = true;
+                        wizard.dropdown_index = 0;
+                    } else {
+                        wizard.editing_text = true;
+                        wizard.text_buffer = get_project_field_value(&wizard.config, field);
+                    }
+                }
+            }
+        }
+        Action::ProjectSetupCancelEdit => {
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.editing_text = false;
+                wizard.text_buffer.clear();
+            }
+        }
+        Action::ProjectSetupConfirmEdit => {
+            if let Some(wizard) = &mut state.project_setup {
+                let fields = get_project_fields(&wizard.config.git.provider);
+                if let Some(field) = fields.get(wizard.field_index) {
+                    set_project_field_value(&mut wizard.config, field, &wizard.text_buffer);
+                }
+                wizard.editing_text = false;
+                wizard.text_buffer.clear();
+            }
+        }
+        Action::ProjectSetupInputChar(c) => {
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.text_buffer.push(c);
+            }
+        }
+        Action::ProjectSetupBackspace => {
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.text_buffer.pop();
+            }
+        }
+        Action::ProjectSetupToggleDropdown => {
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.dropdown_open = false;
+            }
+        }
+        Action::ProjectSetupDropdownPrev => {
+            if let Some(wizard) = &mut state.project_setup {
+                if wizard.dropdown_index > 0 {
+                    wizard.dropdown_index -= 1;
+                }
+            }
+        }
+        Action::ProjectSetupDropdownNext => {
+            if let Some(wizard) = &mut state.project_setup {
+                let max = flock::app::config::GitProvider::all().len();
+                if wizard.dropdown_index < max.saturating_sub(1) {
+                    wizard.dropdown_index += 1;
+                }
+            }
+        }
+        Action::ProjectSetupConfirmDropdown => {
+            if let Some(wizard) = &mut state.project_setup {
+                let all_providers = flock::app::config::GitProvider::all();
+                if wizard.dropdown_index < all_providers.len() {
+                    wizard.config.git.provider = all_providers[wizard.dropdown_index];
+                }
+                wizard.dropdown_open = false;
+            }
+        }
+        Action::ProjectSetupSkip => {
+            state.show_project_setup = false;
+            state.project_setup = None;
+            state.log_info("Project setup skipped".to_string());
+        }
+        Action::ProjectSetupComplete => {
+            if let Some(wizard) = state.project_setup.take() {
+                if let Err(e) = wizard.config.save(&state.repo_path) {
+                    state.log_error(format!("Failed to save project config: {}", e));
+                } else {
+                    state.settings.repo_config = wizard.config.clone();
+                    state.log_info("Project setup complete".to_string());
+                }
+            }
+            state.show_project_setup = false;
         }
     }
 
     Ok(false)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectSetupField {
+    GitProvider,
+    GitLabProjectId,
+    GitLabBaseUrl,
+    GitHubOwner,
+    GitHubRepo,
+    CodebergOwner,
+    CodebergRepo,
+    CodebergBaseUrl,
+    BranchPrefix,
+    MainBranch,
+    AsanaProjectGid,
+}
+
+fn get_project_fields(provider: &flock::app::config::GitProvider) -> Vec<ProjectSetupField> {
+    use flock::app::config::GitProvider;
+    let mut fields = vec![ProjectSetupField::GitProvider];
+    match provider {
+        GitProvider::GitLab => {
+            fields.push(ProjectSetupField::GitLabProjectId);
+            fields.push(ProjectSetupField::GitLabBaseUrl);
+        }
+        GitProvider::GitHub => {
+            fields.push(ProjectSetupField::GitHubOwner);
+            fields.push(ProjectSetupField::GitHubRepo);
+        }
+        GitProvider::Codeberg => {
+            fields.push(ProjectSetupField::CodebergOwner);
+            fields.push(ProjectSetupField::CodebergRepo);
+            fields.push(ProjectSetupField::CodebergBaseUrl);
+        }
+    }
+    fields.push(ProjectSetupField::BranchPrefix);
+    fields.push(ProjectSetupField::MainBranch);
+    fields.push(ProjectSetupField::AsanaProjectGid);
+    fields
+}
+
+fn get_project_field_value(config: &flock::app::RepoConfig, field: &ProjectSetupField) -> String {
+    match field {
+        ProjectSetupField::GitProvider => config.git.provider.display_name().to_string(),
+        ProjectSetupField::GitLabProjectId => config
+            .git
+            .gitlab
+            .project_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        ProjectSetupField::GitLabBaseUrl => config.git.gitlab.base_url.clone(),
+        ProjectSetupField::GitHubOwner => config.git.github.owner.clone().unwrap_or_default(),
+        ProjectSetupField::GitHubRepo => config.git.github.repo.clone().unwrap_or_default(),
+        ProjectSetupField::CodebergOwner => {
+            config.git.codeberg.owner.clone().unwrap_or_default()
+        }
+        ProjectSetupField::CodebergRepo => config.git.codeberg.repo.clone().unwrap_or_default(),
+        ProjectSetupField::CodebergBaseUrl => config.git.codeberg.base_url.clone(),
+        ProjectSetupField::BranchPrefix => config.git.branch_prefix.clone(),
+        ProjectSetupField::MainBranch => config.git.main_branch.clone(),
+        ProjectSetupField::AsanaProjectGid => config.asana.project_gid.clone().unwrap_or_default(),
+    }
+}
+
+fn set_project_field_value(
+    config: &mut flock::app::RepoConfig,
+    field: &ProjectSetupField,
+    value: &str,
+) {
+    match field {
+        ProjectSetupField::GitLabProjectId => {
+            config.git.gitlab.project_id = value.parse().ok();
+        }
+        ProjectSetupField::GitLabBaseUrl => {
+            config.git.gitlab.base_url = value.to_string();
+        }
+        ProjectSetupField::GitHubOwner => {
+            config.git.github.owner = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        ProjectSetupField::GitHubRepo => {
+            config.git.github.repo = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        ProjectSetupField::BranchPrefix => {
+            config.git.branch_prefix = if value.is_empty() {
+                "feature/".to_string()
+            } else {
+                value.to_string()
+            };
+        }
+        ProjectSetupField::MainBranch => {
+            config.git.main_branch = if value.is_empty() {
+                "main".to_string()
+            } else {
+                value.to_string()
+            };
+        }
+        ProjectSetupField::AsanaProjectGid => {
+            config.asana.project_gid = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        ProjectSetupField::CodebergOwner => {
+            config.git.codeberg.owner = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        ProjectSetupField::CodebergRepo => {
+            config.git.codeberg.repo = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        ProjectSetupField::CodebergBaseUrl => {
+            config.git.codeberg.base_url = if value.is_empty() {
+                "https://codeberg.org".to_string()
+            } else {
+                value.to_string()
+            };
+        }
+        _ => {}
+    }
 }
 
 /// Background task to poll agent status from tmux sessions.
@@ -1928,14 +2689,14 @@ async fn poll_agents(
 
     loop {
         deep_scan_counter += 1;
-        
+
         // Poll every 250ms for responsive status updates
         tokio::time::sleep(Duration::from_millis(250)).await;
 
         // Get current agent list and selected agent
         let agent_ids = agent_rx.borrow_and_update().clone();
         let selected_id = *selected_rx.borrow_and_update();
-        
+
         // Log when selected_id changes
         if selected_id != prev_selected_id {
             tracing::debug!("poll_agents: selected_id changed to {:?}", selected_id);
@@ -1966,7 +2727,10 @@ async fn poll_agents(
                         if output.status.success() {
                             let preview = String::from_utf8_lossy(&output.stdout).to_string();
                             if let Err(e) = tx.send(Action::UpdatePreviewContent(Some(preview))) {
-                                tracing::error!("poll_agents: FAILED to send UpdatePreviewContent: {}", e);
+                                tracing::error!(
+                                    "poll_agents: FAILED to send UpdatePreviewContent: {}",
+                                    e
+                                );
                             }
                         }
                     }
@@ -1990,7 +2754,7 @@ async fn poll_agents(
                     "-100",
                 ])
                 .output();
-            
+
             if let Ok(output) = capture_result {
                 if output.status.success() {
                     let content = String::from_utf8_lossy(&output.stdout).to_string();
@@ -2030,7 +2794,8 @@ async fn poll_agents(
                     };
                     let status = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         detect_status_for_agent(&content, foreground, ai_agent.clone())
-                    })).unwrap_or_else(|e| {
+                    }))
+                    .unwrap_or_else(|e| {
                         tracing::warn!("detect_status_for_agent panicked: {:?}", e);
                         AgentStatus::Idle
                     });
@@ -2051,14 +2816,18 @@ async fn poll_agents(
                     // Check for checklist progress (wrap in catch_unwind to prevent crashing the loop)
                     let progress = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         detect_checklist_progress(&content, ai_agent.clone())
-                    })).unwrap_or_else(|e| {
+                    }))
+                    .unwrap_or_else(|e| {
                         tracing::warn!("detect_checklist_progress panicked, skipping: {:?}", e);
                         None
                     });
                     let _ = tx.send(Action::UpdateChecklistProgress { id, progress });
                 }
             } else {
-                tracing::warn!("poll_agents: capture-pane command FAILED for session {}", session_name);
+                tracing::warn!(
+                    "poll_agents: capture-pane command FAILED for session {}",
+                    session_name
+                );
             }
 
             // Deep MR URL scan: capture 500 lines every ~5s for agents without MR detected
@@ -2198,26 +2967,22 @@ async fn poll_gitlab_mrs(
     branch_rx: watch::Receiver<Vec<(Uuid, String)>>,
     gitlab_client: Arc<OptionalGitLabClient>,
     tx: mpsc::UnboundedSender<Action>,
+    refresh_secs: u64,
 ) {
-    // Do an immediate poll on startup
     let mut first_run = true;
 
     loop {
         if first_run {
             first_run = false;
-            // Small delay to let the UI initialize
             tokio::time::sleep(Duration::from_millis(500)).await;
         } else {
-            // Poll every 60 seconds after first run
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            tokio::time::sleep(Duration::from_secs(refresh_secs)).await;
         }
 
-        // Get current agent branches
         let branches = branch_rx.borrow().clone();
 
         for (id, branch) in branches {
             let status = gitlab_client.get_mr_for_branch(&branch).await;
-            // Only send update if there's an actual MR
             if !matches!(status, flock::gitlab::MergeRequestStatus::None) {
                 let _ = tx.send(Action::UpdateMrStatus { id, status });
             }
@@ -2251,6 +3016,37 @@ async fn poll_github_prs(
             tracing::info!("GitHub poll: branch {} -> {:?}", branch, status);
             if !matches!(status, flock::github::PullRequestStatus::None) {
                 let _ = tx.send(Action::UpdatePrStatus { id, status });
+            }
+        }
+    }
+}
+
+/// Background task to poll Codeberg for PR status.
+async fn poll_codeberg_prs(
+    branch_rx: watch::Receiver<Vec<(Uuid, String)>>,
+    codeberg_client: Arc<OptionalCodebergClient>,
+    tx: mpsc::UnboundedSender<Action>,
+    refresh_secs: u64,
+) {
+    let mut first_run = true;
+
+    loop {
+        if first_run {
+            first_run = false;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        } else {
+            tokio::time::sleep(Duration::from_secs(refresh_secs)).await;
+        }
+
+        let branches = branch_rx.borrow().clone();
+        tracing::info!("Codeberg poll: checking {} branches", branches.len());
+
+        for (id, branch) in branches {
+            tracing::info!("Codeberg poll: checking branch {}", branch);
+            let status = codeberg_client.get_pr_for_branch(&branch).await;
+            tracing::info!("Codeberg poll: branch {} -> {:?}", branch, status);
+            if !matches!(status, flock::codeberg::PullRequestStatus::None) {
+                let _ = tx.send(Action::UpdateCodebergPrStatus { id, status });
             }
         }
     }

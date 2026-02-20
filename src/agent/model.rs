@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::asana::AsanaTaskStatus;
+use crate::codeberg::PullRequestStatus as CodebergPullRequestStatus;
 use crate::git::GitSyncStatus;
 use crate::github::PullRequestStatus;
 use crate::gitlab::MergeRequestStatus;
@@ -75,6 +76,8 @@ pub struct Agent {
     pub mr_status: MergeRequestStatus,
     #[serde(skip)]
     pub pr_status: PullRequestStatus,
+    #[serde(skip)]
+    pub codeberg_pr_status: CodebergPullRequestStatus,
     pub created_at: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
     /// Activity history for sparkline (last 20 ticks, true = had activity)
@@ -109,6 +112,7 @@ impl Agent {
             git_status: None,
             mr_status: MergeRequestStatus::None,
             pr_status: PullRequestStatus::None,
+            codeberg_pr_status: CodebergPullRequestStatus::None,
             created_at: Utc::now(),
             last_activity: Utc::now(),
             activity_history: VecDeque::with_capacity(ACTIVITY_HISTORY_SIZE),

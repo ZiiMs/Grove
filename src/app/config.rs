@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -76,7 +78,31 @@ pub enum GitProvider {
     #[default]
     GitLab,
     GitHub,
-    Bitbucket,
+    Codeberg,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodebergCiProvider {
+    #[default]
+    ForgejoActions,
+    Woodpecker,
+}
+
+impl CodebergCiProvider {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            CodebergCiProvider::ForgejoActions => "Forgejo Actions",
+            CodebergCiProvider::Woodpecker => "Woodpecker CI",
+        }
+    }
+
+    pub fn all() -> &'static [CodebergCiProvider] {
+        &[
+            CodebergCiProvider::ForgejoActions,
+            CodebergCiProvider::Woodpecker,
+        ]
+    }
 }
 
 impl GitProvider {
@@ -84,7 +110,7 @@ impl GitProvider {
         match self {
             GitProvider::GitLab => "GitLab",
             GitProvider::GitHub => "GitHub",
-            GitProvider::Bitbucket => "Bitbucket",
+            GitProvider::Codeberg => "Codeberg",
         }
     }
 
@@ -92,7 +118,7 @@ impl GitProvider {
         &[
             GitProvider::GitLab,
             GitProvider::GitHub,
-            GitProvider::Bitbucket,
+            GitProvider::Codeberg,
         ]
     }
 }
@@ -127,12 +153,42 @@ impl LogLevel {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorktreeLocation {
+    #[default]
+    Project,
+    Home,
+}
+
+impl WorktreeLocation {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            WorktreeLocation::Project => "Project directory",
+            WorktreeLocation::Home => "Home directory",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            WorktreeLocation::Project => ".worktrees/ alongside your repo",
+            WorktreeLocation::Home => "~/.flock/worktrees/ (keeps repo clean)",
+        }
+    }
+
+    pub fn all() -> &'static [WorktreeLocation] {
+        &[WorktreeLocation::Project, WorktreeLocation::Home]
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalConfig {
     #[serde(default)]
     pub ai_agent: AiAgent,
     #[serde(default)]
     pub log_level: LogLevel,
+    #[serde(default)]
+    pub worktree_location: WorktreeLocation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -243,6 +299,8 @@ pub struct PerformanceConfig {
     pub gitlab_refresh_secs: u64,
     #[serde(default = "default_github_refresh")]
     pub github_refresh_secs: u64,
+    #[serde(default = "default_codeberg_refresh")]
+    pub codeberg_refresh_secs: u64,
 }
 
 fn default_agent_poll() -> u64 {
@@ -261,6 +319,10 @@ fn default_github_refresh() -> u64 {
     60
 }
 
+fn default_codeberg_refresh() -> u64 {
+    60
+}
+
 impl Default for PerformanceConfig {
     fn default() -> Self {
         Self {
@@ -268,6 +330,7 @@ impl Default for PerformanceConfig {
             git_refresh_secs: default_git_refresh(),
             gitlab_refresh_secs: default_gitlab_refresh(),
             github_refresh_secs: default_github_refresh(),
+            codeberg_refresh_secs: default_codeberg_refresh(),
         }
     }
 }
@@ -322,6 +385,37 @@ impl Config {
     pub fn asana_token() -> Option<String> {
         std::env::var("ASANA_TOKEN").ok()
     }
+
+    pub fn codeberg_token() -> Option<String> {
+        std::env::var("CODEBERG_TOKEN").ok()
+    }
+
+    pub fn woodpecker_token() -> Option<String> {
+        std::env::var("WOODPECKER_TOKEN").ok()
+    }
+
+    pub fn exists() -> bool {
+        Self::config_dir().map(|d| d.exists()).unwrap_or(false)
+    }
+
+    pub fn worktree_base_path(&self, repo_path: &str) -> PathBuf {
+        match self.global.worktree_location {
+            WorktreeLocation::Project => PathBuf::from(repo_path).join(".worktrees"),
+            WorktreeLocation::Home => {
+                let repo_hash = Self::repo_hash(repo_path);
+                Self::config_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join("worktrees")
+                    .join(repo_hash)
+            }
+        }
+    }
+
+    fn repo_hash(repo_path: &str) -> String {
+        let mut hasher = DefaultHasher::new();
+        repo_path.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -346,6 +440,8 @@ pub struct RepoGitConfig {
     pub gitlab: RepoGitLabConfig,
     #[serde(default)]
     pub github: RepoGitHubConfig,
+    #[serde(default)]
+    pub codeberg: RepoCodebergConfig,
 }
 
 fn default_branch_prefix() -> String {
@@ -365,6 +461,7 @@ impl Default for RepoGitConfig {
             worktree_symlinks: Vec::new(),
             gitlab: RepoGitLabConfig::default(),
             github: RepoGitHubConfig::default(),
+            codeberg: RepoCodebergConfig::default(),
         }
     }
 }
@@ -389,6 +486,34 @@ impl Default for RepoGitLabConfig {
 pub struct RepoGitHubConfig {
     pub owner: Option<String>,
     pub repo: Option<String>,
+}
+
+fn default_codeberg_url() -> String {
+    "https://codeberg.org".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepoCodebergConfig {
+    pub owner: Option<String>,
+    pub repo: Option<String>,
+    #[serde(default = "default_codeberg_url")]
+    pub base_url: String,
+    #[serde(default)]
+    pub ci_provider: CodebergCiProvider,
+    #[serde(default)]
+    pub woodpecker_repo_id: Option<u64>,
+}
+
+impl Default for RepoCodebergConfig {
+    fn default() -> Self {
+        Self {
+            owner: None,
+            repo: None,
+            base_url: default_codeberg_url(),
+            ci_provider: CodebergCiProvider::default(),
+            woodpecker_repo_id: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -425,7 +550,7 @@ impl RepoConfig {
         Ok(PathBuf::from(repo_path).join(".flock"))
     }
 
-    fn config_path(repo_path: &str) -> Result<PathBuf> {
+    pub fn config_path(repo_path: &str) -> Result<PathBuf> {
         Ok(Self::config_dir(repo_path)?.join("project.toml"))
     }
 }

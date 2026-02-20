@@ -286,7 +286,27 @@ impl<'a> AgentListWidget<'a> {
                 };
                 (pr_text, pr_style)
             }
-            GitProvider::Bitbucket => ("—".to_string(), Style::default().fg(Color::DarkGray)),
+            GitProvider::Codeberg => {
+                let pr_text = agent.codeberg_pr_status.format_short();
+                let pr_style = match &agent.codeberg_pr_status {
+                    crate::codeberg::PullRequestStatus::None => {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                    crate::codeberg::PullRequestStatus::Open { .. } => {
+                        Style::default().fg(Color::Green)
+                    }
+                    crate::codeberg::PullRequestStatus::Merged { .. } => {
+                        Style::default().fg(Color::Cyan)
+                    }
+                    crate::codeberg::PullRequestStatus::Closed { .. } => {
+                        Style::default().fg(Color::Red)
+                    }
+                    crate::codeberg::PullRequestStatus::Draft { .. } => {
+                        Style::default().fg(Color::Yellow)
+                    }
+                };
+                (pr_text, pr_style)
+            }
         }
     }
 
@@ -322,7 +342,21 @@ impl<'a> AgentListWidget<'a> {
                 };
                 (text, style)
             }
-            GitProvider::Bitbucket => ("—".to_string(), Style::default().fg(Color::DarkGray)),
+            GitProvider::Codeberg => {
+                let pipeline = agent.codeberg_pr_status.pipeline();
+                let text = format!("{} {}", pipeline.symbol(), pipeline.label());
+                let style = match pipeline {
+                    PipelineStatus::None => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Running => Style::default().fg(Color::LightBlue),
+                    PipelineStatus::Pending => Style::default().fg(Color::Yellow),
+                    PipelineStatus::Success => Style::default().fg(Color::Green),
+                    PipelineStatus::Failed => Style::default().fg(Color::Red),
+                    PipelineStatus::Canceled => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Skipped => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Manual => Style::default().fg(Color::Magenta),
+                };
+                (text, style)
+            }
         }
     }
 

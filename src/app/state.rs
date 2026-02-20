@@ -5,6 +5,7 @@ use uuid::Uuid;
 use super::action::InputMode;
 use super::config::{
     AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, RepoConfig, UiConfig,
+    WorktreeLocation,
 };
 use crate::agent::Agent;
 
@@ -55,6 +56,7 @@ impl SettingsTab {
 pub enum SettingsField {
     AiAgent,
     LogLevel,
+    WorktreeLocation,
     ShowPreview,
     ShowMetrics,
     ShowLogs,
@@ -64,6 +66,10 @@ pub enum SettingsField {
     GitLabBaseUrl,
     GitHubOwner,
     GitHubRepo,
+    CodebergOwner,
+    CodebergRepo,
+    CodebergBaseUrl,
+    CodebergCiProvider,
     BranchPrefix,
     MainBranch,
     WorktreeSymlinks,
@@ -76,9 +82,25 @@ pub enum SettingsField {
 pub enum SettingsCategory {
     Agent,
     Display,
+    Storage,
     GitProvider,
     GitConfig,
+    Ci,
     Asana,
+}
+
+impl SettingsCategory {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SettingsCategory::Agent => "Agent",
+            SettingsCategory::Display => "Display",
+            SettingsCategory::Storage => "Storage",
+            SettingsCategory::GitProvider => "Provider",
+            SettingsCategory::GitConfig => "Configuration",
+            SettingsCategory::Ci => "CI/CD",
+            SettingsCategory::Asana => "Asana",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +114,7 @@ impl SettingsField {
         match self {
             SettingsField::AiAgent
             | SettingsField::LogLevel
+            | SettingsField::WorktreeLocation
             | SettingsField::ShowPreview
             | SettingsField::ShowMetrics
             | SettingsField::ShowLogs
@@ -101,24 +124,16 @@ impl SettingsField {
             | SettingsField::GitLabBaseUrl
             | SettingsField::GitHubOwner
             | SettingsField::GitHubRepo
+            | SettingsField::CodebergOwner
+            | SettingsField::CodebergRepo
+            | SettingsField::CodebergBaseUrl
+            | SettingsField::CodebergCiProvider
             | SettingsField::BranchPrefix
             | SettingsField::MainBranch
             | SettingsField::WorktreeSymlinks => SettingsTab::Git,
             SettingsField::AsanaProjectGid
             | SettingsField::AsanaInProgressGid
             | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
-        }
-    }
-}
-
-impl SettingsCategory {
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            SettingsCategory::Agent => "Agent",
-            SettingsCategory::Display => "Display",
-            SettingsCategory::GitProvider => "Provider",
-            SettingsCategory::GitConfig => "Configuration",
-            SettingsCategory::Asana => "Asana",
         }
     }
 }
@@ -130,6 +145,8 @@ impl SettingsItem {
                 SettingsItem::Category(SettingsCategory::Agent),
                 SettingsItem::Field(SettingsField::AiAgent),
                 SettingsItem::Field(SettingsField::LogLevel),
+                SettingsItem::Category(SettingsCategory::Storage),
+                SettingsItem::Field(SettingsField::WorktreeLocation),
                 SettingsItem::Category(SettingsCategory::Display),
                 SettingsItem::Field(SettingsField::ShowPreview),
                 SettingsItem::Field(SettingsField::ShowMetrics),
@@ -150,7 +167,13 @@ impl SettingsItem {
                         items.push(SettingsItem::Field(SettingsField::GitHubOwner));
                         items.push(SettingsItem::Field(SettingsField::GitHubRepo));
                     }
-                    GitProvider::Bitbucket => {}
+                    GitProvider::Codeberg => {
+                        items.push(SettingsItem::Field(SettingsField::CodebergOwner));
+                        items.push(SettingsItem::Field(SettingsField::CodebergRepo));
+                        items.push(SettingsItem::Field(SettingsField::CodebergBaseUrl));
+                        items.push(SettingsItem::Category(SettingsCategory::Ci));
+                        items.push(SettingsItem::Field(SettingsField::CodebergCiProvider));
+                    }
                 }
                 items.push(SettingsItem::Category(SettingsCategory::GitConfig));
                 items.push(SettingsItem::Field(SettingsField::BranchPrefix));
@@ -195,6 +218,7 @@ pub struct SettingsState {
     pub text_buffer: String,
     pub pending_ai_agent: AiAgent,
     pub pending_log_level: ConfigLogLevel,
+    pub pending_worktree_location: WorktreeLocation,
     pub pending_ui: UiConfig,
     pub repo_config: RepoConfig,
 }
@@ -210,6 +234,7 @@ impl Default for SettingsState {
             text_buffer: String::new(),
             pending_ai_agent: AiAgent::default(),
             pending_log_level: ConfigLogLevel::default(),
+            pending_worktree_location: WorktreeLocation::default(),
             pending_ui: UiConfig::default(),
             repo_config: RepoConfig::default(),
         }
@@ -275,6 +300,39 @@ pub struct AppState {
     pub loading_message: Option<String>,
     pub preview_content: Option<String>,
     pub settings: SettingsState,
+    pub show_global_setup: bool,
+    pub global_setup: Option<GlobalSetupState>,
+    pub show_project_setup: bool,
+    pub project_setup: Option<ProjectSetupState>,
+    pub worktree_base: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GlobalSetupStep {
+    #[default]
+    WorktreeLocation,
+    AgentSettings,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GlobalSetupState {
+    pub step: GlobalSetupStep,
+    pub worktree_location: WorktreeLocation,
+    pub ai_agent: AiAgent,
+    pub log_level: ConfigLogLevel,
+    pub field_index: usize,
+    pub dropdown_open: bool,
+    pub dropdown_index: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProjectSetupState {
+    pub config: RepoConfig,
+    pub field_index: usize,
+    pub dropdown_open: bool,
+    pub dropdown_index: usize,
+    pub editing_text: bool,
+    pub text_buffer: String,
 }
 
 /// A log entry with timestamp and level
@@ -297,6 +355,9 @@ impl AppState {
     pub fn new(config: Config, repo_path: String) -> Self {
         let repo_config = RepoConfig::load(&repo_path).unwrap_or_default();
         let show_logs = config.ui.show_logs;
+
+        let worktree_base = config.worktree_base_path(&repo_path);
+
         Self {
             agents: HashMap::new(),
             agent_order: Vec::new(),
@@ -322,9 +383,15 @@ impl AppState {
             settings: SettingsState {
                 pending_ai_agent: AiAgent::default(),
                 pending_log_level: ConfigLogLevel::default(),
+                pending_worktree_location: WorktreeLocation::default(),
                 repo_config,
                 ..Default::default()
             },
+            show_global_setup: false,
+            global_setup: None,
+            show_project_setup: false,
+            project_setup: None,
+            worktree_base,
         }
     }
 

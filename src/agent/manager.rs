@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::{Agent, AgentStatus};
@@ -10,12 +10,14 @@ use crate::tmux::TmuxSession;
 /// Manages the lifecycle of agents.
 pub struct AgentManager {
     pub repo_path: String,
+    pub worktree_base: PathBuf,
 }
 
 impl AgentManager {
-    pub fn new(repo_path: &str) -> Self {
+    pub fn new(repo_path: &str, worktree_base: PathBuf) -> Self {
         Self {
             repo_path: repo_path.to_string(),
+            worktree_base,
         }
     }
 
@@ -27,7 +29,7 @@ impl AgentManager {
         ai_agent: &AiAgent,
         worktree_symlinks: &[String],
     ) -> Result<Agent> {
-        let worktree = Worktree::new(&self.repo_path);
+        let worktree = Worktree::new(&self.repo_path, self.worktree_base.clone());
         let worktree_path = worktree
             .create(branch)
             .context("Failed to create worktree")?;
@@ -56,7 +58,7 @@ impl AgentManager {
 
         // Remove worktree
         if Path::new(&agent.worktree_path).exists() {
-            let worktree = Worktree::new(&self.repo_path);
+            let worktree = Worktree::new(&self.repo_path, self.worktree_base.clone());
             worktree
                 .remove(&agent.worktree_path)
                 .context("Failed to remove worktree")?;

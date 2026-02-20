@@ -9,8 +9,9 @@ use ratatui::{
 use crate::app::{AppState, InputMode, LogLevel};
 
 use super::components::{
-    render_confirm_modal, render_input_modal, AgentListWidget, EmptyOutputWidget, HelpOverlay,
-    LoadingOverlay, OutputViewWidget, SettingsModal, StatusBarWidget, SystemMetricsWidget,
+    render_confirm_modal, render_input_modal, AgentListWidget, EmptyOutputWidget,
+    GlobalSetupWizard, HelpOverlay, LoadingOverlay, OutputViewWidget, ProjectSetupWizard,
+    SettingsModal, StatusBarWidget, SystemMetricsWidget,
 };
 
 /// ASCII art banner for FLOCK (with padding)
@@ -113,9 +114,28 @@ impl<'a> AppWidget<'a> {
                 &self.state.settings,
                 &self.state.config.global.ai_agent,
                 &self.state.config.global.log_level,
+                &self.state.config.global.worktree_location,
                 &self.state.config.ui,
             )
             .render(frame);
+        }
+
+        if self.state.show_global_setup {
+            if let Some(wizard_state) = &self.state.global_setup {
+                let wizard = GlobalSetupWizard::new(wizard_state);
+                wizard.render(frame);
+            }
+        }
+
+        if self.state.show_project_setup {
+            if let Some(wizard_state) = &self.state.project_setup {
+                let repo_name = std::path::Path::new(&self.state.repo_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Project");
+                let wizard = ProjectSetupWizard::new(wizard_state, repo_name);
+                wizard.render(frame);
+            }
         }
 
         if let Some(mode) = &self.state.input_mode {

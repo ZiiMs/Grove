@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
+use tracing::warn;
 
 use super::types::{MergeRequestListItem, MergeRequestResponse, MergeRequestStatus};
+use crate::ci::PipelineStatus;
 
 /// GitLab API client.
 pub struct GitLabClient {
@@ -23,11 +25,41 @@ impl GitLabClient {
             .build()
             .context("Failed to create HTTP client")?;
 
+        // Validate and clean base_url - should be just the hostname (e.g., https://gitlab.com)
+        let cleaned_url = Self::clean_base_url(base_url);
+
         Ok(Self {
             client,
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: cleaned_url,
             project_id,
         })
+    }
+
+    /// Clean base_url by stripping any path segments.
+    /// GitLab base_url should be just the hostname (e.g., https://gitlab.com),
+    /// not including any path like /namespace/project.
+    fn clean_base_url(url: &str) -> String {
+        let trimmed = url.trim_end_matches('/');
+
+        // Find the scheme and extract just scheme://host
+        if let Some(scheme_end) = trimmed.find("://") {
+            let after_scheme = &trimmed[scheme_end + 3..];
+            // Find the first / which would indicate a path
+            if let Some(path_start) = after_scheme.find('/') {
+                let host = &after_scheme[..path_start];
+                let scheme = &trimmed[..scheme_end];
+                let cleaned = format!("{}://{}", scheme, host);
+                let stripped_path = &after_scheme[path_start..];
+                warn!(
+                    "GitLab base_url contained path '{}' which was stripped to '{}'. \
+                     base_url should be just the hostname (e.g., https://gitlab.com)",
+                    stripped_path, cleaned
+                );
+                return cleaned;
+            }
+        }
+
+        trimmed.to_string()
     }
 
     /// Get merge request status for a branch.
@@ -85,7 +117,7 @@ impl GitLabClient {
             return Ok(MergeRequestStatus::Open {
                 iid: list_item.iid,
                 url: list_item.web_url,
-                pipeline: super::types::PipelineStatus::None,
+                pipeline: PipelineStatus::None,
             });
         }
 

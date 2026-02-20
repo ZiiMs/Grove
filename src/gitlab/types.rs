@@ -1,61 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-/// Represents the status of a CI/CD pipeline.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum PipelineStatus {
-    #[default]
-    None,
-    Running,
-    Pending,
-    Success,
-    Failed,
-    Canceled,
-    Skipped,
-    Manual,
-}
+use crate::ci::PipelineStatus;
 
-impl PipelineStatus {
-    pub fn from_gitlab_status(status: &str) -> Self {
-        match status {
-            "running" => PipelineStatus::Running,
-            "pending" | "waiting_for_resource" | "preparing" | "created" => PipelineStatus::Pending,
-            "success" => PipelineStatus::Success,
-            "failed" => PipelineStatus::Failed,
-            "canceled" => PipelineStatus::Canceled,
-            "skipped" => PipelineStatus::Skipped,
-            "manual" | "scheduled" => PipelineStatus::Manual,
-            _ => PipelineStatus::None,
-        }
-    }
-
-    pub fn symbol(&self) -> &'static str {
-        match self {
-            PipelineStatus::None => "─",
-            PipelineStatus::Running => "●",
-            PipelineStatus::Pending => "◐",
-            PipelineStatus::Success => "✓",
-            PipelineStatus::Failed => "✗",
-            PipelineStatus::Canceled => "⊘",
-            PipelineStatus::Skipped => "⊘",
-            PipelineStatus::Manual => "▶",
-        }
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            PipelineStatus::None => "None",
-            PipelineStatus::Running => "Running",
-            PipelineStatus::Pending => "Pending",
-            PipelineStatus::Success => "Passed",
-            PipelineStatus::Failed => "Failed",
-            PipelineStatus::Canceled => "Canceled",
-            PipelineStatus::Skipped => "Skipped",
-            PipelineStatus::Manual => "Manual",
-        }
-    }
-}
-
-/// Represents the status of a GitLab Merge Request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum MergeRequestStatus {
     #[default]
@@ -118,21 +64,18 @@ impl MergeRequestStatus {
     }
 }
 
-/// GitLab API response for pipeline info (nested in MR response).
 #[derive(Debug, Deserialize)]
 pub struct PipelineResponse {
     pub id: u64,
     pub status: String,
 }
 
-/// Minimal MR data from the list endpoint (no head_pipeline).
 #[derive(Debug, Deserialize)]
 pub struct MergeRequestListItem {
     pub iid: u64,
     pub web_url: String,
 }
 
-/// GitLab API response for a single merge request (includes head_pipeline).
 #[derive(Debug, Deserialize)]
 pub struct MergeRequestResponse {
     pub iid: u64,
@@ -151,7 +94,7 @@ impl MergeRequestResponse {
         let pipeline = self
             .head_pipeline
             .map(|p| PipelineStatus::from_gitlab_status(&p.status))
-            .unwrap_or(PipelineStatus::None);
+            .unwrap_or_default();
 
         match self.state.as_str() {
             "merged" => MergeRequestStatus::Merged { iid: self.iid },

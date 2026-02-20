@@ -7,14 +7,15 @@ use ratatui::{
 };
 
 use crate::app::{
-    AiAgent, ConfigLogLevel, GitProvider, SettingsCategory, SettingsField, SettingsItem,
-    SettingsState, SettingsTab, UiConfig,
+    AiAgent, CodebergCiProvider, Config, ConfigLogLevel, GitProvider, SettingsCategory,
+    SettingsField, SettingsItem, SettingsState, SettingsTab, UiConfig, WorktreeLocation,
 };
 
 pub struct SettingsModal<'a> {
     state: &'a SettingsState,
     ai_agent: &'a AiAgent,
     log_level: &'a ConfigLogLevel,
+    worktree_location: &'a WorktreeLocation,
     ui_config: &'a UiConfig,
 }
 
@@ -23,12 +24,14 @@ impl<'a> SettingsModal<'a> {
         state: &'a SettingsState,
         ai_agent: &'a AiAgent,
         log_level: &'a ConfigLogLevel,
+        worktree_location: &'a WorktreeLocation,
         ui_config: &'a UiConfig,
     ) -> Self {
         Self {
             state,
             ai_agent,
             log_level,
+            worktree_location,
             ui_config,
         }
     }
@@ -115,10 +118,47 @@ impl<'a> SettingsModal<'a> {
             match item {
                 SettingsItem::Category(cat) => {
                     lines.push(self.render_category_line(cat));
+                    if *cat == SettingsCategory::Asana {
+                        lines.push(Self::render_token_status_line(
+                            "ASANA_TOKEN",
+                            Config::asana_token().is_some(),
+                        ));
+                    }
                 }
                 SettingsItem::Field(field) => {
                     let is_selected = item_idx == selected_field_idx;
                     lines.push(self.render_field_line(field, is_selected));
+                    if *field == SettingsField::GitProvider {
+                        match self.state.repo_config.git.provider {
+                            GitProvider::GitLab => {
+                                lines.push(Self::render_token_status_line(
+                                    "GITLAB_TOKEN",
+                                    Config::gitlab_token().is_some(),
+                                ));
+                            }
+                            GitProvider::GitHub => {
+                                lines.push(Self::render_token_status_line(
+                                    "GITHUB_TOKEN",
+                                    Config::github_token().is_some(),
+                                ));
+                            }
+                            GitProvider::Codeberg => {
+                                lines.push(Self::render_token_status_line(
+                                    "CODEBERG_TOKEN",
+                                    Config::codeberg_token().is_some(),
+                                ));
+                                if matches!(
+                                    self.state.repo_config.git.codeberg.ci_provider,
+                                    CodebergCiProvider::Woodpecker
+                                ) {
+                                    lines.push(Self::render_token_status_line(
+                                        "WOODPECKER_TOKEN",
+                                        Config::woodpecker_token().is_some(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -135,6 +175,26 @@ impl<'a> SettingsModal<'a> {
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled("─".repeat(30), Style::default().fg(Color::DarkGray)),
+        ])
+    }
+
+    fn render_token_status_line(name: &str, exists: bool) -> Line<'static> {
+        let (symbol, color) = if exists {
+            ("✓ OK", Color::Green)
+        } else {
+            ("✗ Missing", Color::Red)
+        };
+        Line::from(vec![
+            Span::styled("    ", Style::default()),
+            Span::styled(
+                format!("{:14}", "Token"),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(": ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{:34}", format!("{} ({})", symbol, name)),
+                Style::default().fg(color),
+            ),
         ])
     }
 
@@ -202,6 +262,11 @@ impl<'a> SettingsModal<'a> {
             SettingsField::LogLevel => (
                 "Log Level".to_string(),
                 self.log_level.display_name().to_string(),
+                false,
+            ),
+            SettingsField::WorktreeLocation => (
+                "Worktree Loc".to_string(),
+                self.worktree_location.display_name().to_string(),
                 false,
             ),
             SettingsField::ShowPreview => (
@@ -292,6 +357,44 @@ impl<'a> SettingsModal<'a> {
                     .unwrap_or_default(),
                 false,
             ),
+            SettingsField::CodebergOwner => (
+                "Owner".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .codeberg
+                    .owner
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::CodebergRepo => (
+                "Repo".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .codeberg
+                    .repo
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::CodebergBaseUrl => (
+                "Base URL".to_string(),
+                self.state.repo_config.git.codeberg.base_url.clone(),
+                false,
+            ),
+            SettingsField::CodebergCiProvider => (
+                "CI Provider".to_string(),
+                self.state
+                    .repo_config
+                    .git
+                    .codeberg
+                    .ci_provider
+                    .display_name()
+                    .to_string(),
+                false,
+            ),
             SettingsField::BranchPrefix => (
                 "Branch Prefix".to_string(),
                 self.state.repo_config.git.branch_prefix.clone(),
@@ -380,6 +483,14 @@ impl<'a> SettingsModal<'a> {
             SettingsField::LogLevel => ConfigLogLevel::all()
                 .iter()
                 .map(|l| l.display_name())
+                .collect(),
+            SettingsField::WorktreeLocation => WorktreeLocation::all()
+                .iter()
+                .map(|w| w.display_name())
+                .collect(),
+            SettingsField::CodebergCiProvider => CodebergCiProvider::all()
+                .iter()
+                .map(|c| c.display_name())
                 .collect(),
             _ => return,
         };
