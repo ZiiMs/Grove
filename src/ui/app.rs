@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -285,11 +287,27 @@ impl<'a> AppWidget<'a> {
                     .project_mgmt
                     .provider
                     .display_name();
+
+                fn normalize_id(id: &str) -> String {
+                    id.replace('-', "").to_lowercase()
+                }
+
+                let assigned_tasks: HashMap<String, String> = self
+                    .state
+                    .agents
+                    .values()
+                    .filter_map(|a| {
+                        a.pm_task_status
+                            .id()
+                            .map(|id| (normalize_id(id), a.name.clone()))
+                    })
+                    .collect();
                 TaskListModal::new(
                     &self.state.task_list,
                     self.state.task_list_selected,
                     self.state.task_list_loading,
                     provider_name,
+                    &assigned_tasks,
                 )
                 .render(frame);
             }

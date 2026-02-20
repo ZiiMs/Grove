@@ -2199,11 +2199,41 @@ async fn process_action(
         Action::AssignSelectedTaskToAgent => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
                 if let Some(agent_id) = state.selected_agent_id() {
-                    state.exit_input_mode();
-                    action_tx.send(Action::AssignProjectTask {
-                        id: agent_id,
-                        url_or_id: task.id.clone(),
-                    })?;
+                    let already_has_task = state
+                        .agents
+                        .get(&agent_id)
+                        .map(|a| a.pm_task_status.is_linked())
+                        .unwrap_or(false);
+
+                    if already_has_task {
+                        state.error_message = Some("Agent already has a task assigned".to_string());
+                    } else {
+                        let task_id_normalized = task.id.replace('-', "").to_lowercase();
+                        let old_agent_info = state.agents.values().find_map(|a| {
+                            let agent_task_id = a
+                                .pm_task_status
+                                .id()
+                                .map(|id| id.replace('-', "").to_lowercase());
+                            if agent_task_id.as_deref() == Some(&task_id_normalized) {
+                                Some((a.id, a.name.clone()))
+                            } else {
+                                None
+                            }
+                        });
+
+                        if let Some((old_id, old_name)) = old_agent_info {
+                            if let Some(old_agent) = state.agents.get_mut(&old_id) {
+                                old_agent.pm_task_status = ProjectMgmtTaskStatus::None;
+                            }
+                            state.log_info(format!("Removed task from agent '{}'", old_name));
+                        }
+
+                        state.exit_input_mode();
+                        action_tx.send(Action::AssignProjectTask {
+                            id: agent_id,
+                            url_or_id: task.id.clone(),
+                        })?;
+                    }
                 } else {
                     state.error_message = Some("No agent selected".to_string());
                 }

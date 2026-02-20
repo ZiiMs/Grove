@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -13,6 +15,7 @@ pub struct TaskListModal<'a> {
     selected: usize,
     loading: bool,
     provider_name: &'a str,
+    assigned_tasks: &'a HashMap<String, String>,
 }
 
 impl<'a> TaskListModal<'a> {
@@ -21,12 +24,14 @@ impl<'a> TaskListModal<'a> {
         selected: usize,
         loading: bool,
         provider_name: &'a str,
+        assigned_tasks: &'a HashMap<String, String>,
     ) -> Self {
         Self {
             tasks,
             selected,
             loading,
             provider_name,
+            assigned_tasks,
         }
     }
 
@@ -104,6 +109,14 @@ impl<'a> TaskListModal<'a> {
                     Style::default().fg(Color::DarkGray)
                 };
 
+                let normalized_id = task.id.replace('-', "").to_lowercase();
+                let assigned_info = self.assigned_tasks.get(&normalized_id);
+                let assigned_style = if i == self.selected {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Green)
+                };
+
                 let padded_name = format!("{:width$}", task.name, width = max_name_width);
                 let truncated_name = if padded_name.chars().count() > 50 {
                     format!("{}…", padded_name.chars().take(49).collect::<String>())
@@ -111,12 +124,19 @@ impl<'a> TaskListModal<'a> {
                     padded_name
                 };
 
-                let line = Line::from(vec![
+                let mut spans = vec![
                     Span::styled(format!("{} ", status_icon), status_style),
                     Span::styled(truncated_name, style),
                     Span::styled("  ", Style::default()),
                     Span::styled(format!("[{}]", task.status_name), status_name_style),
-                ]);
+                ];
+
+                if let Some(agent_name) = assigned_info {
+                    spans.push(Span::styled("  ", Style::default()));
+                    spans.push(Span::styled(format!("✓ @{}", agent_name), assigned_style));
+                }
+
+                let line = Line::from(spans);
 
                 ListItem::new(line)
             })
