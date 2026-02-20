@@ -491,7 +491,7 @@ impl<'a> SettingsModal<'a> {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let hint = if self.state.editing_prompt {
-            "[Enter] New line  [Ctrl+S] Save  [Ctrl+Q] Save & Close  [Esc] Cancel"
+            "[Enter] Save  [Shift+Enter] New line  [Ctrl+S] Save & Close  [Esc] Close"
         } else if self.state.editing_text {
             "[Enter] Save  [Esc] Cancel"
         } else if self.state.is_dropdown_open() {
