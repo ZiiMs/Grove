@@ -9,7 +9,7 @@ license = "MIT"
 tokio = { version = "1", features = ["full"] }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
-git2 = "0.19"
+git2 = { version = "0.19", features = ["vendored-openssl"] }
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",
   "json"
