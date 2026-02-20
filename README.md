@@ -20,29 +20,23 @@ Before installing Flock, ensure you have the following:
 
 ### Required
 
-1. **Rust** (1.70 or later)
-   ```bash
-   # Install via rustup
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
+1. **tmux**
+    ```bash
+    # macOS
+    brew install tmux
 
-2. **tmux**
-   ```bash
-   # macOS
-   brew install tmux
+    # Ubuntu/Debian
+    sudo apt install tmux
 
-   # Ubuntu/Debian
-   sudo apt install tmux
+    # Fedora
+    sudo dnf install tmux
+    ```
 
-   # Fedora
-   sudo dnf install tmux
-   ```
-
-3. **Claude Code CLI**
+2. **Claude Code CLI**
 
    The `claude` command must be available in your PATH. Install Claude Code following Anthropic's instructions.
 
-4. **Git** (with worktree support, version 2.5+)
+3. **Git** (with worktree support, version 2.5+)
 
 ### Optional (for integrations)
 
@@ -51,10 +45,37 @@ Before installing Flock, ensure you have the following:
 
 ## Installation
 
+### Quick Install (Recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash
+```
+
+The installer will:
+- Detect your platform and architecture
+- Download the latest release binary
+- Install to `~/.local/bin` (or specify with `--bin-dir`)
+- Optionally install tmux if missing
+
+#### Install Options
+
+```bash
+# Install to custom directory
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash -s -- --bin-dir /usr/local/bin
+
+# Install specific version
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash -s -- --version 0.1.0
+
+# Skip dependency installation (if you already have tmux)
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash -s -- --no-deps
+```
+
+### From Source
+
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/flock.git
-cd flock
+git clone https://github.com/ZiiMs/flock-tui.git
+cd flock-tui
 
 # Build in release mode
 cargo build --release
@@ -62,8 +83,12 @@ cargo build --release
 # The binary will be at ./target/release/flock
 # Optionally, copy it to a directory in your PATH:
 cp target/release/flock ~/.local/bin/
-# or
-sudo cp target/release/flock /usr/local/bin/
+```
+
+### From crates.io
+
+```bash
+cargo install flock-tui
 ```
 
 ## Quick Start
