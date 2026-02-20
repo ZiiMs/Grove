@@ -3201,6 +3201,8 @@ async fn poll_agents(
 
             // PRIORITY 1: Capture preview for selected agent FIRST
             // This ensures preview updates even if status detection crashes
+            // Note: Don't use -J (join wrapped lines) - we want lines to stay wrapped
+            // at the tmux terminal width so they display correctly in the preview pane
             if is_selected {
                 match std::process::Command::new("tmux")
                     .args([
@@ -3209,7 +3211,6 @@ async fn poll_agents(
                         &session_name,
                         "-p",
                         "-e",
-                        "-J",
                         "-S",
                         "-1000",
                     ])
