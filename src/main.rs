@@ -2181,17 +2181,60 @@ async fn process_action(
 
         Action::CreateAgentFromSelectedTask => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
-                state.exit_input_mode();
                 let branch = flock::util::sanitize_branch_name(&task.name);
                 if branch.is_empty() {
                     state.error_message = Some("Invalid task name for branch".to_string());
                 } else {
                     let name = task.name.clone();
-                    action_tx.send(Action::CreateAgent {
-                        name,
-                        branch,
-                        task: Some(task),
-                    })?;
+                    state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
+                    let ai_agent = state.config.global.ai_agent.clone();
+                    let worktree_symlinks =
+                        state.settings.repo_config.git.worktree_symlinks.clone();
+                    match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks)
+                    {
+                        Ok(mut agent) => {
+                            state.log_info(format!("Agent '{}' created successfully", agent.name));
+
+                            let pm_status = match pm_provider {
+                                ProjectMgmtProvider::Asana => {
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                        gid: task.id.clone(),
+                                        name: task.name.clone(),
+                                        url: task.url.clone(),
+                                    })
+                                }
+                                ProjectMgmtProvider::Notion => {
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                                        page_id: task.id.clone(),
+                                        name: task.name.clone(),
+                                        url: task.url.clone(),
+                                        status_option_id: String::new(),
+                                    })
+                                }
+                            };
+                            agent.pm_task_status = pm_status;
+                            state.log_info(format!("Linked task '{}' to agent", task.name));
+
+                            state.add_agent(agent);
+                            state.select_last();
+                            state.error_message = None;
+                            state.exit_input_mode();
+
+                            let _ = agent_watch_tx.send(state.agents.keys().cloned().collect());
+                            let _ = branch_watch_tx.send(
+                                state
+                                    .agents
+                                    .values()
+                                    .map(|a| (a.id, a.branch.clone()))
+                                    .collect(),
+                            );
+                            let _ = selected_watch_tx.send(state.selected_agent_id());
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Failed to create agent: {}", e));
+                            state.error_message = Some(format!("Failed to create agent: {}", e));
+                        }
+                    }
                 }
             }
         }
