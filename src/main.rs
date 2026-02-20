@@ -378,7 +378,8 @@ async fn main() -> Result<()> {
                 execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
                 // Attach to tmux (blocks until detach)
-                let attach_result = agent_manager.attach_to_agent(&agent);
+                let ai_agent = state.config.global.ai_agent.clone();
+                let attach_result = agent_manager.attach_to_agent(&agent, &ai_agent);
 
                 // Restore TUI mode
                 enable_raw_mode()?;
