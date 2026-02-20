@@ -124,6 +124,14 @@ let block = Block::default().title(" AGENTS ").borders(Borders::ALL);
 let style = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
 ```
 
+## Git Workflow
+
+Always run `cargo fmt` before pushing changes to ensure consistent code formatting:
+
+```bash
+cargo fmt && git add . && git commit
+```
+
 ## Testing
 
 ```rust
