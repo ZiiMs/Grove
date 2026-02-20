@@ -13,7 +13,7 @@ use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
     DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GlobalSetupWizard, HelpOverlay,
     LoadingOverlay, OutputViewWidget, ProjectSetupWizard, SettingsModal, StatusBarWidget,
-    SystemMetricsWidget,
+    SystemMetricsWidget, TaskListModal,
 };
 
 #[derive(Clone)]
@@ -276,6 +276,22 @@ impl<'a> AppWidget<'a> {
                     &format!("Enter {} task URL or ID:", provider_name),
                     &self.state.input_buffer,
                 );
+            }
+            InputMode::BrowseTasks => {
+                let provider_name = self
+                    .state
+                    .settings
+                    .repo_config
+                    .project_mgmt
+                    .provider
+                    .display_name();
+                TaskListModal::new(
+                    &self.state.task_list,
+                    self.state.task_list_selected,
+                    self.state.task_list_loading,
+                    provider_name,
+                )
+                .render(frame);
             }
         }
     }

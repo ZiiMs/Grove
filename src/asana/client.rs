@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use tokio::sync::Mutex;
 
-use super::types::{AsanaSectionsResponse, AsanaTaskData, AsanaTaskResponse};
+use super::types::{
+    AsanaSectionsResponse, AsanaTaskData, AsanaTaskListResponse, AsanaTaskResponse,
+    AsanaTaskSummary,
+};
 
 /// Asana API client.
 pub struct AsanaClient {
@@ -56,6 +59,44 @@ impl AsanaClient {
             .context("Failed to parse Asana task response")?;
 
         Ok(task_resp.data)
+    }
+
+    /// Fetch all tasks from the configured project.
+    pub async fn get_project_tasks(&self) -> Result<Vec<AsanaTaskSummary>> {
+        let project_gid = match &self.project_gid {
+            Some(gid) => gid,
+            None => anyhow::bail!("No Asana project GID configured"),
+        };
+
+        let url = format!(
+            "https://app.asana.com/api/1.0/projects/{}/tasks",
+            project_gid
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&[("opt_fields", "gid,name,completed,permalink_url")])
+            .send()
+            .await
+            .context("Failed to fetch Asana project tasks")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Asana API error: {} - {}", status, body);
+        }
+
+        let task_list: AsanaTaskListResponse = response
+            .json()
+            .await
+            .context("Failed to parse Asana task list response")?;
+
+        Ok(task_list
+            .data
+            .into_iter()
+            .map(AsanaTaskSummary::from)
+            .collect())
     }
 
     /// Mark a task as completed.
@@ -247,6 +288,13 @@ impl OptionalAsanaClient {
     pub async fn get_task(&self, gid: &str) -> Result<AsanaTaskData> {
         match &self.client {
             Some(c) => c.get_task(gid).await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
+    pub async fn get_project_tasks(&self) -> Result<Vec<AsanaTaskSummary>> {
+        match &self.client {
+            Some(c) => c.get_project_tasks().await,
             None => anyhow::bail!("Asana not configured"),
         }
     }

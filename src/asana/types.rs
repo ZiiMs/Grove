@@ -98,3 +98,27 @@ pub struct AsanaSectionData {
     pub gid: String,
     pub name: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaTaskListResponse {
+    pub data: Vec<AsanaTaskData>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AsanaTaskSummary {
+    pub gid: String,
+    pub name: String,
+    pub completed: bool,
+    pub permalink_url: Option<String>,
+}
+
+impl From<AsanaTaskData> for AsanaTaskSummary {
+    fn from(data: AsanaTaskData) -> Self {
+        Self {
+            gid: data.gid,
+            name: data.name,
+            completed: data.completed,
+            permalink_url: data.permalink_url,
+        }
+    }
+}

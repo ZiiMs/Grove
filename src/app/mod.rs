@@ -1,6 +1,7 @@
 pub mod action;
 pub mod config;
 pub mod state;
+pub mod task_list;
 
 pub use action::{Action, InputMode};
 pub use config::{
@@ -12,3 +13,4 @@ pub use state::{
     LogLevel, PreviewTab, ProjectSetupState, SettingsCategory, SettingsField, SettingsItem,
     SettingsState, SettingsTab,
 };
+pub use task_list::{TaskItemStatus, TaskListItem};

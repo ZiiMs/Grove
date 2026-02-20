@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 
 use super::types::{
     NotionBlock, NotionDatabaseResponse, NotionPageData, NotionPageResponse, NotionPropertySchema,
+    NotionQueryResponse,
 };
 
 pub struct NotionClient {
@@ -81,6 +82,52 @@ impl NotionClient {
             .context("Failed to parse Notion page response")?;
 
         Ok(NotionPageData::from(page))
+    }
+
+    pub async fn query_database(&self, exclude_done: bool) -> Result<Vec<NotionPageData>> {
+        let url = format!("{}/databases/{}/query", Self::BASE_URL, self.database_id);
+
+        let body = if exclude_done {
+            serde_json::json!({
+                "filter": {
+                    "property": self.status_property_name,
+                    "status": {
+                        "does_not_equal": "Done"
+                    }
+                },
+                "sorts": [{
+                    "property": self.status_property_name,
+                    "direction": "ascending"
+                }]
+            })
+        } else {
+            serde_json::json!({})
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to query Notion database")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("Notion API error: {} - {}", status, body);
+        }
+
+        let query_response: NotionQueryResponse = response
+            .json()
+            .await
+            .context("Failed to parse Notion query response")?;
+
+        Ok(query_response
+            .results
+            .into_iter()
+            .map(NotionPageData::from)
+            .collect())
     }
 
     pub async fn get_status_options(&self) -> Result<StatusOptions> {
@@ -264,6 +311,13 @@ impl OptionalNotionClient {
     pub async fn get_page(&self, page_id: &str) -> Result<NotionPageData> {
         match &self.client {
             Some(c) => c.get_page(page_id).await,
+            None => bail!("Notion not configured"),
+        }
+    }
+
+    pub async fn query_database(&self, exclude_done: bool) -> Result<Vec<NotionPageData>> {
+        match &self.client {
+            Some(c) => c.query_database(exclude_done).await,
             None => bail!("Notion not configured"),
         }
     }

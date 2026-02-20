@@ -21,7 +21,10 @@ use flock::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
     AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
 };
-use flock::app::{Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider};
+use flock::app::{
+    Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, TaskItemStatus,
+    TaskListItem,
+};
 use flock::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use flock::codeberg::OptionalCodebergClient;
 use flock::devserver::DevServerManager;
@@ -795,6 +798,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         KeyCode::Char('A') => state
             .selected_agent_id()
             .map(|id| Action::OpenProjectTaskInBrowser { id }),
+        KeyCode::Char('t') => Some(Action::EnterInputMode(InputMode::BrowseTasks)),
 
         // Other
         KeyCode::Char('R') => Some(Action::RefreshAll),
@@ -846,6 +850,16 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('n') | KeyCode::Char('N') => state
                 .selected_agent_id()
                 .map(|id| Action::DeleteAgent { id }),
+            KeyCode::Esc => Some(Action::ExitInputMode),
+            _ => None,
+        };
+    }
+
+    if matches!(state.input_mode, Some(InputMode::BrowseTasks)) {
+        return match key {
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectTaskNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
+            KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
             KeyCode::Esc => Some(Action::ExitInputMode),
             _ => None,
         };
@@ -2049,6 +2063,135 @@ async fn process_action(
             action_tx.send(Action::DeleteAgent { id })?;
         }
 
+        Action::FetchTaskList => {
+            let provider = pm_provider;
+            let asana_client = Arc::clone(asana_client);
+            let notion_client = Arc::clone(notion_client);
+            let tx = action_tx.clone();
+            tokio::spawn(async move {
+                let result = match provider {
+                    ProjectMgmtProvider::Asana => match asana_client.get_project_tasks().await {
+                        Ok(tasks) => {
+                            let items: Vec<TaskListItem> = tasks
+                                .into_iter()
+                                .filter(|t| !t.completed)
+                                .map(|t| TaskListItem {
+                                    id: t.gid,
+                                    name: t.name,
+                                    status: TaskItemStatus::NotStarted,
+                                    url: t.permalink_url.unwrap_or_default(),
+                                })
+                                .collect();
+                            Ok(items)
+                        }
+                        Err(e) => Err(e.to_string()),
+                    },
+                    ProjectMgmtProvider::Notion => match notion_client.query_database(true).await {
+                        Ok(pages) => {
+                            let items: Vec<TaskListItem> = pages
+                                .into_iter()
+                                .map(|p| {
+                                    let status = if p
+                                        .status_name
+                                        .as_ref()
+                                        .map(|n| n.to_lowercase().contains("progress"))
+                                        .unwrap_or(false)
+                                    {
+                                        TaskItemStatus::InProgress
+                                    } else {
+                                        TaskItemStatus::NotStarted
+                                    };
+                                    TaskListItem {
+                                        id: p.id,
+                                        name: p.name,
+                                        status,
+                                        url: p.url,
+                                    }
+                                })
+                                .collect();
+                            Ok(items)
+                        }
+                        Err(e) => Err(e.to_string()),
+                    },
+                };
+                match result {
+                    Ok(tasks) => {
+                        let _ = tx.send(Action::TaskListFetched { tasks });
+                    }
+                    Err(msg) => {
+                        let _ = tx.send(Action::TaskListFetchError { message: msg });
+                    }
+                }
+            });
+        }
+
+        Action::TaskListFetched { tasks } => {
+            state.task_list_loading = false;
+            state.task_list = tasks;
+            state.task_list_selected = 0;
+        }
+
+        Action::TaskListFetchError { message } => {
+            state.task_list_loading = false;
+            state.error_message = Some(format!("Failed to fetch tasks: {}", message));
+            state.exit_input_mode();
+        }
+
+        Action::SelectTaskNext => {
+            if !state.task_list.is_empty() {
+                state.task_list_selected = (state.task_list_selected + 1) % state.task_list.len();
+            }
+        }
+
+        Action::SelectTaskPrev => {
+            if !state.task_list.is_empty() {
+                state.task_list_selected = if state.task_list_selected == 0 {
+                    state.task_list.len() - 1
+                } else {
+                    state.task_list_selected - 1
+                };
+            }
+        }
+
+        Action::CreateAgentFromSelectedTask => {
+            if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
+                state.exit_input_mode();
+                let branch = flock::util::sanitize_branch_name(&task.name);
+                if branch.is_empty() {
+                    state.error_message = Some("Invalid task name for branch".to_string());
+                } else {
+                    let name = task.name.clone();
+                    let task_id = task.id.clone();
+                    let task_url = task.url.clone();
+                    action_tx.send(Action::CreateAgent { name, branch })?;
+                    let agent_id = *state.agent_order.last().unwrap_or(&Uuid::nil());
+                    if agent_id != Uuid::nil() {
+                        let pm_status = match pm_provider {
+                            ProjectMgmtProvider::Asana => {
+                                ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                    gid: task_id,
+                                    name: task.name,
+                                    url: task_url,
+                                })
+                            }
+                            ProjectMgmtProvider::Notion => {
+                                ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                                    page_id: task_id,
+                                    name: task.name,
+                                    url: task_url,
+                                    status_option_id: String::new(),
+                                })
+                            }
+                        };
+                        action_tx.send(Action::UpdateProjectTaskStatus {
+                            id: agent_id,
+                            status: pm_status,
+                        })?;
+                    }
+                }
+            }
+        }
+
         // UI state
         Action::ToggleDiffView => {
             // Diff view removed for simplicity
@@ -2071,7 +2214,13 @@ async fn process_action(
         }
 
         Action::EnterInputMode(mode) => {
-            state.enter_input_mode(mode);
+            state.enter_input_mode(mode.clone());
+            if mode == InputMode::BrowseTasks {
+                state.task_list_loading = true;
+                state.task_list.clear();
+                state.task_list_selected = 0;
+                let _ = action_tx.send(Action::FetchTaskList);
+            }
         }
 
         Action::ExitInputMode => {
@@ -2152,6 +2301,9 @@ async fn process_action(
                     }
                     InputMode::ConfirmDeleteTask => {
                         // Handled directly by key handler (y/n/Esc), not through SubmitInput
+                    }
+                    InputMode::BrowseTasks => {
+                        // Handled by SelectTaskNext/Prev and CreateAgentFromSelectedTask
                     }
                 }
             }

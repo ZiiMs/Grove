@@ -1,6 +1,7 @@
 use uuid::Uuid;
 
 use crate::agent::ProjectMgmtTaskStatus;
+use crate::app::task_list::TaskListItem;
 
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -114,6 +115,17 @@ pub enum Action {
     DeleteAgentAndCompleteTask {
         id: Uuid,
     },
+
+    FetchTaskList,
+    TaskListFetched {
+        tasks: Vec<TaskListItem>,
+    },
+    TaskListFetchError {
+        message: String,
+    },
+    SelectTaskNext,
+    SelectTaskPrev,
+    CreateAgentFromSelectedTask,
 
     ToggleDiffView,
     ToggleHelp,
@@ -245,4 +257,5 @@ pub enum InputMode {
     AssignProjectTask,
     AssignAsana,
     ConfirmDeleteAsana,
+    BrowseTasks,
 }

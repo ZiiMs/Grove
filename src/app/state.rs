@@ -7,6 +7,7 @@ use super::config::{
     AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, ProjectMgmtProvider, RepoConfig,
     UiConfig, WorktreeLocation,
 };
+use super::task_list::TaskListItem;
 use crate::agent::Agent;
 
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
@@ -406,6 +407,9 @@ pub struct AppState {
     pub preview_tab: PreviewTab,
     pub devserver_scroll: usize,
     pub devserver_warning: Option<DevServerWarning>,
+    pub task_list: Vec<TaskListItem>,
+    pub task_list_loading: bool,
+    pub task_list_selected: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -495,6 +499,9 @@ impl AppState {
             preview_tab: PreviewTab::default(),
             devserver_scroll: 0,
             devserver_warning: None,
+            task_list: Vec::new(),
+            task_list_loading: false,
+            task_list_selected: 0,
         }
     }
 

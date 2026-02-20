@@ -216,6 +216,12 @@ impl NotionBlock {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct NotionQueryResponse {
+    pub results: Vec<NotionPageResponse>,
+    pub has_more: bool,
+}
+
 impl From<NotionPageResponse> for NotionPageData {
     fn from(page: NotionPageResponse) -> Self {
         let name = page
