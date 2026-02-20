@@ -545,6 +545,8 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     if state.show_project_setup {
         if let Some(wizard) = &state.project_setup {
             return match key.code {
+                KeyCode::Char(c) if wizard.editing_text => Some(Action::ProjectSetupInputChar(c)),
+                KeyCode::Backspace if wizard.editing_text => Some(Action::ProjectSetupBackspace),
                 KeyCode::Esc => {
                     if wizard.editing_text {
                         Some(Action::ProjectSetupCancelEdit)
@@ -554,14 +556,14 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                         Some(Action::ProjectSetupSkip)
                     }
                 }
-                KeyCode::Up | KeyCode::Char('k') => {
+                KeyCode::Up | KeyCode::Char('k') if !wizard.editing_text => {
                     if wizard.dropdown_open {
                         Some(Action::ProjectSetupDropdownPrev)
                     } else {
                         Some(Action::ProjectSetupNavigatePrev)
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+                KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') if !wizard.editing_text => {
                     if wizard.dropdown_open {
                         Some(Action::ProjectSetupDropdownNext)
                     } else {
@@ -577,8 +579,6 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                         Some(Action::ProjectSetupEditField)
                     }
                 }
-                KeyCode::Char(c) if wizard.editing_text => Some(Action::ProjectSetupInputChar(c)),
-                KeyCode::Backspace if wizard.editing_text => Some(Action::ProjectSetupBackspace),
                 KeyCode::Char('c') if !wizard.editing_text && !wizard.dropdown_open => {
                     Some(Action::ProjectSetupComplete)
                 }
