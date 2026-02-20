@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use uuid::Uuid;
+
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
@@ -8,6 +11,7 @@ use ratatui::{
 use crate::agent::{Agent, AgentStatus};
 use crate::app::config::GitProvider;
 use crate::asana::AsanaTaskStatus;
+use crate::devserver::DevServerStatus;
 use crate::github::CheckStatus;
 use crate::gitlab::PipelineStatus;
 
@@ -23,6 +27,7 @@ pub struct AgentListWidget<'a> {
     animation_frame: usize,
     count: usize,
     provider: GitProvider,
+    devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
 }
 
 impl<'a> AgentListWidget<'a> {
@@ -31,6 +36,7 @@ impl<'a> AgentListWidget<'a> {
         selected: usize,
         animation_frame: usize,
         provider: GitProvider,
+        devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
     ) -> Self {
         Self {
             agents,
@@ -38,6 +44,7 @@ impl<'a> AgentListWidget<'a> {
             animation_frame,
             count: agents.len(),
             provider,
+            devserver_statuses,
         }
     }
 
@@ -48,7 +55,8 @@ impl<'a> AgentListWidget<'a> {
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let header_cells = [
-            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Asana", "Note",
+            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Server",
+            "Asana", "Note",
         ]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
@@ -83,6 +91,7 @@ impl<'a> AgentListWidget<'a> {
                         Cell::from("────────"),
                         Cell::from("──────────"),
                         Cell::from("──────────"),
+                        Cell::from("────────"),
                         Cell::from("────────────────"),
                         Cell::from("──────────"),
                     ])
@@ -104,6 +113,7 @@ impl<'a> AgentListWidget<'a> {
                 Constraint::Length(8),  // Tasks (checklist progress)
                 Constraint::Length(10), // MR
                 Constraint::Length(10), // Pipeline
+                Constraint::Length(10), // Server
                 Constraint::Length(16), // Asana
                 Constraint::Min(10),    // Note (fills remaining)
             ],
@@ -178,6 +188,10 @@ impl<'a> AgentListWidget<'a> {
         let (pipeline_text, pipeline_style) = self.format_pipeline_status(agent);
         let pipeline_cell = Cell::from(pipeline_text).style(pipeline_style);
 
+        // Server column
+        let (server_text, server_style) = self.format_devserver_status(agent);
+        let server_cell = Cell::from(server_text).style(server_style);
+
         // Asana column
         let (asana_text, asana_style) = self.format_asana_status(agent);
         let asana_cell = Cell::from(asana_text).style(asana_style);
@@ -204,6 +218,7 @@ impl<'a> AgentListWidget<'a> {
             tasks_cell,
             mr_cell,
             pipeline_cell,
+            server_cell,
             asana_cell,
             note_cell,
         ])
@@ -370,6 +385,29 @@ impl<'a> AgentListWidget<'a> {
             AsanaTaskStatus::Error { .. } => Style::default().fg(Color::Red),
         };
         (text, style)
+    }
+
+    fn format_devserver_status(&self, agent: &Agent) -> (String, Style) {
+        let status = self.devserver_statuses.get(&agent.id);
+
+        match status {
+            Some(DevServerStatus::Running { .. }) => {
+                ("● Running".to_string(), Style::default().fg(Color::Green))
+            }
+            Some(DevServerStatus::Starting) => {
+                ("◐ Starting".to_string(), Style::default().fg(Color::Yellow))
+            }
+            Some(DevServerStatus::Stopping) => {
+                ("◑ Stopping".to_string(), Style::default().fg(Color::Yellow))
+            }
+            Some(DevServerStatus::Failed(_)) => {
+                ("✗ Failed".to_string(), Style::default().fg(Color::Red))
+            }
+            Some(DevServerStatus::Stopped) | None => (
+                "○ Stopped".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
+        }
     }
 
     fn render_sparkline(&self, agent: &Agent) -> String {
