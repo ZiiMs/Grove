@@ -2,6 +2,7 @@ pub mod agent_list;
 pub mod devserver_view;
 pub mod devserver_warning;
 pub mod diff_view;
+pub mod file_browser;
 pub mod global_setup;
 pub mod help_overlay;
 pub mod loading_overlay;

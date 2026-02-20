@@ -1,5 +1,6 @@
 use chrono::Utc;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use super::action::InputMode;
@@ -8,6 +9,7 @@ use super::config::{
     WorktreeLocation,
 };
 use crate::agent::Agent;
+use crate::ui::components::file_browser::DirEntry;
 
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
 
@@ -266,6 +268,27 @@ pub enum DropdownState {
 }
 
 #[derive(Debug, Clone)]
+pub struct FileBrowserState {
+    pub active: bool,
+    pub current_path: PathBuf,
+    pub entries: Vec<DirEntry>,
+    pub selected_index: usize,
+    pub selected_files: HashSet<PathBuf>,
+}
+
+impl Default for FileBrowserState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            current_path: PathBuf::new(),
+            entries: Vec::new(),
+            selected_index: 0,
+            selected_files: HashSet::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SettingsState {
     pub active: bool,
     pub tab: SettingsTab,
@@ -280,6 +303,7 @@ pub struct SettingsState {
     pub pending_worktree_location: WorktreeLocation,
     pub pending_ui: UiConfig,
     pub repo_config: RepoConfig,
+    pub file_browser: FileBrowserState,
 }
 
 impl Default for SettingsState {
@@ -298,6 +322,7 @@ impl Default for SettingsState {
             pending_worktree_location: WorktreeLocation::default(),
             pending_ui: UiConfig::default(),
             repo_config: RepoConfig::default(),
+            file_browser: FileBrowserState::default(),
         }
     }
 }
@@ -333,6 +358,34 @@ impl SettingsState {
 
     pub fn prev_tab(&self) -> SettingsTab {
         self.tab.prev()
+    }
+
+    pub fn init_file_browser(&mut self, repo_path: &str) {
+        let repo_path = PathBuf::from(repo_path);
+        let symlinks = &self.repo_config.git.worktree_symlinks;
+
+        let mut selected_files = HashSet::new();
+        for symlink in symlinks {
+            selected_files.insert(repo_path.join(symlink));
+        }
+
+        let entries = crate::ui::components::file_browser::load_directory_entries(
+            &repo_path,
+            &selected_files,
+            &repo_path,
+        );
+
+        self.file_browser = FileBrowserState {
+            active: true,
+            current_path: repo_path,
+            entries,
+            selected_index: 0,
+            selected_files,
+        };
+    }
+
+    pub fn is_file_browser_active(&self) -> bool {
+        self.file_browser.active
     }
 }
 
