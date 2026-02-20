@@ -40,10 +40,7 @@ impl WoodpeckerClient {
             "Authorization",
             HeaderValue::from_str(&format!("Bearer {}", token)).context("Invalid token")?,
         );
-        headers.insert(
-            "Accept",
-            HeaderValue::from_static("application/json"),
-        );
+        headers.insert("Accept", HeaderValue::from_static("application/json"));
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
@@ -91,7 +88,11 @@ impl WoodpeckerClient {
         Ok(Some(repo.id))
     }
 
-    pub async fn get_pipeline_for_branch(&self, repo_id: u64, branch: &str) -> Result<PipelineStatus> {
+    pub async fn get_pipeline_for_branch(
+        &self,
+        repo_id: u64,
+        branch: &str,
+    ) -> Result<PipelineStatus> {
         let url = format!("{}/repos/{}/pipelines", self.base_url, repo_id);
 
         tracing::info!("Fetching Woodpecker pipelines: {}", url);

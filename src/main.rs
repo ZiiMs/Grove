@@ -263,8 +263,13 @@ async fn main() -> Result<()> {
         let gitlab_refresh_secs = config.performance.gitlab_refresh_secs;
         let branch_rx_clone = branch_watch_rx.clone();
         tokio::spawn(async move {
-            poll_gitlab_mrs(branch_rx_clone, gitlab_client_clone, gitlab_poll_tx, gitlab_refresh_secs)
-                .await;
+            poll_gitlab_mrs(
+                branch_rx_clone,
+                gitlab_client_clone,
+                gitlab_poll_tx,
+                gitlab_refresh_secs,
+            )
+            .await;
         });
         state.log_info("GitLab integration enabled".to_string());
     } else {
@@ -373,7 +378,8 @@ async fn main() -> Result<()> {
                 execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
                 // Attach to tmux (blocks until detach)
-                let attach_result = agent_manager.attach_to_agent(&agent);
+                let ai_agent = state.config.global.ai_agent.clone();
+                let attach_result = agent_manager.attach_to_agent(&agent, &ai_agent);
 
                 // Restore TUI mode
                 enable_raw_mode()?;
@@ -1472,7 +1478,10 @@ async fn process_action(
         // Codeberg operations
         Action::UpdateCodebergPrStatus { id, status } => {
             let should_log = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.codeberg_pr_status, flock::codeberg::PullRequestStatus::None);
+                let was_none = matches!(
+                    agent.codeberg_pr_status,
+                    flock::codeberg::PullRequestStatus::None
+                );
                 let is_open = matches!(&status, flock::codeberg::PullRequestStatus::Open { .. });
                 if was_none && is_open {
                     if let flock::codeberg::PullRequestStatus::Open { number, url, .. } = &status {
@@ -1508,7 +1517,8 @@ async fn process_action(
                         }
                     }
                 } else {
-                    state.error_message = Some("No Codeberg PR available for this agent".to_string());
+                    state.error_message =
+                        Some("No Codeberg PR available for this agent".to_string());
                 }
             }
         }
@@ -1737,7 +1747,9 @@ async fn process_action(
                 let gitlab_client_clone = Arc::clone(gitlab_client);
                 let tx_clone = action_tx.clone();
                 tokio::spawn(async move {
-                    let status = gitlab_client_clone.get_mr_for_branch(&branch_for_gitlab).await;
+                    let status = gitlab_client_clone
+                        .get_mr_for_branch(&branch_for_gitlab)
+                        .await;
                     if !matches!(status, flock::gitlab::MergeRequestStatus::None) {
                         let _ = tx_clone.send(Action::UpdateMrStatus { id, status });
                     }
@@ -1747,7 +1759,9 @@ async fn process_action(
                 let github_client_clone = Arc::clone(github_client);
                 let tx_clone = action_tx.clone();
                 tokio::spawn(async move {
-                    let status = github_client_clone.get_pr_for_branch(&branch_for_github).await;
+                    let status = github_client_clone
+                        .get_pr_for_branch(&branch_for_github)
+                        .await;
                     if !matches!(status, flock::github::PullRequestStatus::None) {
                         let _ = tx_clone.send(Action::UpdatePrStatus { id, status });
                     }
@@ -1757,7 +1771,9 @@ async fn process_action(
                 let codeberg_client_clone = Arc::clone(codeberg_client);
                 let tx_clone = action_tx.clone();
                 tokio::spawn(async move {
-                    let status = codeberg_client_clone.get_pr_for_branch(&branch_for_codeberg).await;
+                    let status = codeberg_client_clone
+                        .get_pr_for_branch(&branch_for_codeberg)
+                        .await;
                     if !matches!(status, flock::codeberg::PullRequestStatus::None) {
                         let _ = tx_clone.send(Action::UpdateCodebergPrStatus { id, status });
                     }
@@ -1770,9 +1786,9 @@ async fn process_action(
                     let gid = task_gid.to_string();
                     tokio::spawn(async move {
                         if let Ok(task) = asana_client_clone.get_task(&gid).await {
-                            let url = task
-                                .permalink_url
-                                .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
+                            let url = task.permalink_url.unwrap_or_else(|| {
+                                format!("https://app.asana.com/0/0/{}/f", task.gid)
+                            });
                             let status = if task.completed {
                                 flock::asana::AsanaTaskStatus::Completed {
                                     gid: task.gid,
@@ -2586,9 +2602,7 @@ fn get_project_field_value(config: &flock::app::RepoConfig, field: &ProjectSetup
         ProjectSetupField::GitLabBaseUrl => config.git.gitlab.base_url.clone(),
         ProjectSetupField::GitHubOwner => config.git.github.owner.clone().unwrap_or_default(),
         ProjectSetupField::GitHubRepo => config.git.github.repo.clone().unwrap_or_default(),
-        ProjectSetupField::CodebergOwner => {
-            config.git.codeberg.owner.clone().unwrap_or_default()
-        }
+        ProjectSetupField::CodebergOwner => config.git.codeberg.owner.clone().unwrap_or_default(),
         ProjectSetupField::CodebergRepo => config.git.codeberg.repo.clone().unwrap_or_default(),
         ProjectSetupField::CodebergBaseUrl => config.git.codeberg.base_url.clone(),
         ProjectSetupField::BranchPrefix => config.git.branch_prefix.clone(),

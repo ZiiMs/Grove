@@ -68,11 +68,14 @@ impl AgentManager {
     }
 
     /// Attach to an agent's tmux session.
-    pub fn attach_to_agent(&self, agent: &Agent) -> Result<()> {
+    /// Auto-recreates the session if it doesn't exist (e.g., after system restart).
+    pub fn attach_to_agent(&self, agent: &Agent, ai_agent: &AiAgent) -> Result<()> {
         let session = TmuxSession::new(&agent.tmux_session);
 
         if !session.exists() {
-            anyhow::bail!("Tmux session does not exist");
+            session
+                .create(&agent.worktree_path, ai_agent.command())
+                .context("Failed to create tmux session")?;
         }
 
         session.attach()
