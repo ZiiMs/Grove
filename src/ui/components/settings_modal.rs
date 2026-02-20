@@ -164,6 +164,22 @@ impl<'a> SettingsModal<'a> {
                             }
                         }
                     }
+                    if *field == SettingsField::ProjectMgmtProvider {
+                        match self.state.repo_config.project_mgmt.provider {
+                            ProjectMgmtProvider::Asana => {
+                                lines.push(Self::render_token_status_line(
+                                    "ASANA_TOKEN",
+                                    Config::asana_token().is_some(),
+                                ));
+                            }
+                            ProjectMgmtProvider::Notion => {
+                                lines.push(Self::render_token_status_line(
+                                    "NOTION_TOKEN",
+                                    Config::notion_token().is_some(),
+                                ));
+                            }
+                        }
+                    }
                 }
             }
         }
