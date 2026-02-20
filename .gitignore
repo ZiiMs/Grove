@@ -1,6 +1,5 @@
 # Rust build artifacts
 /target
-Cargo.lock
 .flock
 
 # Editor files
