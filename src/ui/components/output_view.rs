@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -30,10 +30,18 @@ impl<'a> OutputViewWidget<'a> {
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
 
+        // Preprocess content: convert tabs to spaces and handle carriage returns
+        // This fixes alignment issues where tabs render as single characters in ratatui
+        let processed_content = self
+            .content
+            .replace('\t', "    ") // Convert tabs to 4 spaces
+            .replace("\r\n", "\n") // Normalize Windows line endings
+            .replace('\r', ""); // Remove carriage returns (some programs use \r to overwrite lines)
+
         // Parse ANSI content into styled Text
-        let text = match self.content.as_bytes().into_text() {
+        let text = match processed_content.as_bytes().into_text() {
             Ok(text) => text,
-            Err(_) => Text::raw(self.content),
+            Err(_) => Text::raw(processed_content),
         };
 
         // Compress the output: strip trailing blank lines, collapse consecutive blanks
@@ -52,12 +60,14 @@ impl<'a> OutputViewWidget<'a> {
         // Take only visible lines
         let visible_lines: Vec<Line> = lines.into_iter().skip(start).take(visible_height).collect();
 
-        let paragraph = Paragraph::new(visible_lines).block(
-            Block::default()
-                .title(format!(" {} ", self.title))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        );
+        let paragraph = Paragraph::new(visible_lines)
+            .block(
+                Block::default()
+                    .title(format!(" {} ", self.title))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .wrap(Wrap { trim: false });
 
         frame.render_widget(paragraph, area);
     }
