@@ -186,6 +186,7 @@ pub enum Action {
     SettingsBackspace,
     SettingsClose,
     SettingsSave,
+    SettingsPromptSave,
 
     // Global Setup Wizard
     GlobalSetupNextStep,

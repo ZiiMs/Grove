@@ -168,12 +168,7 @@ impl<'a> AppWidget<'a> {
     fn render_modal(&self, frame: &mut Frame, mode: &InputMode, _area: Rect) {
         match mode {
             InputMode::NewAgent => {
-                render_input_modal(
-                    frame,
-                    "New Agent",
-                    "Enter branch name:",
-                    &self.state.input_buffer,
-                );
+                render_input_modal(frame, "New Agent", "Enter name:", &self.state.input_buffer);
             }
             InputMode::SetNote => {
                 render_input_modal(

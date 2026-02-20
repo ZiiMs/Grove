@@ -425,7 +425,81 @@ pub struct RepoConfig {
     #[serde(default)]
     pub asana: RepoAsanaConfig,
     #[serde(default)]
+    pub prompts: PromptsConfig,
+    #[serde(default)]
     pub dev_server: DevServerConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PromptsConfig {
+    pub summary_prompt: Option<String>,
+    pub merge_prompt: Option<String>,
+    pub push_prompt_opencode: Option<String>,
+    pub push_prompt_codex: Option<String>,
+    pub push_prompt_gemini: Option<String>,
+}
+
+impl PromptsConfig {
+    pub fn get_summary_prompt(&self) -> &str {
+        self.summary_prompt.as_deref().unwrap_or(
+            "Please provide a brief, non-technical summary of the work done on this branch. \
+             Format it as 1-5 bullet points suitable for sharing with non-technical colleagues on Slack. \
+             Focus on what was accomplished and why, not implementation details. \
+             Keep each bullet point to one sentence.",
+        )
+    }
+
+    pub fn get_merge_prompt(&self, main_branch: &str) -> String {
+        self.merge_prompt
+            .as_deref()
+            .map(|p| p.replace("{main_branch}", main_branch))
+            .unwrap_or_else(|| {
+                format!(
+                    "Please merge {} into this branch. Handle any merge conflicts if they arise.",
+                    main_branch
+                )
+            })
+    }
+
+    pub fn get_push_prompt(&self, agent: &AiAgent) -> Option<String> {
+        match agent {
+            AiAgent::ClaudeCode => None,
+            AiAgent::Opencode => Some(self.push_prompt_opencode.clone().unwrap_or_else(|| {
+                "Review the changes, then commit and push them to the remote branch.".to_string()
+            })),
+            AiAgent::Codex => Some(
+                self.push_prompt_codex
+                    .clone()
+                    .unwrap_or_else(|| "Please commit and push these changes".to_string()),
+            ),
+            AiAgent::Gemini => Some(
+                self.push_prompt_gemini
+                    .clone()
+                    .unwrap_or_else(|| "Please commit and push these changes".to_string()),
+            ),
+        }
+    }
+
+    pub fn get_push_prompt_for_display(&self, agent: &AiAgent) -> Option<&str> {
+        match agent {
+            AiAgent::ClaudeCode => None,
+            AiAgent::Opencode => {
+                Some(self.push_prompt_opencode.as_deref().unwrap_or(
+                    "Review the changes, then commit and push them to the remote branch.",
+                ))
+            }
+            AiAgent::Codex => Some(
+                self.push_prompt_codex
+                    .as_deref()
+                    .unwrap_or("Please commit and push these changes"),
+            ),
+            AiAgent::Gemini => Some(
+                self.push_prompt_gemini
+                    .as_deref()
+                    .unwrap_or("Please commit and push these changes"),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
