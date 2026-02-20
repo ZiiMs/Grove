@@ -491,7 +491,7 @@ impl<'a> SettingsModal<'a> {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let hint = if self.state.editing_prompt {
-            "[Enter] New line  [Ctrl+Enter] Save  [Esc] Cancel"
+            "[Enter] New line  [Ctrl+S] Save  [Ctrl+Q] Save & Close  [Esc] Cancel"
         } else if self.state.editing_text {
             "[Enter] Save  [Esc] Cancel"
         } else if self.state.is_dropdown_open() {
@@ -626,7 +626,7 @@ impl<'a> SettingsModal<'a> {
         let paragraph = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(paragraph, chunks[0]);
 
-        let hint = "[Enter] New line  [Ctrl+Enter / Alt+Enter] Save  [Esc] Cancel";
+        let hint = "[Enter] New line  [Ctrl+S] Save  [Ctrl+Q] Save & Close  [Esc] Cancel";
         let footer = Paragraph::new(Line::from(Span::styled(
             hint,
             Style::default().fg(Color::DarkGray),

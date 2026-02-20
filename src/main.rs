@@ -768,16 +768,14 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
     if state.settings.editing_prompt {
         return match key.code {
             KeyCode::Esc => Some(Action::SettingsCancelSelection),
-            KeyCode::Enter => {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    || key.modifiers.contains(KeyModifiers::ALT)
-                {
-                    Some(Action::SettingsConfirmSelection)
-                } else {
-                    Some(Action::SettingsInputChar('\n'))
-                }
-            }
+            KeyCode::Enter => Some(Action::SettingsInputChar('\n')),
             KeyCode::Backspace => Some(Action::SettingsBackspace),
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::SettingsPromptSave)
+            }
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::SettingsConfirmSelection)
+            }
             KeyCode::Char(c) => Some(Action::SettingsInputChar(c)),
             _ => None,
         };
@@ -2391,6 +2389,42 @@ async fn process_action(
             state.settings.editing_text = false;
             state.settings.editing_prompt = false;
             state.settings.text_buffer.clear();
+        }
+
+        Action::SettingsPromptSave => {
+            let field = state.settings.current_field();
+            match field {
+                flock::app::SettingsField::SummaryPrompt => {
+                    let val = state.settings.text_buffer.clone();
+                    state.settings.repo_config.prompts.summary_prompt =
+                        if val.is_empty() { None } else { Some(val) };
+                }
+                flock::app::SettingsField::MergePrompt => {
+                    let val = state.settings.text_buffer.clone();
+                    state.settings.repo_config.prompts.merge_prompt =
+                        if val.is_empty() { None } else { Some(val) };
+                }
+                flock::app::SettingsField::PushPrompt => {
+                    let val = state.settings.text_buffer.clone();
+                    match state.settings.pending_ai_agent {
+                        flock::app::AiAgent::Opencode => {
+                            state.settings.repo_config.prompts.push_prompt_opencode =
+                                if val.is_empty() { None } else { Some(val) };
+                        }
+                        flock::app::AiAgent::Codex => {
+                            state.settings.repo_config.prompts.push_prompt_codex =
+                                if val.is_empty() { None } else { Some(val) };
+                        }
+                        flock::app::AiAgent::Gemini => {
+                            state.settings.repo_config.prompts.push_prompt_gemini =
+                                if val.is_empty() { None } else { Some(val) };
+                        }
+                        flock::app::AiAgent::ClaudeCode => {}
+                    }
+                }
+                _ => {}
+            }
+            state.error_message = Some("Saved".to_string());
         }
 
         Action::SettingsInputChar(c) => {
