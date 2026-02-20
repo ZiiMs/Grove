@@ -97,8 +97,6 @@ impl Worktree {
     pub fn create_symlinks(&self, worktree_path: &str, files: &[String]) -> Result<()> {
         let worktree = Path::new(worktree_path);
 
-        let is_in_home_dir = !worktree.starts_with(&self.repo_path);
-
         for file in files {
             let source = self.repo_path.join(file);
             let target = worktree.join(file);
@@ -128,11 +126,7 @@ impl Worktree {
                 }
             }
 
-            let relative_source = if is_in_home_dir {
-                pathdiff::diff_paths(&source, worktree).unwrap_or_else(|| source.clone())
-            } else {
-                Path::new("../..").join(file)
-            };
+            let relative_source = source.canonicalize().unwrap_or_else(|_| source.clone());
 
             #[cfg(unix)]
             {
