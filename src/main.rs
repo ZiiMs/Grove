@@ -1218,19 +1218,18 @@ async fn process_action(
         }
 
         Action::MergeMain { id } => {
-            // Clone data we need before mutable borrows
             let main_branch = state.settings.repo_config.git.main_branch.clone();
+            let prompt = state
+                .settings
+                .repo_config
+                .prompts
+                .get_merge_prompt(&main_branch);
             let agent_info = state
                 .agents
                 .get(&id)
                 .map(|a| (a.name.clone(), a.tmux_session.clone()));
 
             if let Some((name, tmux_session)) = agent_info {
-                // Send a prompt to Claude to merge main into this branch
-                let prompt = format!(
-                    "Please merge {} into this branch. Handle any merge conflicts if they arise.",
-                    main_branch
-                );
                 let session = flock::tmux::TmuxSession::new(&tmux_session);
                 match session.send_keys(&prompt) {
                     Ok(()) => {
@@ -1259,7 +1258,11 @@ async fn process_action(
                 let session = flock::tmux::TmuxSession::new(&tmux_session);
                 let agent_type = state.config.global.ai_agent.clone();
                 let push_cmd = agent_type.push_command();
-                let push_prompt = agent_type.push_prompt();
+                let push_prompt = state
+                    .settings
+                    .repo_config
+                    .prompts
+                    .get_push_prompt(&agent_type);
 
                 let mut success = false;
 
@@ -1277,7 +1280,7 @@ async fn process_action(
                 }
 
                 if let Some(prompt) = push_prompt {
-                    match session.send_keys(prompt) {
+                    match session.send_keys(&prompt) {
                         Ok(()) => {
                             state.log_info(format!("Sent push prompt to agent '{}'", name));
                             success = true;
@@ -1312,15 +1315,20 @@ async fn process_action(
         }
 
         Action::RequestSummary { id } => {
+            let prompt = state
+                .settings
+                .repo_config
+                .prompts
+                .get_summary_prompt()
+                .to_string();
             let agent_info = state
                 .agents
                 .get(&id)
                 .map(|a| (a.name.clone(), a.tmux_session.clone()));
 
             if let Some((name, tmux_session)) = agent_info {
-                let prompt = "Please provide a brief, non-technical summary of the work done on this branch. Format it as 1-5 bullet points suitable for sharing with non-technical colleagues on Slack. Focus on what was accomplished and why, not implementation details. Keep each bullet point to one sentence.";
                 let session = flock::tmux::TmuxSession::new(&tmux_session);
-                match session.send_keys(prompt) {
+                match session.send_keys(&prompt) {
                     Ok(()) => {
                         if let Some(agent) = state.agents.get_mut(&id) {
                             agent.summary_requested = true;
@@ -2133,6 +2141,66 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                flock::app::SettingsField::SummaryPrompt => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .prompts
+                        .summary_prompt
+                        .clone()
+                        .unwrap_or_else(|| {
+                            state
+                                .settings
+                                .repo_config
+                                .prompts
+                                .get_summary_prompt()
+                                .to_string()
+                        });
+                }
+                flock::app::SettingsField::MergePrompt => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .prompts
+                        .merge_prompt
+                        .clone()
+                        .unwrap_or_else(|| {
+                            state
+                                .settings
+                                .repo_config
+                                .prompts
+                                .get_merge_prompt(&state.settings.repo_config.git.main_branch)
+                        });
+                }
+                flock::app::SettingsField::PushPrompt => {
+                    let agent = &state.settings.pending_ai_agent;
+                    if agent.push_command().is_some() {
+                        state.error_message = Some(format!(
+                            "{} uses /push command, no prompt to configure",
+                            agent.display_name()
+                        ));
+                        return Ok(false);
+                    }
+                    let default_prompt = agent.push_prompt().unwrap_or("");
+                    state.settings.editing_text = true;
+                    let current = match agent {
+                        flock::app::AiAgent::Opencode => {
+                            &state.settings.repo_config.prompts.push_prompt_opencode
+                        }
+                        flock::app::AiAgent::Codex => {
+                            &state.settings.repo_config.prompts.push_prompt_codex
+                        }
+                        flock::app::AiAgent::Gemini => {
+                            &state.settings.repo_config.prompts.push_prompt_gemini
+                        }
+                        flock::app::AiAgent::ClaudeCode => &None,
+                    };
+                    state.settings.text_buffer = current
+                        .clone()
+                        .unwrap_or_else(|| default_prompt.to_string());
+                }
                 flock::app::SettingsField::ShowPreview => {
                     state.settings.pending_ui.show_preview =
                         !state.settings.pending_ui.show_preview;
@@ -2223,6 +2291,34 @@ async fn process_action(
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.asana.done_section_gid =
                             if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::SummaryPrompt => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.prompts.summary_prompt =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::MergePrompt => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.prompts.merge_prompt =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::PushPrompt => {
+                        let val = state.settings.text_buffer.clone();
+                        match state.settings.pending_ai_agent {
+                            flock::app::AiAgent::Opencode => {
+                                state.settings.repo_config.prompts.push_prompt_opencode =
+                                    if val.is_empty() { None } else { Some(val) };
+                            }
+                            flock::app::AiAgent::Codex => {
+                                state.settings.repo_config.prompts.push_prompt_codex =
+                                    if val.is_empty() { None } else { Some(val) };
+                            }
+                            flock::app::AiAgent::Gemini => {
+                                state.settings.repo_config.prompts.push_prompt_gemini =
+                                    if val.is_empty() { None } else { Some(val) };
+                            }
+                            flock::app::AiAgent::ClaudeCode => {}
+                        }
                     }
                     _ => {}
                 }

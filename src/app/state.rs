@@ -76,6 +76,9 @@ pub enum SettingsField {
     AsanaProjectGid,
     AsanaInProgressGid,
     AsanaDoneGid,
+    SummaryPrompt,
+    MergePrompt,
+    PushPrompt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +90,7 @@ pub enum SettingsCategory {
     GitConfig,
     Ci,
     Asana,
+    Prompts,
 }
 
 impl SettingsCategory {
@@ -99,6 +103,7 @@ impl SettingsCategory {
             SettingsCategory::GitConfig => "Configuration",
             SettingsCategory::Ci => "CI/CD",
             SettingsCategory::Asana => "Asana",
+            SettingsCategory::Prompts => "Prompts",
         }
     }
 }
@@ -118,7 +123,10 @@ impl SettingsField {
             | SettingsField::ShowPreview
             | SettingsField::ShowMetrics
             | SettingsField::ShowLogs
-            | SettingsField::ShowBanner => SettingsTab::General,
+            | SettingsField::ShowBanner
+            | SettingsField::SummaryPrompt
+            | SettingsField::MergePrompt
+            | SettingsField::PushPrompt => SettingsTab::General,
             SettingsField::GitProvider
             | SettingsField::GitLabProjectId
             | SettingsField::GitLabBaseUrl
@@ -147,6 +155,10 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::LogLevel),
                 SettingsItem::Category(SettingsCategory::Storage),
                 SettingsItem::Field(SettingsField::WorktreeLocation),
+                SettingsItem::Category(SettingsCategory::Prompts),
+                SettingsItem::Field(SettingsField::SummaryPrompt),
+                SettingsItem::Field(SettingsField::MergePrompt),
+                SettingsItem::Field(SettingsField::PushPrompt),
                 SettingsItem::Category(SettingsCategory::Display),
                 SettingsItem::Field(SettingsField::ShowPreview),
                 SettingsItem::Field(SettingsField::ShowMetrics),

@@ -440,6 +440,38 @@ impl<'a> SettingsModal<'a> {
                     .unwrap_or_default(),
                 false,
             ),
+            SettingsField::SummaryPrompt => (
+                "Summary".to_string(),
+                self.state
+                    .repo_config
+                    .prompts
+                    .get_summary_prompt()
+                    .to_string(),
+                false,
+            ),
+            SettingsField::MergePrompt => (
+                "Merge".to_string(),
+                self.state
+                    .repo_config
+                    .prompts
+                    .get_merge_prompt(&self.state.repo_config.git.main_branch),
+                false,
+            ),
+            SettingsField::PushPrompt => {
+                let value = self
+                    .state
+                    .repo_config
+                    .prompts
+                    .get_push_prompt_for_display(&self.state.pending_ai_agent)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| {
+                        format!(
+                            "(uses /push command for {})",
+                            self.state.pending_ai_agent.display_name()
+                        )
+                    });
+                ("Push".to_string(), value, false)
+            }
         }
     }
 
