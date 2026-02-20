@@ -95,14 +95,40 @@ pub struct NotionProperties {
     pub title: Option<NotionTitleProperty>,
     #[serde(rename = "Status")]
     pub status: Option<NotionStatusPropertyValue>,
+    #[serde(rename = "Task")]
+    pub task: Option<NotionTitleProperty>,
+    #[serde(flatten)]
+    pub other: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl NotionProperties {
     pub fn get_title(&self) -> Option<String> {
-        self.name
+        let title_prop = self
+            .name
             .as_ref()
             .or(self.title.as_ref())
-            .and_then(|t| t.title.first().map(|rt| rt.plain_text.clone()))
+            .or(self.task.as_ref());
+
+        if let Some(prop) = title_prop {
+            return prop.title.first().map(|rt| rt.plain_text.clone());
+        }
+
+        for (key, value) in &self.other {
+            if let Some(obj) = value.as_object() {
+                if obj.get("type").and_then(|v| v.as_str()) == Some("title") {
+                    if let Some(title_arr) = obj.get("title").and_then(|v| v.as_array()) {
+                        if let Some(first) = title_arr.first() {
+                            if let Some(text) = first.get("plain_text").and_then(|v| v.as_str()) {
+                                tracing::debug!("Found title in property '{}': {}", key, text);
+                                return Some(text.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -224,10 +250,23 @@ pub struct NotionQueryResponse {
 
 impl From<NotionPageResponse> for NotionPageData {
     fn from(page: NotionPageResponse) -> Self {
-        let name = page
-            .properties
-            .get_title()
-            .unwrap_or_else(|| "Untitled".to_string());
+        tracing::debug!(
+            "Parsing NotionPageResponse: id={}, properties keys={:?}",
+            page.id,
+            page.properties.other.keys().collect::<Vec<_>>()
+        );
+
+        let name = page.properties.get_title().unwrap_or_else(|| {
+            tracing::warn!(
+                "No title found for page {}, properties: {:?}",
+                page.id,
+                page.properties.other.keys().collect::<Vec<_>>()
+            );
+            "Untitled".to_string()
+        });
+
+        tracing::debug!("Parsed page '{}' with name: {}", page.id, name);
+
         let status = page.properties.status.as_ref();
         let status_id = status.and_then(|s| s.status.as_ref().map(|opt| opt.id.clone()));
         let status_name = status.and_then(|s| s.status.as_ref().map(|opt| opt.name.clone()));

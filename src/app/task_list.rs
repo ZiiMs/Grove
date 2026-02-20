@@ -20,5 +20,6 @@ pub struct TaskListItem {
     pub id: String,
     pub name: String,
     pub status: TaskItemStatus,
+    pub status_name: String,
     pub url: String,
 }

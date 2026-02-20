@@ -31,7 +31,7 @@ impl<'a> TaskListModal<'a> {
     }
 
     pub fn render(self, frame: &mut Frame) {
-        let area = centered_rect(70, 60, frame.area());
+        let area = centered_rect(75, 65, frame.area());
         frame.render_widget(Clear, area);
 
         let block = Block::default()
@@ -51,9 +51,11 @@ impl<'a> TaskListModal<'a> {
         }
 
         if self.tasks.is_empty() {
-            let empty_text = Paragraph::new("No tasks found")
-                .style(Style::default().fg(Color::DarkGray))
-                .alignment(ratatui::layout::Alignment::Center);
+            let empty_text = Paragraph::new(
+                "No tasks found\n\nMake sure your database is configured correctly.",
+            )
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(ratatui::layout::Alignment::Center);
             frame.render_widget(empty_text, inner_area);
             return;
         }
@@ -63,19 +65,22 @@ impl<'a> TaskListModal<'a> {
             .constraints([Constraint::Min(3), Constraint::Length(2)])
             .split(inner_area);
 
+        let max_name_width = self
+            .tasks
+            .iter()
+            .map(|t| t.name.chars().count())
+            .max()
+            .unwrap_or(20)
+            .min(50);
+
         let items: Vec<ListItem> = self
             .tasks
             .iter()
             .enumerate()
             .map(|(i, task)| {
-                let status_style = match &task.status {
-                    TaskItemStatus::NotStarted => Style::default().fg(Color::Gray),
-                    TaskItemStatus::InProgress => Style::default().fg(Color::Yellow),
-                };
-
-                let status_text = match &task.status {
-                    TaskItemStatus::NotStarted => "○",
-                    TaskItemStatus::InProgress => "◐",
+                let (status_icon, status_color) = match &task.status {
+                    TaskItemStatus::NotStarted => ("○", Color::Gray),
+                    TaskItemStatus::InProgress => ("◐", Color::Yellow),
                 };
 
                 let style = if i == self.selected {
@@ -87,9 +92,30 @@ impl<'a> TaskListModal<'a> {
                     Style::default().fg(Color::White)
                 };
 
+                let status_style = if i == self.selected {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default().fg(status_color)
+                };
+
+                let status_name_style = if i == self.selected {
+                    Style::default().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+
+                let padded_name = format!("{:width$}", task.name, width = max_name_width);
+                let truncated_name = if padded_name.chars().count() > 50 {
+                    format!("{}…", padded_name.chars().take(49).collect::<String>())
+                } else {
+                    padded_name
+                };
+
                 let line = Line::from(vec![
-                    Span::styled(format!("{} ", status_text), status_style),
-                    Span::styled(&task.name, style),
+                    Span::styled(format!("{} ", status_icon), status_style),
+                    Span::styled(truncated_name, style),
+                    Span::styled("  ", Style::default()),
+                    Span::styled(format!("[{}]", task.status_name), status_name_style),
                 ]);
 
                 ListItem::new(line)

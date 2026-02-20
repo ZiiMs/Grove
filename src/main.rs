@@ -2079,6 +2079,7 @@ async fn process_action(
                                     id: t.gid,
                                     name: t.name,
                                     status: TaskItemStatus::NotStarted,
+                                    status_name: "Not Started".to_string(),
                                     url: t.permalink_url.unwrap_or_default(),
                                 })
                                 .collect();
@@ -2091,12 +2092,8 @@ async fn process_action(
                             let items: Vec<TaskListItem> = pages
                                 .into_iter()
                                 .map(|p| {
-                                    let status = if p
-                                        .status_name
-                                        .as_ref()
-                                        .map(|n| n.to_lowercase().contains("progress"))
-                                        .unwrap_or(false)
-                                    {
+                                    let status_name = p.status_name.clone().unwrap_or_else(|| "Unknown".to_string());
+                                    let status = if status_name.to_lowercase().contains("progress") {
                                         TaskItemStatus::InProgress
                                     } else {
                                         TaskItemStatus::NotStarted
@@ -2105,6 +2102,7 @@ async fn process_action(
                                         id: p.id,
                                         name: p.name,
                                         status,
+                                        status_name,
                                         url: p.url,
                                     }
                                 })
