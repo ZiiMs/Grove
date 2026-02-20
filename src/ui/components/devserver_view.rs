@@ -73,7 +73,7 @@ impl DevServerViewWidget {
             DevServerStatus::Failed(msg) => (format!("Failed: {}", msg), Color::Red),
         };
 
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled("Status: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 status_text,
@@ -81,7 +81,17 @@ impl DevServerViewWidget {
                     .fg(status_color)
                     .add_modifier(Modifier::BOLD),
             ),
-        ])
+        ];
+
+        if matches!(&self.status, DevServerStatus::Running { .. }) {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(
+                "Enter: attach",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        Line::from(spans)
     }
 }
 

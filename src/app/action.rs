@@ -21,6 +21,9 @@ pub enum Action {
     AttachToAgent {
         id: Uuid,
     },
+    AttachToDevServer {
+        agent_id: Uuid,
+    },
     DetachFromAgent,
     PauseAgent {
         id: Uuid,

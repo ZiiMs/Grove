@@ -83,6 +83,19 @@ impl DevServerManager {
     pub fn remove(&mut self, agent_id: Uuid) {
         self.servers.remove(&agent_id);
     }
+
+    pub fn is_running(&self, agent_id: Uuid) -> bool {
+        self.servers
+            .get(&agent_id)
+            .map(|s| s.status().is_running())
+            .unwrap_or(false)
+    }
+
+    pub fn get_tmux_session(&self, agent_id: Uuid) -> Option<String> {
+        self.servers
+            .get(&agent_id)
+            .and_then(|s| s.tmux_session().map(String::from))
+    }
 }
 
 pub type SharedDevServerManager = Arc<tokio::sync::Mutex<DevServerManager>>;
