@@ -17,16 +17,12 @@ impl<'a> StatusBarWidget<'a> {
     }
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
-        let shortcuts = vec![
+        let shortcuts = [
             ("n", "new"),
-            ("d", "del"),
             ("Enter", "attach"),
-            ("s", "summary"),
-            ("m", "merge"),
-            ("p", "push"),
-            ("a", "asana"),
-            ("N", "note"),
+            ("d", "delete"),
             ("R", "refresh"),
+            ("S", "settings"),
             ("?", "help"),
             ("q", "quit"),
         ];
