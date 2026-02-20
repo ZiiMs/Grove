@@ -32,6 +32,12 @@ impl NotionClient {
         database_id: String,
         status_property_name: Option<String>,
     ) -> Result<Self> {
+        tracing::debug!(
+            "NotionClient::new: database_id={}, status_property_name={:?}",
+            database_id,
+            status_property_name
+        );
+
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,

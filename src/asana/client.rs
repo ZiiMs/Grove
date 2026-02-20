@@ -39,6 +39,8 @@ impl AsanaClient {
     pub async fn get_task(&self, gid: &str) -> Result<AsanaTaskData> {
         let url = format!("https://app.asana.com/api/1.0/tasks/{}", gid);
 
+        tracing::debug!("Asana get_task: url={}", url);
+
         let response = self
             .client
             .get(&url)
@@ -47,15 +49,17 @@ impl AsanaClient {
             .await
             .context("Failed to fetch Asana task")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Asana API error: {} - {}", status, body);
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!("Asana get_task response: status={}, body={}", status, response_text);
+
+        if !status.is_success() {
+            tracing::error!("Asana API error: {} - {}", status, response_text);
+            anyhow::bail!("Asana API error: {} - {}", status, response_text);
         }
 
-        let task_resp: AsanaTaskResponse = response
-            .json()
-            .await
+        let task_resp: AsanaTaskResponse = serde_json::from_str(&response_text)
             .context("Failed to parse Asana task response")?;
 
         Ok(task_resp.data)
@@ -73,6 +77,8 @@ impl AsanaClient {
             project_gid
         );
 
+        tracing::debug!("Asana get_project_tasks: url={}", url);
+
         let response = self
             .client
             .get(&url)
@@ -81,15 +87,17 @@ impl AsanaClient {
             .await
             .context("Failed to fetch Asana project tasks")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Asana API error: {} - {}", status, body);
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!("Asana get_project_tasks response: status={}, body={}", status, response_text);
+
+        if !status.is_success() {
+            tracing::error!("Asana API error: {} - {}", status, response_text);
+            anyhow::bail!("Asana API error: {} - {}", status, response_text);
         }
 
-        let task_list: AsanaTaskListResponse = response
-            .json()
-            .await
+        let task_list: AsanaTaskListResponse = serde_json::from_str(&response_text)
             .context("Failed to parse Asana task list response")?;
 
         Ok(task_list
