@@ -64,6 +64,10 @@ impl<'a> SettingsModal<'a> {
         if let crate::app::DropdownState::Open { selected_index } = self.state.dropdown {
             self.render_dropdown(frame, selected_index);
         }
+
+        if self.state.editing_prompt {
+            self.render_prompt_editor(frame);
+        }
     }
 
     fn render_tabs(&self, frame: &mut Frame, area: Rect) {
@@ -225,7 +229,9 @@ impl<'a> SettingsModal<'a> {
             Style::default().fg(Color::Green)
         };
 
-        let cursor = if is_selected && self.state.editing_text {
+        let is_prompt = field.is_prompt_field();
+
+        let cursor = if is_selected && self.state.editing_text && !is_prompt {
             "█"
         } else if is_selected {
             " ◀"
@@ -233,8 +239,16 @@ impl<'a> SettingsModal<'a> {
             ""
         };
 
-        let display_value = if self.state.editing_text && is_selected {
+        let display_value = if self.state.editing_text && is_selected && !is_prompt {
             self.state.text_buffer.clone()
+        } else if is_prompt {
+            if value.is_empty() {
+                "(default)".to_string()
+            } else if value.len() > 30 {
+                format!("{}...", &value[..27])
+            } else {
+                value.clone()
+            }
         } else if value.len() > 30 {
             format!("{}...", &value[..27])
         } else {
@@ -476,7 +490,9 @@ impl<'a> SettingsModal<'a> {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let hint = if self.state.editing_text {
+        let hint = if self.state.editing_prompt {
+            "[Enter] New line  [Ctrl+Enter] Save  [Esc] Cancel"
+        } else if self.state.editing_text {
             "[Enter] Save  [Esc] Cancel"
         } else if self.state.is_dropdown_open() {
             "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
@@ -561,6 +577,62 @@ impl<'a> SettingsModal<'a> {
 
         let paragraph = Paragraph::new(lines).block(block);
         frame.render_widget(paragraph, dropdown_area);
+    }
+
+    fn render_prompt_editor(&self, frame: &mut Frame) {
+        let area = centered_rect(80, 60, frame.area());
+        frame.render_widget(Clear, area);
+
+        let field = self.state.current_field();
+        let title = match field {
+            SettingsField::SummaryPrompt => " Edit Summary Prompt ",
+            SettingsField::MergePrompt => " Edit Merge Prompt ",
+            SettingsField::PushPrompt => " Edit Push Prompt ",
+            _ => " Edit Prompt ",
+        };
+
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(5), Constraint::Length(2)])
+            .split(inner);
+
+        let text = &self.state.text_buffer;
+        let lines: Vec<Line> = text
+            .lines()
+            .enumerate()
+            .map(|(i, line)| {
+                if i == text.lines().count() - 1 {
+                    Line::from(vec![
+                        Span::styled(line.to_string(), Style::default().fg(Color::White)),
+                        Span::styled("█", Style::default().fg(Color::White)),
+                    ])
+                } else {
+                    Line::from(Span::styled(
+                        line.to_string(),
+                        Style::default().fg(Color::White),
+                    ))
+                }
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
+        frame.render_widget(paragraph, chunks[0]);
+
+        let hint = "[Enter] New line  [Ctrl+Enter / Alt+Enter] Save  [Esc] Cancel";
+        let footer = Paragraph::new(Line::from(Span::styled(
+            hint,
+            Style::default().fg(Color::DarkGray),
+        )))
+        .alignment(Alignment::Center);
+        frame.render_widget(footer, chunks[1]);
     }
 }
 

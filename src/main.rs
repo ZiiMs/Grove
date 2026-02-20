@@ -764,6 +764,25 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
 fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
     use flock::app::DropdownState;
 
+    // Handle prompt editing mode (multi-line text editor)
+    if state.settings.editing_prompt {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCancelSelection),
+            KeyCode::Enter => {
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    || key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    Some(Action::SettingsConfirmSelection)
+                } else {
+                    Some(Action::SettingsInputChar('\n'))
+                }
+            }
+            KeyCode::Backspace => Some(Action::SettingsBackspace),
+            KeyCode::Char(c) => Some(Action::SettingsInputChar(c)),
+            _ => None,
+        };
+    }
+
     // Handle text editing mode
     if state.settings.editing_text {
         return match key.code {
@@ -2142,7 +2161,7 @@ async fn process_action(
                         .unwrap_or_default();
                 }
                 flock::app::SettingsField::SummaryPrompt => {
-                    state.settings.editing_text = true;
+                    state.settings.editing_prompt = true;
                     state.settings.text_buffer = state
                         .settings
                         .repo_config
@@ -2159,7 +2178,7 @@ async fn process_action(
                         });
                 }
                 flock::app::SettingsField::MergePrompt => {
-                    state.settings.editing_text = true;
+                    state.settings.editing_prompt = true;
                     state.settings.text_buffer = state
                         .settings
                         .repo_config
@@ -2184,7 +2203,7 @@ async fn process_action(
                         return Ok(false);
                     }
                     let default_prompt = agent.push_prompt().unwrap_or("");
-                    state.settings.editing_text = true;
+                    state.settings.editing_prompt = true;
                     let current = match agent {
                         flock::app::AiAgent::Opencode => {
                             &state.settings.repo_config.prompts.push_prompt_opencode
@@ -2323,6 +2342,7 @@ async fn process_action(
                     _ => {}
                 }
                 state.settings.editing_text = false;
+                state.settings.editing_prompt = false;
                 state.settings.text_buffer.clear();
             } else if let flock::app::DropdownState::Open { selected_index } =
                 state.settings.dropdown
@@ -2369,6 +2389,7 @@ async fn process_action(
         Action::SettingsCancelSelection => {
             state.settings.dropdown = flock::app::DropdownState::Closed;
             state.settings.editing_text = false;
+            state.settings.editing_prompt = false;
             state.settings.text_buffer.clear();
         }
 

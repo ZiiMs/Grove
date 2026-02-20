@@ -144,6 +144,13 @@ impl SettingsField {
             | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
         }
     }
+
+    pub fn is_prompt_field(&self) -> bool {
+        matches!(
+            self,
+            SettingsField::SummaryPrompt | SettingsField::MergePrompt | SettingsField::PushPrompt
+        )
+    }
 }
 
 impl SettingsItem {
@@ -227,7 +234,9 @@ pub struct SettingsState {
     pub field_index: usize,
     pub dropdown: DropdownState,
     pub editing_text: bool,
+    pub editing_prompt: bool,
     pub text_buffer: String,
+    pub prompt_scroll: usize,
     pub pending_ai_agent: AiAgent,
     pub pending_log_level: ConfigLogLevel,
     pub pending_worktree_location: WorktreeLocation,
@@ -243,7 +252,9 @@ impl Default for SettingsState {
             field_index: 0,
             dropdown: DropdownState::Closed,
             editing_text: false,
+            editing_prompt: false,
             text_buffer: String::new(),
+            prompt_scroll: 0,
             pending_ai_agent: AiAgent::default(),
             pending_log_level: ConfigLogLevel::default(),
             pending_worktree_location: WorktreeLocation::default(),
