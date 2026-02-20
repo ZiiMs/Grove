@@ -6,6 +6,7 @@ description = "A TUI for managing multiple Claude Code agents with git worktree 
 license = "MIT"
 
 [dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
 tokio = { version = "1", features = ["full"] }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
