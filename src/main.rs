@@ -21,16 +21,17 @@ use flock::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
     AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
 };
-use flock::app::{Action, AppState, Config, InputMode, ProjectMgmtProvider};
+use flock::app::{Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider};
 use flock::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use flock::codeberg::OptionalCodebergClient;
+use flock::devserver::DevServerManager;
 use flock::git::GitSync;
 use flock::github::OptionalGitHubClient;
 use flock::gitlab::OptionalGitLabClient;
 use flock::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
 use flock::storage::{save_session, SessionStorage};
 use flock::tmux::is_tmux_available;
-use flock::ui::AppWidget;
+use flock::ui::{AppWidget, DevServerRenderInfo};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -211,6 +212,11 @@ async fn main() -> Result<()> {
 
     // Create action channel
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
+
+    // Create dev server manager
+    let devserver_manager = Arc::new(tokio::sync::Mutex::new(DevServerManager::new(
+        action_tx.clone(),
+    )));
 
     // Create watch channel for agent list updates (polling task needs current agents)
     let initial_agents: HashSet<Uuid> = state.agents.keys().cloned().collect();
@@ -463,7 +469,22 @@ async fn main() -> Result<()> {
 
         // Render
         terminal.draw(|f| {
-            AppWidget::new(&state).render(f);
+            let devserver_info = if let Some(agent) = state.selected_agent() {
+                if let Ok(manager) = devserver_manager.try_lock() {
+                    manager.get(agent.id).map(|server| DevServerRenderInfo {
+                        status: server.status().clone(),
+                        logs: server.logs().to_vec(),
+                        agent_name: server.agent_name().to_string(),
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            AppWidget::new(&state)
+                .with_devserver(devserver_info)
+                .render(f);
         })?;
 
         // Poll for keyboard input (non-blocking with timeout)
@@ -505,6 +526,7 @@ async fn main() -> Result<()> {
                 &selected_watch_tx,
                 &asana_watch_tx,
                 &notion_watch_tx,
+                &devserver_manager,
             )
             .await
             {
@@ -545,6 +567,15 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Handle settings mode first
     if state.settings.active {
         return handle_settings_key(key, state);
+    }
+
+    // Handle dev server warning modal
+    if state.devserver_warning.is_some() {
+        return match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Some(Action::ConfirmStartDevServer),
+            KeyCode::Char('n') | KeyCode::Esc => Some(Action::DismissDevServerWarning),
+            _ => None,
+        };
     }
 
     // Handle input mode
@@ -735,12 +766,14 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         KeyCode::Char('f') if !is_paused => state
             .selected_agent_id()
             .map(|id| Action::FetchRemote { id }),
-        KeyCode::Char('s') if !is_paused => state
+        KeyCode::Char('s') if !is_paused && !key.modifiers.contains(KeyModifiers::CONTROL) => state
             .selected_agent_id()
             .map(|id| Action::RequestSummary { id }),
         KeyCode::Char('/') => Some(Action::ToggleDiffView),
         KeyCode::Char('L') => Some(Action::ToggleLogs),
-        KeyCode::Char('S') => Some(Action::ToggleSettings),
+        KeyCode::Char('S') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::ToggleSettings)
+        }
 
         // Git provider operations
         KeyCode::Char('o') => {
@@ -767,6 +800,24 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         KeyCode::Char('R') => Some(Action::RefreshAll),
         KeyCode::Char('?') => Some(Action::ToggleHelp),
         KeyCode::Esc => Some(Action::ClearError),
+
+        // Preview tab navigation
+        KeyCode::Tab => Some(Action::NextPreviewTab),
+        KeyCode::BackTab => Some(Action::PrevPreviewTab),
+
+        // Dev server controls
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::RequestStartDevServer)
+        }
+        KeyCode::Char('S') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::RestartDevServer)
+        }
+        KeyCode::Char('C') if state.preview_tab == PreviewTab::DevServer => {
+            Some(Action::ClearDevServerLogs)
+        }
+        KeyCode::Char('O') if state.preview_tab == PreviewTab::DevServer => {
+            Some(Action::OpenDevServerInBrowser)
+        }
 
         _ => None,
     }
@@ -912,9 +963,12 @@ async fn process_action(
     selected_watch_tx: &watch::Sender<Option<Uuid>>,
     asana_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     notion_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
+    devserver_manager: &Arc<tokio::sync::Mutex<DevServerManager>>,
 ) -> Result<bool> {
     match action {
         Action::Quit => {
+            let mut manager = devserver_manager.lock().await;
+            let _ = manager.stop_all().await;
             state.running = false;
             return Ok(true);
         }
@@ -2723,6 +2777,40 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                flock::app::SettingsField::DevServerCommand => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .dev_server
+                        .command
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::DevServerRunBefore => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer =
+                        state.settings.repo_config.dev_server.run_before.join(", ");
+                }
+                flock::app::SettingsField::DevServerWorkingDir => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer =
+                        state.settings.repo_config.dev_server.working_dir.clone();
+                }
+                flock::app::SettingsField::DevServerPort => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .dev_server
+                        .port
+                        .map(|p| p.to_string())
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::DevServerAutoStart => {
+                    state.settings.repo_config.dev_server.auto_start =
+                        !state.settings.repo_config.dev_server.auto_start;
+                }
             }
         }
 
@@ -2802,6 +2890,28 @@ async fn process_action(
                             .project_mgmt
                             .asana
                             .done_section_gid = if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::DevServerCommand => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.dev_server.command =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::DevServerRunBefore => {
+                        state.settings.repo_config.dev_server.run_before = state
+                            .settings
+                            .text_buffer
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                    flock::app::SettingsField::DevServerWorkingDir => {
+                        state.settings.repo_config.dev_server.working_dir =
+                            state.settings.text_buffer.clone();
+                    }
+                    flock::app::SettingsField::DevServerPort => {
+                        state.settings.repo_config.dev_server.port =
+                            state.settings.text_buffer.parse().ok();
                     }
                     flock::app::SettingsField::SummaryPrompt => {
                         let val = state.settings.text_buffer.clone();
@@ -3225,6 +3335,146 @@ async fn process_action(
                 }
             }
             state.show_project_setup = false;
+        }
+
+        // Dev Server Actions
+        Action::RequestStartDevServer => {
+            if let Some(agent) = state.selected_agent() {
+                let agent_id = agent.id;
+                if let Ok(manager) = devserver_manager.try_lock() {
+                    if manager.has_running_server() {
+                        let running = manager.running_servers();
+                        state.devserver_warning = Some(flock::app::DevServerWarning {
+                            agent_id,
+                            running_servers: running
+                                .into_iter()
+                                .map(|(_, name, port)| (name, port))
+                                .collect(),
+                        });
+                    } else {
+                        drop(manager);
+                        action_tx.send(Action::StartDevServer)?;
+                    }
+                }
+            }
+        }
+
+        Action::ConfirmStartDevServer => {
+            state.devserver_warning = None;
+            action_tx.send(Action::StartDevServer)?;
+        }
+
+        Action::DismissDevServerWarning => {
+            state.devserver_warning = None;
+        }
+
+        Action::StartDevServer => {
+            if let Some(agent) = state.selected_agent() {
+                let config = state.settings.repo_config.dev_server.clone();
+                let worktree = std::path::PathBuf::from(agent.worktree_path.clone());
+                let agent_id = agent.id;
+                let agent_name = agent.name.clone();
+                let manager = Arc::clone(devserver_manager);
+
+                state.log_info(format!("Starting dev server for '{}'", agent.name));
+
+                tokio::spawn(async move {
+                    let mut m = manager.lock().await;
+                    if let Err(e) = m.start(agent_id, agent_name, &config, &worktree).await {
+                        tracing::error!("Failed to start dev server: {}", e);
+                    }
+                });
+            }
+        }
+
+        Action::StopDevServer => {
+            if let Some(agent) = state.selected_agent() {
+                let agent_id = agent.id;
+                let manager = Arc::clone(devserver_manager);
+                let name = agent.name.clone();
+
+                state.log_info(format!("Stopping dev server for '{}'", name));
+
+                tokio::spawn(async move {
+                    let mut m = manager.lock().await;
+                    let _ = m.stop(agent_id).await;
+                });
+            }
+        }
+
+        Action::RestartDevServer => {
+            if let Some(agent) = state.selected_agent() {
+                let config = state.settings.repo_config.dev_server.clone();
+                let worktree = std::path::PathBuf::from(agent.worktree_path.clone());
+                let agent_id = agent.id;
+                let agent_name = agent.name.clone();
+                let manager = Arc::clone(devserver_manager);
+
+                state.log_info(format!("Restarting dev server for '{}'", agent.name));
+
+                tokio::spawn(async move {
+                    let mut m = manager.lock().await;
+                    let _ = m.stop(agent_id).await;
+                    if let Err(e) = m.start(agent_id, agent_name, &config, &worktree).await {
+                        tracing::error!("Failed to restart dev server: {}", e);
+                    }
+                });
+            }
+        }
+
+        Action::NextPreviewTab => {
+            state.preview_tab = match state.preview_tab {
+                PreviewTab::Preview => PreviewTab::DevServer,
+                PreviewTab::DevServer => PreviewTab::Preview,
+            };
+        }
+
+        Action::PrevPreviewTab => {
+            state.preview_tab = match state.preview_tab {
+                PreviewTab::Preview => PreviewTab::DevServer,
+                PreviewTab::DevServer => PreviewTab::Preview,
+            };
+        }
+
+        Action::ClearDevServerLogs => {
+            if let Some(agent) = state.selected_agent() {
+                let agent_id = agent.id;
+                let mut manager = devserver_manager.lock().await;
+                if let Some(server) = manager.get_mut(agent_id) {
+                    server.clear_logs();
+                }
+            }
+        }
+
+        Action::OpenDevServerInBrowser => {
+            if let Some(agent) = state.selected_agent() {
+                let agent_id = agent.id;
+                let manager = devserver_manager.lock().await;
+                if let Some(server) = manager.get(agent_id) {
+                    if let Some(port) = server.status().port() {
+                        let url = format!("http://localhost:{}", port);
+                        match open::that(&url) {
+                            Ok(_) => state.log_info("Opening dev server in browser"),
+                            Err(e) => state.log_error(format!("Failed to open browser: {}", e)),
+                        }
+                    }
+                }
+            }
+        }
+
+        Action::AppendDevServerLog { agent_id, line } => {
+            let mut manager = devserver_manager.lock().await;
+            if let Some(server) = manager.get_mut(agent_id) {
+                server.append_log(line);
+            }
+        }
+
+        Action::UpdateDevServerStatus { agent_id, status } => {
+            state.log_debug(format!(
+                "Dev server {} status: {}",
+                agent_id,
+                status.label()
+            ));
         }
     }
 

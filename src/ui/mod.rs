@@ -1,4 +1,4 @@
 pub mod app;
 pub mod components;
 
-pub use app::AppWidget;
+pub use app::{AppWidget, DevServerRenderInfo};
