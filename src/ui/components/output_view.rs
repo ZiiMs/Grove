@@ -1,8 +1,7 @@
-use ansi_to_tui::IntoText;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
@@ -38,14 +37,8 @@ impl<'a> OutputViewWidget<'a> {
             .replace("\r\n", "\n") // Normalize Windows line endings
             .replace('\r', ""); // Remove carriage returns (some programs use \r to overwrite lines)
 
-        // Parse ANSI content into styled Text
-        let text = match processed_content.as_bytes().into_text() {
-            Ok(text) => text,
-            Err(_) => Text::raw(processed_content),
-        };
-
-        // Compress the output: strip trailing blank lines, collapse consecutive blanks
-        let lines = compress_lines(text.lines);
+        // Since we capture without ANSI codes (-e), just use raw text
+        let lines: Vec<Line> = processed_content.lines().map(Line::from).collect();
 
         // Calculate scroll position (show latest content by default)
         let total_lines = lines.len();
@@ -71,39 +64,6 @@ impl<'a> OutputViewWidget<'a> {
 
         frame.render_widget(paragraph, area);
     }
-}
-
-/// Strip trailing blank lines and collapse runs of 2+ consecutive blank lines into 1.
-fn compress_lines(lines: Vec<Line<'_>>) -> Vec<Line<'_>> {
-    // Strip trailing blank lines
-    let mut end = lines.len();
-    while end > 0 && is_blank_line(&lines[end - 1]) {
-        end -= 1;
-    }
-    let lines = &lines[..end];
-
-    // Collapse consecutive blank lines (keep at most 1)
-    let mut result: Vec<Line> = Vec::with_capacity(lines.len());
-    let mut prev_blank = false;
-
-    for line in lines {
-        let blank = is_blank_line(line);
-        if blank && prev_blank {
-            continue; // Skip consecutive blank lines
-        }
-        prev_blank = blank;
-        result.push(line.clone());
-    }
-
-    result
-}
-
-/// Check if a Line is visually blank (empty or only whitespace).
-fn is_blank_line(line: &Line<'_>) -> bool {
-    if line.spans.is_empty() {
-        return true;
-    }
-    line.spans.iter().all(|span| span.content.trim().is_empty())
 }
 
 pub struct EmptyOutputWidget;
