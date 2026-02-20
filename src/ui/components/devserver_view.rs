@@ -1,7 +1,8 @@
+use ansi_to_tui::IntoText;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
@@ -28,18 +29,18 @@ impl DevServerViewWidget {
 
         let mut lines = vec![self.render_status_line(), Line::from("")];
 
-        let log_lines: Vec<Line> = self
-            .logs
-            .iter()
-            .rev()
-            .take(visible_height)
-            .map(|line| Line::from(Span::raw(line.clone())))
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
+        // Parse ANSI content from logs and convert to styled lines
+        let mut styled_lines: Vec<Line> = Vec::new();
+        for log_line in self.logs.iter().rev().take(visible_height) {
+            let text = match log_line.as_bytes().into_text() {
+                Ok(text) => text,
+                Err(_) => Text::raw(log_line.clone()),
+            };
+            styled_lines.extend(text.lines);
+        }
+        styled_lines.reverse();
 
-        lines.extend(log_lines);
+        lines.extend(styled_lines);
 
         let border_color = match &self.status {
             DevServerStatus::Running { .. } => Color::Green,
