@@ -1,38 +1,48 @@
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::{Agent, AgentStatus};
+use crate::app::config::AiAgent;
 use crate::git::Worktree;
 use crate::tmux::TmuxSession;
 
 /// Manages the lifecycle of agents.
 pub struct AgentManager {
     pub repo_path: String,
+    pub worktree_base: PathBuf,
 }
 
 impl AgentManager {
-    pub fn new(repo_path: &str) -> Self {
+    pub fn new(repo_path: &str, worktree_base: PathBuf) -> Self {
         Self {
             repo_path: repo_path.to_string(),
+            worktree_base,
         }
     }
 
     /// Create a new agent with worktree and tmux session.
-    pub fn create_agent(&self, name: &str, branch: &str) -> Result<Agent> {
-        // Create worktree
-        let worktree = Worktree::new(&self.repo_path);
+    pub fn create_agent(
+        &self,
+        name: &str,
+        branch: &str,
+        ai_agent: &AiAgent,
+        worktree_symlinks: &[String],
+    ) -> Result<Agent> {
+        let worktree = Worktree::new(&self.repo_path, self.worktree_base.clone());
         let worktree_path = worktree
             .create(branch)
             .context("Failed to create worktree")?;
 
-        // Create agent
+        worktree
+            .create_symlinks(&worktree_path, worktree_symlinks)
+            .context("Failed to create worktree symlinks")?;
+
         let agent = Agent::new(name.to_string(), branch.to_string(), worktree_path.clone());
 
-        // Create tmux session
         let session = TmuxSession::new(&agent.tmux_session);
         session
-            .create(&worktree_path)
+            .create(&worktree_path, ai_agent.command())
             .context("Failed to create tmux session")?;
 
         Ok(agent)
@@ -48,7 +58,7 @@ impl AgentManager {
 
         // Remove worktree
         if Path::new(&agent.worktree_path).exists() {
-            let worktree = Worktree::new(&self.repo_path);
+            let worktree = Worktree::new(&self.repo_path, self.worktree_base.clone());
             worktree
                 .remove(&agent.worktree_path)
                 .context("Failed to remove worktree")?;
@@ -102,21 +112,19 @@ impl AgentManager {
         session.exists()
     }
 
-    /// Restart an agent's Claude session.
-    pub fn restart_agent(&self, agent: &Agent) -> Result<()> {
+    /// Restart an agent's AI session.
+    pub fn restart_agent(&self, agent: &Agent, ai_agent: &AiAgent) -> Result<()> {
         let session = TmuxSession::new(&agent.tmux_session);
 
         if !session.exists() {
-            // Recreate the session
-            session.create(&agent.worktree_path)?;
+            session.create(&agent.worktree_path, ai_agent.command())?;
         } else {
-            // Send ctrl-c to interrupt and restart
             let _ = std::process::Command::new("tmux")
                 .args(["send-keys", "-t", &agent.tmux_session, "C-c"])
                 .output();
 
             std::thread::sleep(std::time::Duration::from_millis(100));
-            session.send_keys("claude")?;
+            session.send_keys(ai_agent.command())?;
         }
 
         Ok(())

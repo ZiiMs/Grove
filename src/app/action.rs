@@ -75,6 +75,24 @@ pub enum Action {
         id: Uuid,
     },
 
+    // GitHub operations
+    UpdatePrStatus {
+        id: Uuid,
+        status: crate::github::PullRequestStatus,
+    },
+    OpenPrInBrowser {
+        id: Uuid,
+    },
+
+    // Codeberg operations
+    UpdateCodebergPrStatus {
+        id: Uuid,
+        status: crate::codeberg::PullRequestStatus,
+    },
+    OpenCodebergPrInBrowser {
+        id: Uuid,
+    },
+
     // Asana operations
     AssignAsanaTask {
         id: Uuid,
@@ -151,8 +169,51 @@ pub enum Action {
 
     // Application
     RefreshAll,
+    RefreshSelected,
     Tick,
     Quit,
+
+    // Settings
+    ToggleSettings,
+    SettingsSwitchSection,
+    SettingsSwitchSectionBack,
+    SettingsSelectNext,
+    SettingsSelectPrev,
+    SettingsSelectField,
+    SettingsConfirmSelection,
+    SettingsCancelSelection,
+    SettingsInputChar(char),
+    SettingsBackspace,
+    SettingsClose,
+    SettingsSave,
+
+    // Global Setup Wizard
+    GlobalSetupNextStep,
+    GlobalSetupPrevStep,
+    GlobalSetupSelectNext,
+    GlobalSetupSelectPrev,
+    GlobalSetupNavigateUp,
+    GlobalSetupNavigateDown,
+    GlobalSetupToggleDropdown,
+    GlobalSetupDropdownPrev,
+    GlobalSetupDropdownNext,
+    GlobalSetupConfirmDropdown,
+    GlobalSetupComplete,
+
+    // Project Setup Wizard
+    ProjectSetupNavigateNext,
+    ProjectSetupNavigatePrev,
+    ProjectSetupEditField,
+    ProjectSetupCancelEdit,
+    ProjectSetupConfirmEdit,
+    ProjectSetupInputChar(char),
+    ProjectSetupBackspace,
+    ProjectSetupToggleDropdown,
+    ProjectSetupDropdownPrev,
+    ProjectSetupDropdownNext,
+    ProjectSetupConfirmDropdown,
+    ProjectSetupSkip,
+    ProjectSetupComplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

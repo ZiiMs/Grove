@@ -3,57 +3,336 @@ use std::collections::{HashMap, VecDeque};
 use uuid::Uuid;
 
 use super::action::InputMode;
-use super::config::Config;
+use super::config::{
+    AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, RepoConfig, UiConfig,
+    WorktreeLocation,
+};
 use crate::agent::Agent;
 
-/// Maximum number of system metrics samples to keep for the graphs
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    General,
+    Git,
+    ProjectMgmt,
+}
+
+impl SettingsTab {
+    pub fn all() -> &'static [SettingsTab] {
+        &[
+            SettingsTab::General,
+            SettingsTab::Git,
+            SettingsTab::ProjectMgmt,
+        ]
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SettingsTab::General => "General",
+            SettingsTab::Git => "Git",
+            SettingsTab::ProjectMgmt => "Project Mgmt",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            SettingsTab::General => SettingsTab::Git,
+            SettingsTab::Git => SettingsTab::ProjectMgmt,
+            SettingsTab::ProjectMgmt => SettingsTab::General,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            SettingsTab::General => SettingsTab::ProjectMgmt,
+            SettingsTab::Git => SettingsTab::General,
+            SettingsTab::ProjectMgmt => SettingsTab::Git,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsField {
+    AiAgent,
+    LogLevel,
+    WorktreeLocation,
+    ShowPreview,
+    ShowMetrics,
+    ShowLogs,
+    ShowBanner,
+    GitProvider,
+    GitLabProjectId,
+    GitLabBaseUrl,
+    GitHubOwner,
+    GitHubRepo,
+    CodebergOwner,
+    CodebergRepo,
+    CodebergBaseUrl,
+    CodebergCiProvider,
+    BranchPrefix,
+    MainBranch,
+    WorktreeSymlinks,
+    AsanaProjectGid,
+    AsanaInProgressGid,
+    AsanaDoneGid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsCategory {
+    Agent,
+    Display,
+    Storage,
+    GitProvider,
+    GitConfig,
+    Ci,
+    Asana,
+}
+
+impl SettingsCategory {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SettingsCategory::Agent => "Agent",
+            SettingsCategory::Display => "Display",
+            SettingsCategory::Storage => "Storage",
+            SettingsCategory::GitProvider => "Provider",
+            SettingsCategory::GitConfig => "Configuration",
+            SettingsCategory::Ci => "CI/CD",
+            SettingsCategory::Asana => "Asana",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsItem {
+    Category(SettingsCategory),
+    Field(SettingsField),
+}
+
+impl SettingsField {
+    pub fn tab(&self) -> SettingsTab {
+        match self {
+            SettingsField::AiAgent
+            | SettingsField::LogLevel
+            | SettingsField::WorktreeLocation
+            | SettingsField::ShowPreview
+            | SettingsField::ShowMetrics
+            | SettingsField::ShowLogs
+            | SettingsField::ShowBanner => SettingsTab::General,
+            SettingsField::GitProvider
+            | SettingsField::GitLabProjectId
+            | SettingsField::GitLabBaseUrl
+            | SettingsField::GitHubOwner
+            | SettingsField::GitHubRepo
+            | SettingsField::CodebergOwner
+            | SettingsField::CodebergRepo
+            | SettingsField::CodebergBaseUrl
+            | SettingsField::CodebergCiProvider
+            | SettingsField::BranchPrefix
+            | SettingsField::MainBranch
+            | SettingsField::WorktreeSymlinks => SettingsTab::Git,
+            SettingsField::AsanaProjectGid
+            | SettingsField::AsanaInProgressGid
+            | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
+        }
+    }
+}
+
+impl SettingsItem {
+    pub fn all_for_tab(tab: SettingsTab, provider: GitProvider) -> Vec<SettingsItem> {
+        match tab {
+            SettingsTab::General => vec![
+                SettingsItem::Category(SettingsCategory::Agent),
+                SettingsItem::Field(SettingsField::AiAgent),
+                SettingsItem::Field(SettingsField::LogLevel),
+                SettingsItem::Category(SettingsCategory::Storage),
+                SettingsItem::Field(SettingsField::WorktreeLocation),
+                SettingsItem::Category(SettingsCategory::Display),
+                SettingsItem::Field(SettingsField::ShowPreview),
+                SettingsItem::Field(SettingsField::ShowMetrics),
+                SettingsItem::Field(SettingsField::ShowLogs),
+                SettingsItem::Field(SettingsField::ShowBanner),
+            ],
+            SettingsTab::Git => {
+                let mut items = vec![
+                    SettingsItem::Category(SettingsCategory::GitProvider),
+                    SettingsItem::Field(SettingsField::GitProvider),
+                ];
+                match provider {
+                    GitProvider::GitLab => {
+                        items.push(SettingsItem::Field(SettingsField::GitLabProjectId));
+                        items.push(SettingsItem::Field(SettingsField::GitLabBaseUrl));
+                    }
+                    GitProvider::GitHub => {
+                        items.push(SettingsItem::Field(SettingsField::GitHubOwner));
+                        items.push(SettingsItem::Field(SettingsField::GitHubRepo));
+                    }
+                    GitProvider::Codeberg => {
+                        items.push(SettingsItem::Field(SettingsField::CodebergOwner));
+                        items.push(SettingsItem::Field(SettingsField::CodebergRepo));
+                        items.push(SettingsItem::Field(SettingsField::CodebergBaseUrl));
+                        items.push(SettingsItem::Category(SettingsCategory::Ci));
+                        items.push(SettingsItem::Field(SettingsField::CodebergCiProvider));
+                    }
+                }
+                items.push(SettingsItem::Category(SettingsCategory::GitConfig));
+                items.push(SettingsItem::Field(SettingsField::BranchPrefix));
+                items.push(SettingsItem::Field(SettingsField::MainBranch));
+                items.push(SettingsItem::Field(SettingsField::WorktreeSymlinks));
+                items
+            }
+            SettingsTab::ProjectMgmt => vec![
+                SettingsItem::Category(SettingsCategory::Asana),
+                SettingsItem::Field(SettingsField::AsanaProjectGid),
+                SettingsItem::Field(SettingsField::AsanaInProgressGid),
+                SettingsItem::Field(SettingsField::AsanaDoneGid),
+            ],
+        }
+    }
+
+    pub fn navigable_items(items: &[SettingsItem]) -> Vec<(usize, SettingsField)> {
+        items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| match item {
+                SettingsItem::Field(f) => Some((i, *f)),
+                SettingsItem::Category(_) => None,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DropdownState {
+    Closed,
+    Open { selected_index: usize },
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsState {
+    pub active: bool,
+    pub tab: SettingsTab,
+    pub field_index: usize,
+    pub dropdown: DropdownState,
+    pub editing_text: bool,
+    pub text_buffer: String,
+    pub pending_ai_agent: AiAgent,
+    pub pending_log_level: ConfigLogLevel,
+    pub pending_worktree_location: WorktreeLocation,
+    pub pending_ui: UiConfig,
+    pub repo_config: RepoConfig,
+}
+
+impl Default for SettingsState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            tab: SettingsTab::General,
+            field_index: 0,
+            dropdown: DropdownState::Closed,
+            editing_text: false,
+            text_buffer: String::new(),
+            pending_ai_agent: AiAgent::default(),
+            pending_log_level: ConfigLogLevel::default(),
+            pending_worktree_location: WorktreeLocation::default(),
+            pending_ui: UiConfig::default(),
+            repo_config: RepoConfig::default(),
+        }
+    }
+}
+
+impl SettingsState {
+    pub fn all_items(&self) -> Vec<SettingsItem> {
+        SettingsItem::all_for_tab(self.tab, self.repo_config.git.provider)
+    }
+
+    pub fn navigable_items(&self) -> Vec<(usize, SettingsField)> {
+        SettingsItem::navigable_items(&self.all_items())
+    }
+
+    pub fn current_field(&self) -> SettingsField {
+        let navigable = self.navigable_items();
+        navigable
+            .get(self.field_index)
+            .map(|(_, f)| *f)
+            .unwrap_or(SettingsField::AiAgent)
+    }
+
+    pub fn is_dropdown_open(&self) -> bool {
+        matches!(self.dropdown, DropdownState::Open { .. })
+    }
+
+    pub fn total_fields(&self) -> usize {
+        self.navigable_items().len()
+    }
+
+    pub fn next_tab(&self) -> SettingsTab {
+        self.tab.next()
+    }
+
+    pub fn prev_tab(&self) -> SettingsTab {
+        self.tab.prev()
+    }
+}
 
 /// The single source of truth for application state.
 #[derive(Debug)]
 pub struct AppState {
-    /// All managed agents, keyed by ID
     pub agents: HashMap<Uuid, Agent>,
-    /// Ordered list of agent IDs for display
     pub agent_order: Vec<Uuid>,
-    /// Currently selected agent index
     pub selected_index: usize,
-    /// Application configuration
     pub config: Config,
-    /// Whether the app is running
     pub running: bool,
-    /// Current error message to display
     pub error_message: Option<String>,
-    /// Whether help overlay is shown
     pub show_help: bool,
-    /// Whether diff view is active
     pub show_diff: bool,
-    /// Current input mode (for text input)
     pub input_mode: Option<InputMode>,
-    /// Current input buffer
     pub input_buffer: String,
-    /// Scroll offset for output view
     pub output_scroll: usize,
-    /// Path to the main repository
     pub repo_path: String,
-    /// Log messages for debugging
     pub logs: Vec<LogEntry>,
-    /// Whether to show log panel
     pub show_logs: bool,
-    /// Animation frame counter (0-9, cycles for spinner)
     pub animation_frame: usize,
-    /// Global CPU usage history (percentage 0-100)
     pub cpu_history: VecDeque<f32>,
-    /// Global memory usage history (percentage 0-100)
     pub memory_history: VecDeque<f32>,
-    /// Current memory used in bytes
     pub memory_used: u64,
-    /// Total memory in bytes
     pub memory_total: u64,
-    /// Loading message (shown as overlay when Some)
     pub loading_message: Option<String>,
-    /// Preview content for the selected agent (with ANSI codes)
     pub preview_content: Option<String>,
+    pub settings: SettingsState,
+    pub show_global_setup: bool,
+    pub global_setup: Option<GlobalSetupState>,
+    pub show_project_setup: bool,
+    pub project_setup: Option<ProjectSetupState>,
+    pub worktree_base: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GlobalSetupStep {
+    #[default]
+    WorktreeLocation,
+    AgentSettings,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GlobalSetupState {
+    pub step: GlobalSetupStep,
+    pub worktree_location: WorktreeLocation,
+    pub ai_agent: AiAgent,
+    pub log_level: ConfigLogLevel,
+    pub field_index: usize,
+    pub dropdown_open: bool,
+    pub dropdown_index: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProjectSetupState {
+    pub config: RepoConfig,
+    pub field_index: usize,
+    pub dropdown_open: bool,
+    pub dropdown_index: usize,
+    pub editing_text: bool,
+    pub text_buffer: String,
 }
 
 /// A log entry with timestamp and level
@@ -74,6 +353,11 @@ pub enum LogLevel {
 
 impl AppState {
     pub fn new(config: Config, repo_path: String) -> Self {
+        let repo_config = RepoConfig::load(&repo_path).unwrap_or_default();
+        let show_logs = config.ui.show_logs;
+
+        let worktree_base = config.worktree_base_path(&repo_path);
+
         Self {
             agents: HashMap::new(),
             agent_order: Vec::new(),
@@ -88,7 +372,7 @@ impl AppState {
             output_scroll: 0,
             repo_path,
             logs: Vec::new(),
-            show_logs: true, // Show logs by default for debugging
+            show_logs,
             animation_frame: 0,
             cpu_history: VecDeque::with_capacity(SYSTEM_METRICS_HISTORY_SIZE),
             memory_history: VecDeque::with_capacity(SYSTEM_METRICS_HISTORY_SIZE),
@@ -96,6 +380,18 @@ impl AppState {
             memory_total: 0,
             loading_message: None,
             preview_content: None,
+            settings: SettingsState {
+                pending_ai_agent: AiAgent::default(),
+                pending_log_level: ConfigLogLevel::default(),
+                pending_worktree_location: WorktreeLocation::default(),
+                repo_config,
+                ..Default::default()
+            },
+            show_global_setup: false,
+            global_setup: None,
+            show_project_setup: false,
+            project_setup: None,
+            worktree_base,
         }
     }
 

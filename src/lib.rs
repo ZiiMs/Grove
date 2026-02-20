@@ -1,7 +1,10 @@
 pub mod agent;
 pub mod app;
 pub mod asana;
+pub mod ci;
+pub mod codeberg;
 pub mod git;
+pub mod github;
 pub mod gitlab;
 pub mod storage;
 pub mod tmux;

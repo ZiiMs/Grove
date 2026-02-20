@@ -6,7 +6,9 @@ use ratatui::{
 };
 
 use crate::agent::{Agent, AgentStatus};
+use crate::app::config::GitProvider;
 use crate::asana::AsanaTaskStatus;
+use crate::github::CheckStatus;
 use crate::gitlab::PipelineStatus;
 
 /// Braille spinner frames for running status
@@ -20,15 +22,22 @@ pub struct AgentListWidget<'a> {
     selected: usize,
     animation_frame: usize,
     count: usize,
+    provider: GitProvider,
 }
 
 impl<'a> AgentListWidget<'a> {
-    pub fn new(agents: &'a [&'a Agent], selected: usize, animation_frame: usize) -> Self {
+    pub fn new(
+        agents: &'a [&'a Agent],
+        selected: usize,
+        animation_frame: usize,
+        provider: GitProvider,
+    ) -> Self {
         Self {
             agents,
             selected,
             animation_frame,
             count: agents.len(),
+            provider,
         }
     }
 
@@ -235,34 +244,120 @@ impl<'a> AgentListWidget<'a> {
     }
 
     fn format_mr_status(&self, agent: &Agent) -> (String, Style) {
-        let mr_text = agent.mr_status.format_short();
-        let mr_style = match &agent.mr_status {
-            crate::gitlab::MergeRequestStatus::None => Style::default().fg(Color::DarkGray),
-            crate::gitlab::MergeRequestStatus::Open { .. } => Style::default().fg(Color::Green),
-            crate::gitlab::MergeRequestStatus::Merged { .. } => Style::default().fg(Color::Magenta),
-            crate::gitlab::MergeRequestStatus::Conflicts { .. } => Style::default().fg(Color::Red),
-            crate::gitlab::MergeRequestStatus::NeedsRebase { .. } => {
-                Style::default().fg(Color::Red)
+        match self.provider {
+            GitProvider::GitLab => {
+                let mr_text = agent.mr_status.format_short();
+                let mr_style = match &agent.mr_status {
+                    crate::gitlab::MergeRequestStatus::None => Style::default().fg(Color::DarkGray),
+                    crate::gitlab::MergeRequestStatus::Open { .. } => {
+                        Style::default().fg(Color::Green)
+                    }
+                    crate::gitlab::MergeRequestStatus::Merged { .. } => {
+                        Style::default().fg(Color::Magenta)
+                    }
+                    crate::gitlab::MergeRequestStatus::Conflicts { .. } => {
+                        Style::default().fg(Color::Red)
+                    }
+                    crate::gitlab::MergeRequestStatus::NeedsRebase { .. } => {
+                        Style::default().fg(Color::Red)
+                    }
+                    crate::gitlab::MergeRequestStatus::Approved { .. } => {
+                        Style::default().fg(Color::Cyan)
+                    }
+                };
+                (mr_text, mr_style)
             }
-            crate::gitlab::MergeRequestStatus::Approved { .. } => Style::default().fg(Color::Cyan),
-        };
-        (mr_text, mr_style)
+            GitProvider::GitHub => {
+                let pr_text = agent.pr_status.format_short();
+                let pr_style = match &agent.pr_status {
+                    crate::github::PullRequestStatus::None => Style::default().fg(Color::DarkGray),
+                    crate::github::PullRequestStatus::Open { .. } => {
+                        Style::default().fg(Color::Green)
+                    }
+                    crate::github::PullRequestStatus::Merged { .. } => {
+                        Style::default().fg(Color::Magenta)
+                    }
+                    crate::github::PullRequestStatus::Closed { .. } => {
+                        Style::default().fg(Color::Red)
+                    }
+                    crate::github::PullRequestStatus::Draft { .. } => {
+                        Style::default().fg(Color::Yellow)
+                    }
+                };
+                (pr_text, pr_style)
+            }
+            GitProvider::Codeberg => {
+                let pr_text = agent.codeberg_pr_status.format_short();
+                let pr_style = match &agent.codeberg_pr_status {
+                    crate::codeberg::PullRequestStatus::None => {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                    crate::codeberg::PullRequestStatus::Open { .. } => {
+                        Style::default().fg(Color::Green)
+                    }
+                    crate::codeberg::PullRequestStatus::Merged { .. } => {
+                        Style::default().fg(Color::Cyan)
+                    }
+                    crate::codeberg::PullRequestStatus::Closed { .. } => {
+                        Style::default().fg(Color::Red)
+                    }
+                    crate::codeberg::PullRequestStatus::Draft { .. } => {
+                        Style::default().fg(Color::Yellow)
+                    }
+                };
+                (pr_text, pr_style)
+            }
+        }
     }
 
     fn format_pipeline_status(&self, agent: &Agent) -> (String, Style) {
-        let pipeline = agent.mr_status.pipeline();
-        let text = format!("{} {}", pipeline.symbol(), pipeline.label());
-        let style = match pipeline {
-            PipelineStatus::None => Style::default().fg(Color::DarkGray),
-            PipelineStatus::Running => Style::default().fg(Color::LightBlue),
-            PipelineStatus::Pending => Style::default().fg(Color::Yellow),
-            PipelineStatus::Success => Style::default().fg(Color::Green),
-            PipelineStatus::Failed => Style::default().fg(Color::Red),
-            PipelineStatus::Canceled => Style::default().fg(Color::DarkGray),
-            PipelineStatus::Skipped => Style::default().fg(Color::DarkGray),
-            PipelineStatus::Manual => Style::default().fg(Color::Magenta),
-        };
-        (text, style)
+        match self.provider {
+            GitProvider::GitLab => {
+                let pipeline = agent.mr_status.pipeline();
+                let text = format!("{} {}", pipeline.symbol(), pipeline.label());
+                let style = match pipeline {
+                    PipelineStatus::None => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Running => Style::default().fg(Color::LightBlue),
+                    PipelineStatus::Pending => Style::default().fg(Color::Yellow),
+                    PipelineStatus::Success => Style::default().fg(Color::Green),
+                    PipelineStatus::Failed => Style::default().fg(Color::Red),
+                    PipelineStatus::Canceled => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Skipped => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Manual => Style::default().fg(Color::Magenta),
+                };
+                (text, style)
+            }
+            GitProvider::GitHub => {
+                let checks = agent.pr_status.checks();
+                let text = format!("{} {}", checks.symbol(), checks.label());
+                let style = match checks {
+                    CheckStatus::None => Style::default().fg(Color::DarkGray),
+                    CheckStatus::Running => Style::default().fg(Color::LightBlue),
+                    CheckStatus::Pending => Style::default().fg(Color::Yellow),
+                    CheckStatus::Success => Style::default().fg(Color::Green),
+                    CheckStatus::Failure => Style::default().fg(Color::Red),
+                    CheckStatus::Cancelled => Style::default().fg(Color::DarkGray),
+                    CheckStatus::Skipped => Style::default().fg(Color::DarkGray),
+                    CheckStatus::TimedOut => Style::default().fg(Color::Red),
+                };
+                (text, style)
+            }
+            GitProvider::Codeberg => {
+                let pipeline = agent.codeberg_pr_status.pipeline();
+                let text = format!("{} {}", pipeline.symbol(), pipeline.label());
+                let style = match pipeline {
+                    PipelineStatus::None => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Running => Style::default().fg(Color::LightBlue),
+                    PipelineStatus::Pending => Style::default().fg(Color::Yellow),
+                    PipelineStatus::Success => Style::default().fg(Color::Green),
+                    PipelineStatus::Failed => Style::default().fg(Color::Red),
+                    PipelineStatus::Canceled => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Skipped => Style::default().fg(Color::DarkGray),
+                    PipelineStatus::Manual => Style::default().fg(Color::Magenta),
+                };
+                (text, style)
+            }
+        }
     }
 
     fn format_asana_status(&self, agent: &Agent) -> (String, Style) {

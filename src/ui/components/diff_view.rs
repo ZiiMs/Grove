@@ -45,18 +45,20 @@ impl<'a> DiffViewWidget<'a> {
     }
 
     fn colorize_diff_line(&self, line: &str) -> Line<'a> {
-        let (style, prefix) = if line.starts_with('+') && !line.starts_with("+++") {
-            (Style::default().fg(Color::Green), "+")
+        let style = if line.starts_with('+') && !line.starts_with("+++") {
+            Style::default().fg(Color::Green)
         } else if line.starts_with('-') && !line.starts_with("---") {
-            (Style::default().fg(Color::Red), "-")
+            Style::default().fg(Color::Red)
         } else if line.starts_with("@@") {
-            (Style::default().fg(Color::Cyan), "@")
-        } else if line.starts_with("diff ") || line.starts_with("index ") {
-            (Style::default().fg(Color::Yellow), "")
-        } else if line.starts_with("---") || line.starts_with("+++") {
-            (Style::default().fg(Color::Yellow), "")
+            Style::default().fg(Color::Cyan)
+        } else if line.starts_with("diff ")
+            || line.starts_with("index ")
+            || line.starts_with("---")
+            || line.starts_with("+++")
+        {
+            Style::default().fg(Color::Yellow)
         } else {
-            (Style::default().fg(Color::White), " ")
+            Style::default().fg(Color::White)
         };
 
         Line::from(Span::styled(line.to_string(), style))

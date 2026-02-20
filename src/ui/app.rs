@@ -9,8 +9,9 @@ use ratatui::{
 use crate::app::{AppState, InputMode, LogLevel};
 
 use super::components::{
-    render_confirm_modal, render_input_modal, AgentListWidget, EmptyOutputWidget, HelpOverlay,
-    LoadingOverlay, OutputViewWidget, StatusBarWidget, SystemMetricsWidget,
+    render_confirm_modal, render_input_modal, AgentListWidget, EmptyOutputWidget,
+    GlobalSetupWizard, HelpOverlay, LoadingOverlay, OutputViewWidget, ProjectSetupWizard,
+    SettingsModal, StatusBarWidget, SystemMetricsWidget,
 };
 
 /// ASCII art banner for FLOCK (with padding)
@@ -38,104 +39,109 @@ impl<'a> AppWidget<'a> {
     pub fn render(self, frame: &mut Frame) {
         let size = frame.area();
 
-        // Calculate dynamic agent list height based on agent count
-        // Each agent takes 2 lines, plus 3 for border and header
+        let show_banner = self.state.config.ui.show_banner;
+        let show_preview = self.state.config.ui.show_preview;
+        let show_metrics = self.state.config.ui.show_metrics;
+        let show_logs = self.state.config.ui.show_logs;
+        let has_message = self.state.error_message.is_some();
+
         let agent_count = self.state.agents.len().max(1);
         let agent_list_height = ((agent_count * 2) + 3).min(size.height as usize / 3) as u16;
 
-        // Main layout: banner, agent list (dynamic), preview (fills space), system metrics, logs (optional), message (optional), footer
-        let has_message = self.state.error_message.is_some();
-        let main_chunks = if self.state.show_logs {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(if has_message {
-                    vec![
-                        Constraint::Length(8),                 // Banner
-                        Constraint::Length(agent_list_height), // Agent list (dynamic)
-                        Constraint::Min(8),                    // Preview pane (fills remaining)
-                        Constraint::Length(6),                 // System metrics (CPU/Memory graphs)
-                        Constraint::Length(6),                 // Log panel
-                        Constraint::Length(3),                 // Message (with border)
-                        Constraint::Length(1),                 // Status bar
-                    ]
-                } else {
-                    vec![
-                        Constraint::Length(8),                 // Banner
-                        Constraint::Length(agent_list_height), // Agent list (dynamic)
-                        Constraint::Min(8),                    // Preview pane (fills remaining)
-                        Constraint::Length(6),                 // System metrics (CPU/Memory graphs)
-                        Constraint::Length(6),                 // Log panel
-                        Constraint::Length(1),                 // Status bar
-                    ]
-                })
-                .split(size)
-        } else {
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(if has_message {
-                    vec![
-                        Constraint::Length(8),                 // Banner
-                        Constraint::Length(agent_list_height), // Agent list (dynamic)
-                        Constraint::Min(10),                   // Preview pane (fills remaining)
-                        Constraint::Length(6),                 // System metrics (CPU/Memory graphs)
-                        Constraint::Length(3),                 // Message (with border)
-                        Constraint::Length(1),                 // Status bar
-                    ]
-                } else {
-                    vec![
-                        Constraint::Length(8),                 // Banner
-                        Constraint::Length(agent_list_height), // Agent list (dynamic)
-                        Constraint::Min(12),                   // Preview pane (fills remaining)
-                        Constraint::Length(6),                 // System metrics (CPU/Memory graphs)
-                        Constraint::Length(1),                 // Status bar
-                    ]
-                })
-                .split(size)
-        };
+        let mut constraints: Vec<Constraint> = Vec::new();
 
-        // Render banner
-        self.render_banner(frame, main_chunks[0]);
+        if show_banner {
+            constraints.push(Constraint::Length(8));
+        }
+        constraints.push(Constraint::Length(agent_list_height));
+        if show_preview {
+            constraints.push(Constraint::Min(8));
+        }
+        if show_metrics {
+            constraints.push(Constraint::Length(6));
+        }
+        if show_logs {
+            constraints.push(Constraint::Length(6));
+        }
+        if has_message {
+            constraints.push(Constraint::Length(3));
+        }
+        constraints.push(Constraint::Length(1));
 
-        // Render agent list
-        self.render_agent_list(frame, main_chunks[1]);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(size);
 
-        // Render preview pane
-        self.render_preview(frame, main_chunks[2]);
+        let mut chunk_idx = 0;
 
-        // Render system metrics (CPU/Memory graphs)
-        self.render_system_metrics(frame, main_chunks[3]);
-
-        let has_message = self.state.error_message.is_some();
-
-        if self.state.show_logs {
-            // Render log panel
-            self.render_logs(frame, main_chunks[4]);
-            if has_message {
-                self.render_message(frame, main_chunks[5]);
-                self.render_footer(frame, main_chunks[6]);
-            } else {
-                self.render_footer(frame, main_chunks[5]);
-            }
-        } else {
-            if has_message {
-                self.render_message(frame, main_chunks[4]);
-                self.render_footer(frame, main_chunks[5]);
-            } else {
-                self.render_footer(frame, main_chunks[4]);
-            }
+        if show_banner {
+            self.render_banner(frame, chunks[chunk_idx]);
+            chunk_idx += 1;
         }
 
-        // Render help overlay if active
+        self.render_agent_list(frame, chunks[chunk_idx]);
+        chunk_idx += 1;
+
+        if show_preview {
+            self.render_preview(frame, chunks[chunk_idx]);
+            chunk_idx += 1;
+        }
+
+        if show_metrics {
+            self.render_system_metrics(frame, chunks[chunk_idx]);
+            chunk_idx += 1;
+        }
+
+        if show_logs {
+            self.render_logs(frame, chunks[chunk_idx]);
+            chunk_idx += 1;
+        }
+
+        if has_message {
+            self.render_message(frame, chunks[chunk_idx]);
+            chunk_idx += 1;
+        }
+
+        self.render_footer(frame, chunks[chunk_idx]);
+
         if self.state.show_help {
             HelpOverlay::render(frame, size);
         }
 
-        // Render modal if in input mode
+        if self.state.settings.active {
+            SettingsModal::new(
+                &self.state.settings,
+                &self.state.config.global.ai_agent,
+                &self.state.config.global.log_level,
+                &self.state.config.global.worktree_location,
+                &self.state.config.ui,
+            )
+            .render(frame);
+        }
+
+        if self.state.show_global_setup {
+            if let Some(wizard_state) = &self.state.global_setup {
+                let wizard = GlobalSetupWizard::new(wizard_state);
+                wizard.render(frame);
+            }
+        }
+
+        if self.state.show_project_setup {
+            if let Some(wizard_state) = &self.state.project_setup {
+                let repo_name = std::path::Path::new(&self.state.repo_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Project");
+                let wizard = ProjectSetupWizard::new(wizard_state, repo_name);
+                wizard.render(frame);
+            }
+        }
+
         if let Some(mode) = &self.state.input_mode {
             self.render_modal(frame, mode, size);
         }
 
-        // Render loading overlay if loading
         if let Some(message) = &self.state.loading_message {
             LoadingOverlay::render(frame, message, self.state.animation_frame);
         }
@@ -196,7 +202,7 @@ impl<'a> AppWidget<'a> {
                 render_confirm_modal(
                     frame,
                     "Push",
-                    &format!("Send /push to '{}'?", agent_name),
+                    &format!("Push changes from '{}'?", agent_name),
                     "y",
                     "Esc",
                 );
@@ -272,6 +278,7 @@ impl<'a> AppWidget<'a> {
                 &agents,
                 self.state.selected_index,
                 self.state.animation_frame,
+                self.state.settings.repo_config.git.provider,
             )
             .with_count(self.state.agents.len())
             .render(frame, area);
