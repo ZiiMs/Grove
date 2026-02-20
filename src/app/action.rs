@@ -113,6 +113,16 @@ pub enum Action {
     CycleTaskStatus {
         id: Uuid,
     },
+    OpenTaskStatusDropdown {
+        id: Uuid,
+    },
+    TaskStatusOptionsLoaded {
+        id: Uuid,
+        options: Vec<crate::app::StatusOption>,
+    },
+    TaskStatusDropdownNext,
+    TaskStatusDropdownPrev,
+    TaskStatusDropdownSelect,
     OpenProjectTaskInBrowser {
         id: Uuid,
     },
@@ -263,4 +273,5 @@ pub enum InputMode {
     AssignAsana,
     ConfirmDeleteAsana,
     BrowseTasks,
+    SelectTaskStatus,
 }

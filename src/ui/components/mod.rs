@@ -10,6 +10,7 @@ pub mod output_view;
 pub mod project_setup;
 pub mod settings_modal;
 pub mod status_bar;
+pub mod status_dropdown;
 pub mod system_metrics;
 pub mod task_list_modal;
 
@@ -25,5 +26,6 @@ pub use output_view::{EmptyOutputWidget, OutputViewWidget};
 pub use project_setup::ProjectSetupWizard;
 pub use settings_modal::SettingsModal;
 pub use status_bar::{InputBarWidget, StatusBarWidget};
+pub use status_dropdown::StatusDropdown;
 pub use system_metrics::SystemMetricsWidget;
 pub use task_list_modal::TaskListModal;

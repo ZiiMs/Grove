@@ -21,6 +21,7 @@ pub struct StatusOptions {
     pub not_started_id: Option<String>,
     pub in_progress_id: Option<String>,
     pub done_id: Option<String>,
+    pub all_options: Vec<super::types::NotionStatusOption>,
 }
 
 impl NotionClient {
@@ -243,6 +244,7 @@ impl NotionClient {
             not_started_id,
             in_progress_id,
             done_id,
+            all_options: status.options.clone(),
         })
     }
 

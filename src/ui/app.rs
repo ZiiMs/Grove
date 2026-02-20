@@ -15,7 +15,7 @@ use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
     DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GlobalSetupWizard, HelpOverlay,
     LoadingOverlay, OutputViewWidget, ProjectSetupWizard, SettingsModal, StatusBarWidget,
-    SystemMetricsWidget, TaskListModal,
+    StatusDropdown, SystemMetricsWidget, TaskListModal,
 };
 
 #[derive(Clone)]
@@ -310,6 +310,11 @@ impl<'a> AppWidget<'a> {
                     &assigned_tasks,
                 )
                 .render(frame);
+            }
+            InputMode::SelectTaskStatus => {
+                if let Some(dropdown) = &self.state.task_status_dropdown {
+                    StatusDropdown::new(dropdown).render(frame);
+                }
             }
         }
     }

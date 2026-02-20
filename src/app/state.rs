@@ -410,6 +410,7 @@ pub struct AppState {
     pub task_list: Vec<TaskListItem>,
     pub task_list_loading: bool,
     pub task_list_selected: usize,
+    pub task_status_dropdown: Option<TaskStatusDropdownState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -438,6 +439,19 @@ pub struct ProjectSetupState {
     pub dropdown_index: usize,
     pub editing_text: bool,
     pub text_buffer: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskStatusDropdownState {
+    pub agent_id: Uuid,
+    pub status_options: Vec<StatusOption>,
+    pub selected_index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct StatusOption {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -502,6 +516,7 @@ impl AppState {
             task_list: Vec::new(),
             task_list_loading: false,
             task_list_selected: 0,
+            task_status_dropdown: None,
         }
     }
 
@@ -622,6 +637,7 @@ impl AppState {
     pub fn exit_input_mode(&mut self) {
         self.input_mode = None;
         self.input_buffer.clear();
+        self.task_status_dropdown = None;
     }
 
     pub fn record_system_metrics(&mut self, cpu_percent: f32, memory_used: u64, memory_total: u64) {
