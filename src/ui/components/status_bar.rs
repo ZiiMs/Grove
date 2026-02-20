@@ -21,6 +21,7 @@ impl<'a> StatusBarWidget<'a> {
             ("n", "new"),
             ("Enter", "attach"),
             ("d", "delete"),
+            ("R", "refresh"),
             ("S", "settings"),
             ("?", "help"),
             ("q", "quit"),
