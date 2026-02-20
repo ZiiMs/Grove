@@ -201,6 +201,26 @@ pub enum Action {
     GlobalSetupConfirmDropdown,
     GlobalSetupComplete,
 
+    // Dev Server
+    RequestStartDevServer,
+    ConfirmStartDevServer,
+    StartDevServer,
+    StopDevServer,
+    RestartDevServer,
+    NextPreviewTab,
+    PrevPreviewTab,
+    ClearDevServerLogs,
+    OpenDevServerInBrowser,
+    DismissDevServerWarning,
+    AppendDevServerLog {
+        agent_id: Uuid,
+        line: String,
+    },
+    UpdateDevServerStatus {
+        agent_id: Uuid,
+        status: crate::devserver::DevServerStatus,
+    },
+
     // Project Setup Wizard
     ProjectSetupNavigateNext,
     ProjectSetupNavigatePrev,

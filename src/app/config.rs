@@ -426,6 +426,8 @@ pub struct RepoConfig {
     pub asana: RepoAsanaConfig,
     #[serde(default)]
     pub prompts: PromptsConfig,
+    #[serde(default)]
+    pub dev_server: DevServerConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -443,7 +445,7 @@ impl PromptsConfig {
             "Please provide a brief, non-technical summary of the work done on this branch. \
              Format it as 1-5 bullet points suitable for sharing with non-technical colleagues on Slack. \
              Focus on what was accomplished and why, not implementation details. \
-             Keep each bullet point to one sentence."
+             Keep each bullet point to one sentence.",
         )
     }
 
@@ -595,6 +597,18 @@ pub struct RepoAsanaConfig {
     pub project_gid: Option<String>,
     pub in_progress_section_gid: Option<String>,
     pub done_section_gid: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DevServerConfig {
+    pub command: Option<String>,
+    #[serde(default)]
+    pub run_before: Vec<String>,
+    #[serde(default)]
+    pub working_dir: String,
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub auto_start: bool,
 }
 
 impl RepoConfig {

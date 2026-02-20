@@ -11,11 +11,25 @@ use crate::agent::Agent;
 
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreviewTab {
+    #[default]
+    Preview,
+    DevServer,
+}
+
+#[derive(Debug, Clone)]
+pub struct DevServerWarning {
+    pub agent_id: Uuid,
+    pub running_servers: Vec<(String, Option<u16>)>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     General,
     Git,
     ProjectMgmt,
+    DevServer,
 }
 
 impl SettingsTab {
@@ -24,6 +38,7 @@ impl SettingsTab {
             SettingsTab::General,
             SettingsTab::Git,
             SettingsTab::ProjectMgmt,
+            SettingsTab::DevServer,
         ]
     }
 
@@ -32,6 +47,7 @@ impl SettingsTab {
             SettingsTab::General => "General",
             SettingsTab::Git => "Git",
             SettingsTab::ProjectMgmt => "Project Mgmt",
+            SettingsTab::DevServer => "Dev Server",
         }
     }
 
@@ -39,15 +55,17 @@ impl SettingsTab {
         match self {
             SettingsTab::General => SettingsTab::Git,
             SettingsTab::Git => SettingsTab::ProjectMgmt,
-            SettingsTab::ProjectMgmt => SettingsTab::General,
+            SettingsTab::ProjectMgmt => SettingsTab::DevServer,
+            SettingsTab::DevServer => SettingsTab::General,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            SettingsTab::General => SettingsTab::ProjectMgmt,
+            SettingsTab::General => SettingsTab::DevServer,
             SettingsTab::Git => SettingsTab::General,
             SettingsTab::ProjectMgmt => SettingsTab::Git,
+            SettingsTab::DevServer => SettingsTab::ProjectMgmt,
         }
     }
 }
@@ -79,6 +97,11 @@ pub enum SettingsField {
     SummaryPrompt,
     MergePrompt,
     PushPrompt,
+    DevServerCommand,
+    DevServerRunBefore,
+    DevServerWorkingDir,
+    DevServerPort,
+    DevServerAutoStart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +114,7 @@ pub enum SettingsCategory {
     Ci,
     Asana,
     Prompts,
+    DevServer,
 }
 
 impl SettingsCategory {
@@ -104,6 +128,7 @@ impl SettingsCategory {
             SettingsCategory::Ci => "CI/CD",
             SettingsCategory::Asana => "Asana",
             SettingsCategory::Prompts => "Prompts",
+            SettingsCategory::DevServer => "Dev Server",
         }
     }
 }
@@ -142,6 +167,11 @@ impl SettingsField {
             SettingsField::AsanaProjectGid
             | SettingsField::AsanaInProgressGid
             | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
+            SettingsField::DevServerCommand
+            | SettingsField::DevServerRunBefore
+            | SettingsField::DevServerWorkingDir
+            | SettingsField::DevServerPort
+            | SettingsField::DevServerAutoStart => SettingsTab::DevServer,
         }
     }
 
@@ -205,6 +235,14 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::AsanaProjectGid),
                 SettingsItem::Field(SettingsField::AsanaInProgressGid),
                 SettingsItem::Field(SettingsField::AsanaDoneGid),
+            ],
+            SettingsTab::DevServer => vec![
+                SettingsItem::Category(SettingsCategory::DevServer),
+                SettingsItem::Field(SettingsField::DevServerCommand),
+                SettingsItem::Field(SettingsField::DevServerRunBefore),
+                SettingsItem::Field(SettingsField::DevServerWorkingDir),
+                SettingsItem::Field(SettingsField::DevServerPort),
+                SettingsItem::Field(SettingsField::DevServerAutoStart),
             ],
         }
     }
@@ -298,7 +336,6 @@ impl SettingsState {
     }
 }
 
-/// The single source of truth for application state.
 #[derive(Debug)]
 pub struct AppState {
     pub agents: HashMap<Uuid, Agent>,
@@ -328,6 +365,9 @@ pub struct AppState {
     pub show_project_setup: bool,
     pub project_setup: Option<ProjectSetupState>,
     pub worktree_base: std::path::PathBuf,
+    pub preview_tab: PreviewTab,
+    pub devserver_scroll: usize,
+    pub devserver_warning: Option<DevServerWarning>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -358,7 +398,6 @@ pub struct ProjectSetupState {
     pub text_buffer: String,
 }
 
-/// A log entry with timestamp and level
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub timestamp: chrono::DateTime<chrono::Utc>,
@@ -415,15 +454,16 @@ impl AppState {
             show_project_setup: false,
             project_setup: None,
             worktree_base,
+            preview_tab: PreviewTab::default(),
+            devserver_scroll: 0,
+            devserver_warning: None,
         }
     }
 
-    /// Advance the animation frame (cycles 0-9)
     pub fn advance_animation(&mut self) {
         self.animation_frame = (self.animation_frame + 1) % 10;
     }
 
-    /// Add a log entry
     pub fn log(&mut self, level: LogLevel, message: impl Into<String>) {
         let entry = LogEntry {
             timestamp: Utc::now(),
@@ -431,7 +471,6 @@ impl AppState {
             message: message.into(),
         };
         self.logs.push(entry);
-        // Keep only last 100 logs
         if self.logs.len() > 100 {
             self.logs.remove(0);
         }
@@ -453,14 +492,12 @@ impl AppState {
         self.log(LogLevel::Debug, message);
     }
 
-    /// Get the currently selected agent
     pub fn selected_agent(&self) -> Option<&Agent> {
         self.agent_order
             .get(self.selected_index)
             .and_then(|id| self.agents.get(id))
     }
 
-    /// Get the currently selected agent mutably
     pub fn selected_agent_mut(&mut self) -> Option<&mut Agent> {
         self.agent_order
             .get(self.selected_index)
@@ -468,12 +505,10 @@ impl AppState {
             .and_then(move |id| self.agents.get_mut(&id))
     }
 
-    /// Get the ID of the currently selected agent
     pub fn selected_agent_id(&self) -> Option<Uuid> {
         self.agent_order.get(self.selected_index).cloned()
     }
 
-    /// Add a new agent
     pub fn add_agent(&mut self, agent: Agent) {
         let id = agent.id;
         self.agents.insert(id, agent);
@@ -481,7 +516,6 @@ impl AppState {
         self.sort_agents_by_created();
     }
 
-    /// Sort agent_order by creation time (oldest first)
     fn sort_agents_by_created(&mut self) {
         let agents = &self.agents;
         self.agent_order.sort_by(|a, b| {
@@ -491,11 +525,9 @@ impl AppState {
         });
     }
 
-    /// Remove an agent by ID
     pub fn remove_agent(&mut self, id: Uuid) -> Option<Agent> {
         if let Some(pos) = self.agent_order.iter().position(|&x| x == id) {
             self.agent_order.remove(pos);
-            // Adjust selected index if needed
             if self.selected_index >= self.agent_order.len() && self.selected_index > 0 {
                 self.selected_index -= 1;
             }
@@ -503,7 +535,6 @@ impl AppState {
         self.agents.remove(&id)
     }
 
-    /// Move selection to next agent
     pub fn select_next(&mut self) {
         if !self.agent_order.is_empty() {
             self.selected_index = (self.selected_index + 1) % self.agent_order.len();
@@ -511,7 +542,6 @@ impl AppState {
         }
     }
 
-    /// Move selection to previous agent
     pub fn select_previous(&mut self) {
         if !self.agent_order.is_empty() {
             self.selected_index = if self.selected_index == 0 {
@@ -523,13 +553,11 @@ impl AppState {
         }
     }
 
-    /// Select first agent
     pub fn select_first(&mut self) {
         self.selected_index = 0;
         self.output_scroll = 0;
     }
 
-    /// Select last agent
     pub fn select_last(&mut self) {
         if !self.agent_order.is_empty() {
             self.selected_index = self.agent_order.len() - 1;
@@ -537,32 +565,26 @@ impl AppState {
         }
     }
 
-    /// Check if we're in input mode
     pub fn is_input_mode(&self) -> bool {
         self.input_mode.is_some()
     }
 
-    /// Enter input mode
     pub fn enter_input_mode(&mut self, mode: InputMode) {
         self.input_mode = Some(mode);
         self.input_buffer.clear();
     }
 
-    /// Exit input mode
     pub fn exit_input_mode(&mut self) {
         self.input_mode = None;
         self.input_buffer.clear();
     }
 
-    /// Record global system metrics
     pub fn record_system_metrics(&mut self, cpu_percent: f32, memory_used: u64, memory_total: u64) {
-        // CPU history
         if self.cpu_history.len() >= SYSTEM_METRICS_HISTORY_SIZE {
             self.cpu_history.pop_front();
         }
         self.cpu_history.push_back(cpu_percent);
 
-        // Memory history (as percentage)
         let memory_percent = if memory_total > 0 {
             (memory_used as f64 / memory_total as f64 * 100.0) as f32
         } else {
