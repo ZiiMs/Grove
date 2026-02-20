@@ -874,8 +874,8 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         return match key.code {
             KeyCode::Esc => Some(Action::SettingsCancelSelection),
             KeyCode::Enter => Some(Action::SettingsConfirmSelection),
-            KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
-            KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsDropdownPrev),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsDropdownNext),
             _ => None,
         };
     }
@@ -2373,6 +2373,34 @@ async fn process_action(
         }
 
         Action::SettingsSelectNext => {
+            if state.settings.editing_text {
+            } else {
+                let total = state.settings.total_fields();
+                state.settings.field_index = (state.settings.field_index + 1) % total;
+            }
+        }
+
+        Action::SettingsSelectPrev => {
+            if state.settings.editing_text {
+            } else {
+                let total = state.settings.total_fields();
+                state.settings.field_index = if state.settings.field_index == 0 {
+                    total.saturating_sub(1)
+                } else {
+                    state.settings.field_index - 1
+                };
+            }
+        }
+
+        Action::SettingsDropdownPrev => {
+            if let flock::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
+                state.settings.dropdown = flock::app::DropdownState::Open {
+                    selected_index: selected_index.saturating_sub(1),
+                };
+            }
+        }
+
+        Action::SettingsDropdownNext => {
             let field = state.settings.current_field();
             if let flock::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
                 let max = match field {
@@ -2385,30 +2413,13 @@ async fn process_action(
                     flock::app::SettingsField::CodebergCiProvider => {
                         flock::app::CodebergCiProvider::all().len()
                     }
+                    flock::app::SettingsField::ProjectMgmtProvider => {
+                        flock::app::ProjectMgmtProvider::all().len()
+                    }
                     _ => 0,
                 };
                 state.settings.dropdown = flock::app::DropdownState::Open {
                     selected_index: (*selected_index + 1).min(max.saturating_sub(1)),
-                };
-            } else if state.settings.editing_text {
-            } else {
-                let total = state.settings.total_fields();
-                state.settings.field_index = (state.settings.field_index + 1) % total;
-            }
-        }
-
-        Action::SettingsSelectPrev => {
-            if let flock::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
-                state.settings.dropdown = flock::app::DropdownState::Open {
-                    selected_index: selected_index.saturating_sub(1),
-                };
-            } else if state.settings.editing_text {
-            } else {
-                let total = state.settings.total_fields();
-                state.settings.field_index = if state.settings.field_index == 0 {
-                    total.saturating_sub(1)
-                } else {
-                    state.settings.field_index - 1
                 };
             }
         }

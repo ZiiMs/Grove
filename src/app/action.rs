@@ -183,6 +183,8 @@ pub enum Action {
     SettingsClose,
     SettingsSave,
     SettingsPromptSave,
+    SettingsDropdownPrev,
+    SettingsDropdownNext,
 
     GlobalSetupNextStep,
     GlobalSetupPrevStep,
