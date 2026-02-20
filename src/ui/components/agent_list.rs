@@ -55,8 +55,8 @@ impl<'a> AgentListWidget<'a> {
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let header_cells = [
-            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Asana",
-            "Server", "Note",
+            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Server",
+            "Asana", "Note",
         ]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
@@ -91,8 +91,8 @@ impl<'a> AgentListWidget<'a> {
                         Cell::from("────────"),
                         Cell::from("──────────"),
                         Cell::from("──────────"),
-                        Cell::from("────────────────"),
                         Cell::from("────────"),
+                        Cell::from("────────────────"),
                         Cell::from("──────────"),
                     ])
                     .style(Style::default().fg(Color::DarkGray));
@@ -113,8 +113,8 @@ impl<'a> AgentListWidget<'a> {
                 Constraint::Length(8),  // Tasks (checklist progress)
                 Constraint::Length(10), // MR
                 Constraint::Length(10), // Pipeline
-                Constraint::Length(16), // Asana
                 Constraint::Length(10), // Server
+                Constraint::Length(16), // Asana
                 Constraint::Min(10),    // Note (fills remaining)
             ],
         )
@@ -188,13 +188,13 @@ impl<'a> AgentListWidget<'a> {
         let (pipeline_text, pipeline_style) = self.format_pipeline_status(agent);
         let pipeline_cell = Cell::from(pipeline_text).style(pipeline_style);
 
-        // Asana column
-        let (asana_text, asana_style) = self.format_asana_status(agent);
-        let asana_cell = Cell::from(asana_text).style(asana_style);
-
         // Server column
         let (server_text, server_style) = self.format_devserver_status(agent);
         let server_cell = Cell::from(server_text).style(server_style);
+
+        // Asana column
+        let (asana_text, asana_style) = self.format_asana_status(agent);
+        let asana_cell = Cell::from(asana_text).style(asana_style);
 
         // Note column
         let note = agent.custom_note.as_deref().unwrap_or("");
@@ -218,8 +218,8 @@ impl<'a> AgentListWidget<'a> {
             tasks_cell,
             mr_cell,
             pipeline_cell,
-            asana_cell,
             server_cell,
+            asana_cell,
             note_cell,
         ])
     }
@@ -391,20 +391,22 @@ impl<'a> AgentListWidget<'a> {
         let status = self.devserver_statuses.get(&agent.id);
 
         match status {
-            Some(DevServerStatus::Running { port, .. }) => {
-                let port_str = port.map(|p| format!(":{}", p)).unwrap_or_default();
-                (format!("●{}", port_str), Style::default().fg(Color::Green))
+            Some(DevServerStatus::Running { .. }) => {
+                ("● Running".to_string(), Style::default().fg(Color::Green))
             }
             Some(DevServerStatus::Starting) => {
-                ("◐".to_string(), Style::default().fg(Color::Yellow))
+                ("◐ Starting".to_string(), Style::default().fg(Color::Yellow))
             }
             Some(DevServerStatus::Stopping) => {
-                ("◑".to_string(), Style::default().fg(Color::Yellow))
+                ("◑ Stopping".to_string(), Style::default().fg(Color::Yellow))
             }
-            Some(DevServerStatus::Failed(_)) => ("✗".to_string(), Style::default().fg(Color::Red)),
-            Some(DevServerStatus::Stopped) | None => {
-                ("○".to_string(), Style::default().fg(Color::DarkGray))
+            Some(DevServerStatus::Failed(_)) => {
+                ("✗ Failed".to_string(), Style::default().fg(Color::Red))
             }
+            Some(DevServerStatus::Stopped) | None => (
+                "○ Stopped".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
         }
     }
 
