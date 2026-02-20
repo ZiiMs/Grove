@@ -1,7 +1,7 @@
 # Rust build artifacts
 /target
 .flock/
-
+.flock/*
 # Editor files
 *.swp
 *.swo
@@ -28,3 +28,4 @@
 # Debug files
 *.log
 *.pdb
+
