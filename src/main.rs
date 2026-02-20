@@ -19,14 +19,15 @@ use uuid::Uuid;
 
 use flock::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
-    AgentStatus, ForegroundProcess,
+    AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
 };
-use flock::app::{Action, AppState, Config, InputMode};
+use flock::app::{Action, AppState, Config, InputMode, ProjectMgmtProvider};
 use flock::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use flock::codeberg::OptionalCodebergClient;
 use flock::git::GitSync;
 use flock::github::OptionalGitHubClient;
 use flock::gitlab::OptionalGitLabClient;
+use flock::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
 use flock::storage::{save_session, SessionStorage};
 use flock::tmux::is_tmux_available;
 use flock::ui::AppWidget;
@@ -114,7 +115,8 @@ async fn main() -> Result<()> {
 
     if let Ok(Some(session)) = storage.load() {
         let count = session.agents.len();
-        for agent in session.agents {
+        for mut agent in session.agents {
+            agent.migrate_legacy();
             state.add_agent(agent);
         }
         state.selected_index = session
@@ -127,7 +129,27 @@ async fn main() -> Result<()> {
 
     let gitlab_base_url = &state.settings.repo_config.git.gitlab.base_url;
     let gitlab_project_id = state.settings.repo_config.git.gitlab.project_id;
-    let asana_project_gid = state.settings.repo_config.asana.project_gid.clone();
+    let asana_project_gid = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .asana
+        .project_gid
+        .clone();
+    let notion_database_id = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .notion
+        .database_id
+        .clone();
+    let notion_status_property = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .notion
+        .status_property_name
+        .clone();
 
     let gitlab_client = Arc::new(OptionalGitLabClient::new(
         gitlab_base_url,
@@ -178,11 +200,6 @@ async fn main() -> Result<()> {
         codeberg_ci_provider,
         Config::woodpecker_token().as_deref(),
         codeberg_woodpecker_repo_id,
-    ));
-
-    let asana_client = Arc::new(OptionalAsanaClient::new(
-        Config::asana_token().as_deref(),
-        asana_project_gid,
     ));
 
     // Setup terminal
@@ -328,16 +345,42 @@ async fn main() -> Result<()> {
         state.log_debug(msg);
     }
 
-    // Create watch channel for Asana task tracking (agent_id, task_gid) pairs
+    let asana_client = Arc::new(OptionalAsanaClient::new(
+        Config::asana_token().as_deref(),
+        asana_project_gid,
+    ));
+
+    let notion_client = Arc::new(OptionalNotionClient::new(
+        Config::notion_token().as_deref(),
+        notion_database_id,
+        notion_status_property,
+    ));
+
+    let pm_provider = state.settings.repo_config.project_mgmt.provider;
+
     let initial_asana_tasks: Vec<(Uuid, String)> = state
         .agents
         .values()
-        .filter_map(|a| a.asana_task_status.gid().map(|gid| (a.id, gid.to_string())))
+        .filter_map(|a| {
+            a.pm_task_status
+                .as_asana()
+                .and_then(|s| s.gid().map(|gid| (a.id, gid.to_string())))
+        })
         .collect();
     let (asana_watch_tx, asana_watch_rx) = watch::channel(initial_asana_tasks);
 
-    // Start Asana polling task (if configured)
-    if asana_client.is_configured() {
+    let initial_notion_tasks: Vec<(Uuid, String)> = state
+        .agents
+        .values()
+        .filter_map(|a| {
+            a.pm_task_status
+                .as_notion()
+                .and_then(|s| s.page_id().map(|id| (a.id, id.to_string())))
+        })
+        .collect();
+    let (notion_watch_tx, notion_watch_rx) = watch::channel(initial_notion_tasks);
+
+    if asana_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Asana) {
         let asana_poll_tx = action_tx.clone();
         let asana_client_clone = Arc::clone(&asana_client);
         let refresh_secs = config.asana.refresh_secs;
@@ -353,6 +396,24 @@ async fn main() -> Result<()> {
         state.log_info("Asana integration enabled".to_string());
     } else {
         state.log_debug("Asana not configured (set ASANA_TOKEN)".to_string());
+    }
+
+    if notion_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Notion) {
+        let notion_poll_tx = action_tx.clone();
+        let notion_client_clone = Arc::clone(&notion_client);
+        let refresh_secs = config.notion.refresh_secs;
+        tokio::spawn(async move {
+            poll_notion_tasks(
+                notion_watch_rx,
+                notion_client_clone,
+                notion_poll_tx,
+                refresh_secs,
+            )
+            .await;
+        });
+        state.log_info("Notion integration enabled".to_string());
+    } else {
+        state.log_debug("Notion not configured (set NOTION_TOKEN and database_id)".to_string());
     }
 
     // Main event loop
@@ -435,12 +496,15 @@ async fn main() -> Result<()> {
                 &github_client,
                 &codeberg_client,
                 &asana_client,
+                &notion_client,
+                pm_provider,
                 &storage,
                 &action_tx,
                 &agent_watch_tx,
                 &branch_watch_tx,
                 &selected_watch_tx,
                 &asana_watch_tx,
+                &notion_watch_tx,
             )
             .await
             {
@@ -636,12 +700,12 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         // These actions work regardless of pause state
         KeyCode::Char('n') => Some(Action::EnterInputMode(InputMode::NewAgent)),
         KeyCode::Char('d') => {
-            let has_asana = state
+            let has_task = state
                 .selected_agent()
-                .map(|a| a.asana_task_status.is_linked())
+                .map(|a| a.pm_task_status.is_linked())
                 .unwrap_or(false);
-            if has_asana {
-                Some(Action::EnterInputMode(InputMode::ConfirmDeleteAsana))
+            if has_task {
+                Some(Action::EnterInputMode(InputMode::ConfirmDeleteTask))
             } else {
                 Some(Action::EnterInputMode(InputMode::ConfirmDelete))
             }
@@ -694,11 +758,10 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
             }
         }
 
-        // Asana operations
-        KeyCode::Char('a') => Some(Action::EnterInputMode(InputMode::AssignAsana)),
+        KeyCode::Char('a') => Some(Action::EnterInputMode(InputMode::AssignProjectTask)),
         KeyCode::Char('A') => state
             .selected_agent_id()
-            .map(|id| Action::OpenAsanaInBrowser { id }),
+            .map(|id| Action::OpenProjectTaskInBrowser { id }),
 
         // Other
         KeyCode::Char('R') => Some(Action::RefreshAll),
@@ -711,7 +774,19 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
 
 /// Handle key events in input mode.
 fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
-    // Special 3-way confirm for delete with Asana: y=delete+complete, n=delete only, Esc=cancel
+    if matches!(state.input_mode, Some(InputMode::ConfirmDeleteTask)) {
+        return match key {
+            KeyCode::Char('y') | KeyCode::Char('Y') => state
+                .selected_agent_id()
+                .map(|id| Action::DeleteAgentAndCompleteTask { id }),
+            KeyCode::Char('n') | KeyCode::Char('N') => state
+                .selected_agent_id()
+                .map(|id| Action::DeleteAgent { id }),
+            KeyCode::Esc => Some(Action::ExitInputMode),
+            _ => None,
+        };
+    }
+
     if matches!(state.input_mode, Some(InputMode::ConfirmDeleteAsana)) {
         return match key {
             KeyCode::Char('y') | KeyCode::Char('Y') => state
@@ -725,7 +800,6 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
         };
     }
 
-    // Check if we're in a confirmation mode
     let is_confirm_mode = matches!(
         state.input_mode,
         Some(InputMode::ConfirmDelete)
@@ -829,12 +903,15 @@ async fn process_action(
     github_client: &Arc<OptionalGitHubClient>,
     codeberg_client: &Arc<OptionalCodebergClient>,
     asana_client: &Arc<OptionalAsanaClient>,
+    notion_client: &Arc<OptionalNotionClient>,
+    pm_provider: ProjectMgmtProvider,
     _storage: &SessionStorage,
     action_tx: &mpsc::UnboundedSender<Action>,
     agent_watch_tx: &watch::Sender<HashSet<Uuid>>,
     branch_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     selected_watch_tx: &watch::Sender<Option<Uuid>>,
     asana_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
+    notion_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
 ) -> Result<bool> {
     match action {
         Action::Quit => {
@@ -964,7 +1041,13 @@ async fn process_action(
                 if let Some(task_gid) = agent.asana_task_status.gid() {
                     let gid = task_gid.to_string();
                     let client = Arc::clone(asana_client);
-                    let done_gid = state.settings.repo_config.asana.done_section_gid.clone();
+                    let done_gid = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .asana
+                        .done_section_gid
+                        .clone();
                     tokio::spawn(async move {
                         let _ = client.move_to_done(&gid, done_gid.as_deref()).await;
                         let _ = client.complete_task(&gid).await;
@@ -993,25 +1076,28 @@ async fn process_action(
                     return Ok(false);
                 }
 
-                // Trust the process-informed detector directly
                 let final_status = status;
 
-                // Only log if status actually changed
                 let old_label = agent.status.label();
                 let new_label = final_status.label();
                 let name = agent.name.clone();
                 let changed = old_label != new_label;
 
-                // Check if transitioning to Running with a NotStarted Asana task
-                let should_move_asana = changed
-                    && matches!(&final_status, AgentStatus::Running)
-                    && matches!(&agent.asana_task_status, AsanaTaskStatus::NotStarted { .. });
-                let asana_info = if should_move_asana {
-                    if let AsanaTaskStatus::NotStarted { gid, name, url } = &agent.asana_task_status
-                    {
-                        Some((id, gid.clone(), name.clone(), url.clone()))
-                    } else {
-                        None
+                let pm_transition_info = if changed && matches!(&final_status, AgentStatus::Running)
+                {
+                    match &agent.pm_task_status {
+                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                            gid,
+                            name,
+                            url,
+                        }) => Some((id, pm_provider, gid.clone(), name.clone(), url.clone())),
+                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                            page_id,
+                            name,
+                            url,
+                            status_option_id: _,
+                        }) => Some((id, pm_provider, page_id.clone(), name.clone(), url.clone())),
+                        _ => None,
                     }
                 } else {
                     None
@@ -1022,37 +1108,97 @@ async fn process_action(
                     state.log_debug(format!("Agent '{}': {} -> {}", name, old_label, new_label));
                 }
 
-                // Move Asana task to In Progress when agent starts running
-                if let Some((agent_id, task_gid, task_name, task_url)) = asana_info {
-                    if let Some(agent) = state.agents.get_mut(&agent_id) {
-                        agent.asana_task_status = AsanaTaskStatus::InProgress {
-                            gid: task_gid.clone(),
-                            name: task_name.clone(),
-                            url: task_url.clone(),
-                        };
-                    }
-                    let client = Arc::clone(asana_client);
-                    let override_gid = state
-                        .settings
-                        .repo_config
-                        .asana
-                        .in_progress_section_gid
-                        .clone();
-                    let tx = action_tx.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = client
-                            .move_to_in_progress(&task_gid, override_gid.as_deref())
-                            .await
-                        {
-                            let _ = tx.send(Action::UpdateAsanaTaskStatus {
-                                id: agent_id,
-                                status: AsanaTaskStatus::Error {
-                                    gid: task_gid,
-                                    message: format!("Failed to move to In Progress: {}", e),
-                                },
+                if let Some((agent_id, provider, task_id, task_name, task_url)) = pm_transition_info
+                {
+                    match provider {
+                        ProjectMgmtProvider::Asana => {
+                            if let Some(agent) = state.agents.get_mut(&agent_id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
+                                        gid: task_id.clone(),
+                                        name: task_name.clone(),
+                                        url: task_url.clone(),
+                                    });
+                            }
+                            let client = Arc::clone(asana_client);
+                            let override_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .in_progress_section_gid
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client
+                                    .move_to_in_progress(&task_id, override_gid.as_deref())
+                                    .await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Asana(
+                                            AsanaTaskStatus::Error {
+                                                gid: task_id,
+                                                message: format!(
+                                                    "Failed to move to In Progress: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
                             });
                         }
-                    });
+                        ProjectMgmtProvider::Notion => {
+                            if let Some(agent) = state.agents.get_mut(&agent_id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::InProgress {
+                                        page_id: task_id.clone(),
+                                        name: task_name.clone(),
+                                        url: task_url.clone(),
+                                        status_option_id: String::new(),
+                                    });
+                            }
+                            let client = Arc::clone(notion_client);
+                            let status_prop_name = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Ok(opts) = client.get_status_options().await {
+                                    if let Some(in_progress_id) = opts.in_progress_id {
+                                        let prop_name = status_prop_name
+                                            .unwrap_or_else(|| "Status".to_string());
+                                        if let Err(e) = client
+                                            .update_page_status(
+                                                &task_id,
+                                                &prop_name,
+                                                &in_progress_id,
+                                            )
+                                            .await
+                                        {
+                                            let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                                id: agent_id,
+                                                status: ProjectMgmtTaskStatus::Notion(
+                                                    NotionTaskStatus::Error {
+                                                        page_id: task_id,
+                                                        message: format!(
+                                                            "Failed to move to In Progress: {}",
+                                                            e
+                                                        ),
+                                                    },
+                                                ),
+                                            });
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1602,24 +1748,27 @@ async fn process_action(
                 AsanaTaskStatus::None => None,
             };
             if let Some(agent) = state.agents.get_mut(&id) {
-                agent.asana_task_status = status;
+                agent.pm_task_status = ProjectMgmtTaskStatus::Asana(status);
             }
             if let Some(msg) = log_msg {
                 state.log_info(&msg);
                 state.error_message = Some(msg);
             }
-            // Update the Asana watch channel
             let asana_tasks: Vec<(Uuid, String)> = state
                 .agents
                 .values()
-                .filter_map(|a| a.asana_task_status.gid().map(|gid| (a.id, gid.to_string())))
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_asana()
+                        .and_then(|s| s.gid().map(|gid| (a.id, gid.to_string())))
+                })
                 .collect();
             let _ = asana_watch_tx.send(asana_tasks);
         }
 
         Action::OpenAsanaInBrowser { id } => {
             if let Some(agent) = state.agents.get(&id) {
-                if let Some(url) = agent.asana_task_status.url() {
+                if let Some(url) = agent.pm_task_status.url() {
                     match open::that(url) {
                         Ok(_) => {
                             state.log_info("Opening Asana task in browser".to_string());
@@ -1633,6 +1782,217 @@ async fn process_action(
                     state.error_message = Some("No Asana task linked to this agent".to_string());
                 }
             }
+        }
+
+        Action::AssignProjectTask { id, url_or_id } => match pm_provider {
+            ProjectMgmtProvider::Asana => {
+                let gid = parse_asana_task_gid(&url_or_id);
+                let client = Arc::clone(asana_client);
+                let tx = action_tx.clone();
+                tokio::spawn(async move {
+                    match client.get_task(&gid).await {
+                        Ok(task) => {
+                            let url = task.permalink_url.unwrap_or_else(|| {
+                                format!("https://app.asana.com/0/0/{}/f", task.gid)
+                            });
+                            let status = if task.completed {
+                                AsanaTaskStatus::Completed {
+                                    gid: task.gid,
+                                    name: task.name,
+                                }
+                            } else {
+                                AsanaTaskStatus::NotStarted {
+                                    gid: task.gid,
+                                    name: task.name,
+                                    url,
+                                }
+                            };
+                            let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                id,
+                                status: ProjectMgmtTaskStatus::Asana(status),
+                            });
+                        }
+                        Err(e) => {
+                            let status = ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Error {
+                                gid,
+                                message: e.to_string(),
+                            });
+                            let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                        }
+                    }
+                });
+            }
+            ProjectMgmtProvider::Notion => {
+                let page_id = parse_notion_page_id(&url_or_id);
+                let client = Arc::clone(notion_client);
+                let tx = action_tx.clone();
+                tokio::spawn(async move {
+                    match client.get_page(&page_id).await {
+                        Ok(page) => {
+                            let status = if page.is_completed {
+                                NotionTaskStatus::Completed {
+                                    page_id: page.id,
+                                    name: page.name,
+                                }
+                            } else {
+                                NotionTaskStatus::NotStarted {
+                                    page_id: page.id,
+                                    name: page.name,
+                                    url: page.url,
+                                    status_option_id: page.status_id.unwrap_or_default(),
+                                }
+                            };
+                            let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                id,
+                                status: ProjectMgmtTaskStatus::Notion(status),
+                            });
+                        }
+                        Err(e) => {
+                            let status = ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Error {
+                                page_id,
+                                message: e.to_string(),
+                            });
+                            let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                        }
+                    }
+                });
+            }
+        },
+
+        Action::UpdateProjectTaskStatus { id, status } => {
+            let log_msg = match &status {
+                ProjectMgmtTaskStatus::Asana(s) => match s {
+                    AsanaTaskStatus::NotStarted { name, .. } => {
+                        Some(format!("Asana task '{}' linked", name))
+                    }
+                    AsanaTaskStatus::InProgress { name, .. } => {
+                        Some(format!("Asana task '{}' in progress", name))
+                    }
+                    AsanaTaskStatus::Completed { name, .. } => {
+                        Some(format!("Asana task '{}' completed", name))
+                    }
+                    AsanaTaskStatus::Error { message, .. } => {
+                        Some(format!("Asana error: {}", message))
+                    }
+                    AsanaTaskStatus::None => None,
+                },
+                ProjectMgmtTaskStatus::Notion(s) => match s {
+                    NotionTaskStatus::NotStarted { name, .. } => {
+                        Some(format!("Notion task '{}' linked", name))
+                    }
+                    NotionTaskStatus::InProgress { name, .. } => {
+                        Some(format!("Notion task '{}' in progress", name))
+                    }
+                    NotionTaskStatus::Completed { name, .. } => {
+                        Some(format!("Notion task '{}' completed", name))
+                    }
+                    NotionTaskStatus::Error { message, .. } => {
+                        Some(format!("Notion error: {}", message))
+                    }
+                    NotionTaskStatus::None => None,
+                },
+                ProjectMgmtTaskStatus::None => None,
+            };
+            if let Some(agent) = state.agents.get_mut(&id) {
+                agent.pm_task_status = status;
+            }
+            if let Some(msg) = log_msg {
+                state.log_info(&msg);
+                state.error_message = Some(msg);
+            }
+            let asana_tasks: Vec<(Uuid, String)> = state
+                .agents
+                .values()
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_asana()
+                        .and_then(|s| s.gid().map(|gid| (a.id, gid.to_string())))
+                })
+                .collect();
+            let _ = asana_watch_tx.send(asana_tasks);
+            let notion_tasks: Vec<(Uuid, String)> = state
+                .agents
+                .values()
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_notion()
+                        .and_then(|s| s.page_id().map(|id| (a.id, id.to_string())))
+                })
+                .collect();
+            let _ = notion_watch_tx.send(notion_tasks);
+        }
+
+        Action::OpenProjectTaskInBrowser { id } => {
+            if let Some(agent) = state.agents.get(&id) {
+                if let Some(url) = agent.pm_task_status.url() {
+                    match open::that(url) {
+                        Ok(_) => {
+                            state.log_info("Opening task in browser".to_string());
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Failed to open browser: {}", e));
+                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                        }
+                    }
+                } else {
+                    state.error_message = Some("No task linked to this agent".to_string());
+                }
+            }
+        }
+
+        Action::DeleteAgentAndCompleteTask { id } => {
+            state.exit_input_mode();
+
+            if let Some(agent) = state.agents.get(&id) {
+                match &agent.pm_task_status {
+                    ProjectMgmtTaskStatus::Asana(asana_status) => {
+                        if let Some(task_gid) = asana_status.gid() {
+                            let gid = task_gid.to_string();
+                            let client = Arc::clone(asana_client);
+                            let done_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .done_section_gid
+                                .clone();
+                            tokio::spawn(async move {
+                                let _ = client.move_to_done(&gid, done_gid.as_deref()).await;
+                                let _ = client.complete_task(&gid).await;
+                            });
+                            state.log_info("Moving Asana task to Done".to_string());
+                        }
+                    }
+                    ProjectMgmtTaskStatus::Notion(notion_status) => {
+                        if let Some(page_id) = notion_status.page_id() {
+                            let pid = page_id.to_string();
+                            let client = Arc::clone(notion_client);
+                            let status_prop_name = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone();
+                            tokio::spawn(async move {
+                                if let Ok(opts) = client.get_status_options().await {
+                                    if let Some(done_id) = opts.done_id {
+                                        let prop_name = status_prop_name
+                                            .unwrap_or_else(|| "Status".to_string());
+                                        let _ = client
+                                            .update_page_status(&pid, &prop_name, &done_id)
+                                            .await;
+                                    }
+                                }
+                            });
+                            state.log_info("Moving Notion task to Done".to_string());
+                        }
+                    }
+                    ProjectMgmtTaskStatus::None => {}
+                }
+            }
+
+            action_tx.send(Action::DeleteAgent { id })?;
         }
 
         // UI state
@@ -1723,7 +2083,20 @@ async fn process_action(
                             }
                         }
                     }
+                    InputMode::AssignProjectTask => {
+                        if !input.is_empty() {
+                            if let Some(id) = state.selected_agent_id() {
+                                action_tx.send(Action::AssignProjectTask {
+                                    id,
+                                    url_or_id: input,
+                                })?;
+                            }
+                        }
+                    }
                     InputMode::ConfirmDeleteAsana => {
+                        // Handled directly by key handler (y/n/Esc), not through SubmitInput
+                    }
+                    InputMode::ConfirmDeleteTask => {
                         // Handled directly by key handler (y/n/Esc), not through SubmitInput
                     }
                 }
@@ -1813,31 +2186,66 @@ async fn process_action(
                     }
                 });
 
-                // Refresh Asana task status
-                if let Some(task_gid) = agent.asana_task_status.gid() {
-                    let asana_client_clone = Arc::clone(asana_client);
-                    let tx_clone = action_tx.clone();
-                    let gid = task_gid.to_string();
-                    tokio::spawn(async move {
-                        if let Ok(task) = asana_client_clone.get_task(&gid).await {
-                            let url = task.permalink_url.unwrap_or_else(|| {
-                                format!("https://app.asana.com/0/0/{}/f", task.gid)
+                match &agent.pm_task_status {
+                    ProjectMgmtTaskStatus::Asana(asana_status) => {
+                        if let Some(task_gid) = asana_status.gid() {
+                            let asana_client_clone = Arc::clone(asana_client);
+                            let tx_clone = action_tx.clone();
+                            let gid = task_gid.to_string();
+                            tokio::spawn(async move {
+                                if let Ok(task) = asana_client_clone.get_task(&gid).await {
+                                    let url = task.permalink_url.unwrap_or_else(|| {
+                                        format!("https://app.asana.com/0/0/{}/f", task.gid)
+                                    });
+                                    let status = if task.completed {
+                                        flock::asana::AsanaTaskStatus::Completed {
+                                            gid: task.gid,
+                                            name: task.name,
+                                        }
+                                    } else {
+                                        flock::asana::AsanaTaskStatus::InProgress {
+                                            gid: task.gid,
+                                            name: task.name,
+                                            url,
+                                        }
+                                    };
+                                    let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
+                                        id,
+                                        status: ProjectMgmtTaskStatus::Asana(status),
+                                    });
+                                }
                             });
-                            let status = if task.completed {
-                                flock::asana::AsanaTaskStatus::Completed {
-                                    gid: task.gid,
-                                    name: task.name,
-                                }
-                            } else {
-                                flock::asana::AsanaTaskStatus::InProgress {
-                                    gid: task.gid,
-                                    name: task.name,
-                                    url,
-                                }
-                            };
-                            let _ = tx_clone.send(Action::UpdateAsanaTaskStatus { id, status });
                         }
-                    });
+                    }
+                    ProjectMgmtTaskStatus::Notion(notion_status) => {
+                        if let Some(page_id) = notion_status.page_id() {
+                            let notion_client_clone = Arc::clone(notion_client);
+                            let tx_clone = action_tx.clone();
+                            let pid = page_id.to_string();
+                            tokio::spawn(async move {
+                                if let Ok(page) = notion_client_clone.get_page(&pid).await {
+                                    let status = if page.is_completed {
+                                        NotionTaskStatus::Completed {
+                                            page_id: page.id,
+                                            name: page.name,
+                                        }
+                                    } else {
+                                        NotionTaskStatus::InProgress {
+                                            page_id: page.id,
+                                            name: page.name,
+                                            url: page.url,
+                                            status_option_id: page.status_id.unwrap_or_default(),
+                                        }
+                                    };
+                                    let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
+                                        id,
+                                        status: ProjectMgmtTaskStatus::Notion(status),
+                                    });
+                                }
+                            });
+                        }
+                    }
+                    ProjectMgmtTaskStatus::None => {}
                 }
             }
         }
@@ -2142,6 +2550,7 @@ async fn process_action(
                     state.settings.text_buffer = state
                         .settings
                         .repo_config
+                        .project_mgmt
                         .asana
                         .project_gid
                         .clone()
@@ -2152,6 +2561,7 @@ async fn process_action(
                     state.settings.text_buffer = state
                         .settings
                         .repo_config
+                        .project_mgmt
                         .asana
                         .in_progress_section_gid
                         .clone()
@@ -2162,6 +2572,7 @@ async fn process_action(
                     state.settings.text_buffer = state
                         .settings
                         .repo_config
+                        .project_mgmt
                         .asana
                         .done_section_gid
                         .clone()
@@ -2247,6 +2658,60 @@ async fn process_action(
                     state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
                     state.config.ui.show_banner = state.settings.pending_ui.show_banner;
                 }
+                flock::app::SettingsField::ProjectMgmtProvider => {
+                    let current = state.settings.repo_config.project_mgmt.provider;
+                    let idx = flock::app::ProjectMgmtProvider::all()
+                        .iter()
+                        .position(|p| *p == current)
+                        .unwrap_or(0);
+                    state.settings.dropdown = flock::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
+                flock::app::SettingsField::NotionDatabaseId => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .database_id
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::NotionStatusProperty => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .status_property_name
+                        .clone()
+                        .unwrap_or_else(|| "Status".to_string());
+                }
+                flock::app::SettingsField::NotionInProgressOption => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .in_progress_option
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::NotionDoneOption => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .done_option
+                        .clone()
+                        .unwrap_or_default();
+                }
             }
         }
 
@@ -2305,18 +2770,27 @@ async fn process_action(
                     }
                     flock::app::SettingsField::AsanaProjectGid => {
                         let val = state.settings.text_buffer.clone();
-                        state.settings.repo_config.asana.project_gid =
+                        state.settings.repo_config.project_mgmt.asana.project_gid =
                             if val.is_empty() { None } else { Some(val) };
                     }
                     flock::app::SettingsField::AsanaInProgressGid => {
                         let val = state.settings.text_buffer.clone();
-                        state.settings.repo_config.asana.in_progress_section_gid =
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .asana
+                            .in_progress_section_gid =
                             if val.is_empty() { None } else { Some(val) };
                     }
                     flock::app::SettingsField::AsanaDoneGid => {
                         let val = state.settings.text_buffer.clone();
-                        state.settings.repo_config.asana.done_section_gid =
-                            if val.is_empty() { None } else { Some(val) };
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .asana
+                            .done_section_gid = if val.is_empty() { None } else { Some(val) };
                     }
                     flock::app::SettingsField::SummaryPrompt => {
                         let val = state.settings.text_buffer.clone();
@@ -2345,6 +2819,34 @@ async fn process_action(
                             }
                             flock::app::AiAgent::ClaudeCode => {}
                         }
+                    }
+                    flock::app::SettingsField::NotionDatabaseId => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.notion.database_id =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::NotionStatusProperty => {
+                        let val = state.settings.text_buffer.clone();
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .notion
+                            .status_property_name = if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::NotionInProgressOption => {
+                        let val = state.settings.text_buffer.clone();
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .notion
+                            .in_progress_option = if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::NotionDoneOption => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.notion.done_option =
+                            if val.is_empty() { None } else { Some(val) };
                     }
                     _ => {}
                 }
@@ -2385,6 +2887,13 @@ async fn process_action(
                             flock::app::CodebergCiProvider::all().get(selected_index)
                         {
                             state.settings.repo_config.git.codeberg.ci_provider = *provider;
+                        }
+                    }
+                    flock::app::SettingsField::ProjectMgmtProvider => {
+                        if let Some(provider) =
+                            flock::app::ProjectMgmtProvider::all().get(selected_index)
+                        {
+                            state.settings.repo_config.project_mgmt.provider = *provider;
                         }
                     }
                     _ => {}
@@ -2767,7 +3276,12 @@ fn get_project_field_value(config: &flock::app::RepoConfig, field: &ProjectSetup
         ProjectSetupField::CodebergBaseUrl => config.git.codeberg.base_url.clone(),
         ProjectSetupField::BranchPrefix => config.git.branch_prefix.clone(),
         ProjectSetupField::MainBranch => config.git.main_branch.clone(),
-        ProjectSetupField::AsanaProjectGid => config.asana.project_gid.clone().unwrap_or_default(),
+        ProjectSetupField::AsanaProjectGid => config
+            .project_mgmt
+            .asana
+            .project_gid
+            .clone()
+            .unwrap_or_default(),
     }
 }
 
@@ -2812,7 +3326,7 @@ fn set_project_field_value(
             };
         }
         ProjectSetupField::AsanaProjectGid => {
-            config.asana.project_gid = if value.is_empty() {
+            config.project_mgmt.asana.project_gid = if value.is_empty() {
                 None
             } else {
                 Some(value.to_string())
@@ -3114,22 +3628,58 @@ async fn poll_asana_tasks(
                         .permalink_url
                         .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
                     let status = if task.completed {
-                        AsanaTaskStatus::Completed {
+                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
                             gid: task.gid,
                             name: task.name,
-                        }
+                        })
                     } else {
-                        // Preserve InProgress if already in progress
-                        AsanaTaskStatus::InProgress {
+                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
                             gid: task.gid,
                             name: task.name,
                             url,
-                        }
+                        })
                     };
-                    let _ = tx.send(Action::UpdateAsanaTaskStatus { id, status });
+                    let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
                 }
                 Err(e) => {
                     tracing::warn!("Failed to poll Asana task {}: {}", gid, e);
+                }
+            }
+        }
+    }
+}
+
+/// Background task to poll Notion for task status updates.
+async fn poll_notion_tasks(
+    notion_rx: watch::Receiver<Vec<(Uuid, String)>>,
+    notion_client: Arc<OptionalNotionClient>,
+    tx: mpsc::UnboundedSender<Action>,
+    refresh_secs: u64,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(refresh_secs)).await;
+
+        let tasks = notion_rx.borrow().clone();
+        for (id, page_id) in tasks {
+            match notion_client.get_page(&page_id).await {
+                Ok(page) => {
+                    let status = if page.is_completed {
+                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
+                            page_id: page.id,
+                            name: page.name,
+                        })
+                    } else {
+                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::InProgress {
+                            page_id: page.id,
+                            name: page.name,
+                            url: page.url,
+                            status_option_id: page.status_id.unwrap_or_default(),
+                        })
+                    };
+                    let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to poll Notion page {}: {}", page_id, e);
                 }
             }
         }

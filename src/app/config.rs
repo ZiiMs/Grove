@@ -125,6 +125,27 @@ impl GitProvider {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
+pub enum ProjectMgmtProvider {
+    #[default]
+    Asana,
+    Notion,
+}
+
+impl ProjectMgmtProvider {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ProjectMgmtProvider::Asana => "Asana",
+            ProjectMgmtProvider::Notion => "Notion",
+        }
+    }
+
+    pub fn all() -> &'static [ProjectMgmtProvider] {
+        &[ProjectMgmtProvider::Asana, ProjectMgmtProvider::Notion]
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Debug,
     #[default]
@@ -200,6 +221,8 @@ pub struct Config {
     #[serde(default)]
     pub asana: AsanaConfig,
     #[serde(default)]
+    pub notion: NotionConfig,
+    #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
     pub performance: PerformanceConfig,
@@ -219,6 +242,24 @@ impl Default for AsanaConfig {
     fn default() -> Self {
         Self {
             refresh_secs: default_asana_refresh(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotionConfig {
+    #[serde(default = "default_notion_refresh")]
+    pub refresh_secs: u64,
+}
+
+fn default_notion_refresh() -> u64 {
+    120
+}
+
+impl Default for NotionConfig {
+    fn default() -> Self {
+        Self {
+            refresh_secs: default_notion_refresh(),
         }
     }
 }
@@ -386,6 +427,10 @@ impl Config {
         std::env::var("ASANA_TOKEN").ok()
     }
 
+    pub fn notion_token() -> Option<String> {
+        std::env::var("NOTION_TOKEN").ok()
+    }
+
     pub fn codeberg_token() -> Option<String> {
         std::env::var("CODEBERG_TOKEN").ok()
     }
@@ -423,9 +468,27 @@ pub struct RepoConfig {
     #[serde(default)]
     pub git: RepoGitConfig,
     #[serde(default)]
-    pub asana: RepoAsanaConfig,
+    pub project_mgmt: RepoProjectMgmtConfig,
     #[serde(default)]
     pub prompts: PromptsConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoProjectMgmtConfig {
+    #[serde(default)]
+    pub provider: ProjectMgmtProvider,
+    #[serde(default)]
+    pub asana: RepoAsanaConfig,
+    #[serde(default)]
+    pub notion: RepoNotionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoNotionConfig {
+    pub database_id: Option<String>,
+    pub status_property_name: Option<String>,
+    pub in_progress_option: Option<String>,
+    pub done_option: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -604,7 +667,31 @@ impl RepoConfig {
         if config_path.exists() {
             let content =
                 std::fs::read_to_string(&config_path).context("Failed to read repo config")?;
-            toml::from_str(&content).context("Failed to parse repo config")
+
+            if let Ok(config) = toml::from_str::<RepoConfig>(&content) {
+                return Ok(config);
+            }
+
+            #[derive(Deserialize)]
+            struct LegacyRepoConfig {
+                git: RepoGitConfig,
+                asana: RepoAsanaConfig,
+                prompts: PromptsConfig,
+            }
+
+            if let Ok(legacy) = toml::from_str::<LegacyRepoConfig>(&content) {
+                return Ok(RepoConfig {
+                    git: legacy.git,
+                    project_mgmt: RepoProjectMgmtConfig {
+                        provider: ProjectMgmtProvider::Asana,
+                        asana: legacy.asana,
+                        notion: RepoNotionConfig::default(),
+                    },
+                    prompts: legacy.prompts,
+                });
+            }
+
+            anyhow::bail!("Failed to parse repo config (neither new nor legacy format)")
         } else {
             Ok(Self::default())
         }

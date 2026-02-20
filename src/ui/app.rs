@@ -219,11 +219,43 @@ impl<'a> AppWidget<'a> {
                     "n/Esc",
                 );
             }
+            InputMode::ConfirmDeleteTask => {
+                let agent_name = self
+                    .state
+                    .selected_agent()
+                    .map(|a| a.name.as_str())
+                    .unwrap_or("agent");
+                render_confirm_modal(
+                    frame,
+                    "Delete Agent",
+                    &format!(
+                        "Delete '{}'? Complete task? [y]es [n]o [Esc]cancel",
+                        agent_name
+                    ),
+                    "y",
+                    "n/Esc",
+                );
+            }
             InputMode::AssignAsana => {
                 render_input_modal(
                     frame,
                     "Assign Asana Task",
                     "Enter Asana task URL or GID:",
+                    &self.state.input_buffer,
+                );
+            }
+            InputMode::AssignProjectTask => {
+                let provider_name = self
+                    .state
+                    .settings
+                    .repo_config
+                    .project_mgmt
+                    .provider
+                    .display_name();
+                render_input_modal(
+                    frame,
+                    &format!("Assign {} Task", provider_name),
+                    &format!("Enter {} task URL or ID:", provider_name),
                     &self.state.input_buffer,
                 );
             }

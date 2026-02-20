@@ -5,11 +5,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::agent::{Agent, AgentStatus};
+use crate::agent::{Agent, AgentStatus, ProjectMgmtTaskStatus};
 use crate::app::config::GitProvider;
 use crate::asana::AsanaTaskStatus;
 use crate::github::CheckStatus;
 use crate::gitlab::PipelineStatus;
+use crate::notion::NotionTaskStatus;
 
 /// Braille spinner frames for running status
 const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -48,7 +49,8 @@ impl<'a> AgentListWidget<'a> {
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let header_cells = [
-            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Asana", "Note",
+            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "PM Task",
+            "Note",
         ]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
@@ -178,9 +180,9 @@ impl<'a> AgentListWidget<'a> {
         let (pipeline_text, pipeline_style) = self.format_pipeline_status(agent);
         let pipeline_cell = Cell::from(pipeline_text).style(pipeline_style);
 
-        // Asana column
-        let (asana_text, asana_style) = self.format_asana_status(agent);
-        let asana_cell = Cell::from(asana_text).style(asana_style);
+        // PM Task column
+        let (pm_text, pm_style) = self.format_pm_status(agent);
+        let pm_cell = Cell::from(pm_text).style(pm_style);
 
         // Note column
         let note = agent.custom_note.as_deref().unwrap_or("");
@@ -204,7 +206,7 @@ impl<'a> AgentListWidget<'a> {
             tasks_cell,
             mr_cell,
             pipeline_cell,
-            asana_cell,
+            pm_cell,
             note_cell,
         ])
     }
@@ -360,14 +362,24 @@ impl<'a> AgentListWidget<'a> {
         }
     }
 
-    fn format_asana_status(&self, agent: &Agent) -> (String, Style) {
-        let text = agent.asana_task_status.format_short();
-        let style = match &agent.asana_task_status {
-            AsanaTaskStatus::None => Style::default().fg(Color::DarkGray),
-            AsanaTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-            AsanaTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-            AsanaTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-            AsanaTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+    fn format_pm_status(&self, agent: &Agent) -> (String, Style) {
+        let text = agent.pm_task_status.format_short();
+        let style = match &agent.pm_task_status {
+            ProjectMgmtTaskStatus::None => Style::default().fg(Color::DarkGray),
+            ProjectMgmtTaskStatus::Asana(s) => match s {
+                AsanaTaskStatus::None => Style::default().fg(Color::DarkGray),
+                AsanaTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                AsanaTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                AsanaTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                AsanaTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
+            ProjectMgmtTaskStatus::Notion(s) => match s {
+                NotionTaskStatus::None => Style::default().fg(Color::DarkGray),
+                NotionTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                NotionTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                NotionTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                NotionTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
         };
         (text, style)
     }

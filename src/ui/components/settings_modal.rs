@@ -7,8 +7,9 @@ use ratatui::{
 };
 
 use crate::app::{
-    AiAgent, CodebergCiProvider, Config, ConfigLogLevel, GitProvider, SettingsCategory,
-    SettingsField, SettingsItem, SettingsState, SettingsTab, UiConfig, WorktreeLocation,
+    AiAgent, CodebergCiProvider, Config, ConfigLogLevel, GitProvider, ProjectMgmtProvider,
+    SettingsCategory, SettingsField, SettingsItem, SettingsState, SettingsTab, UiConfig,
+    WorktreeLocation,
 };
 
 pub struct SettingsModal<'a> {
@@ -428,6 +429,7 @@ impl<'a> SettingsModal<'a> {
                 "Project GID".to_string(),
                 self.state
                     .repo_config
+                    .project_mgmt
                     .asana
                     .project_gid
                     .clone()
@@ -438,6 +440,7 @@ impl<'a> SettingsModal<'a> {
                 "In Progress GID".to_string(),
                 self.state
                     .repo_config
+                    .project_mgmt
                     .asana
                     .in_progress_section_gid
                     .clone()
@@ -448,10 +451,65 @@ impl<'a> SettingsModal<'a> {
                 "Done GID".to_string(),
                 self.state
                     .repo_config
+                    .project_mgmt
                     .asana
                     .done_section_gid
                     .clone()
                     .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::ProjectMgmtProvider => (
+                "Provider".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .provider
+                    .display_name()
+                    .to_string(),
+                false,
+            ),
+            SettingsField::NotionDatabaseId => (
+                "Database ID".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .notion
+                    .database_id
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::NotionStatusProperty => (
+                "Status Property".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .notion
+                    .status_property_name
+                    .clone()
+                    .unwrap_or_else(|| "Status".to_string()),
+                false,
+            ),
+            SettingsField::NotionInProgressOption => (
+                "In Progress".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .notion
+                    .in_progress_option
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
+            SettingsField::NotionDoneOption => (
+                "Done".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .notion
+                    .done_option
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
                 false,
             ),
             SettingsField::SummaryPrompt => (
@@ -539,6 +597,10 @@ impl<'a> SettingsModal<'a> {
             SettingsField::CodebergCiProvider => CodebergCiProvider::all()
                 .iter()
                 .map(|c| c.display_name())
+                .collect(),
+            SettingsField::ProjectMgmtProvider => ProjectMgmtProvider::all()
+                .iter()
+                .map(|p| p.display_name())
                 .collect(),
             _ => return,
         };

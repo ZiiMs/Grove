@@ -6,6 +6,7 @@ pub mod codeberg;
 pub mod git;
 pub mod github;
 pub mod gitlab;
+pub mod notion;
 pub mod storage;
 pub mod tmux;
 pub mod ui;

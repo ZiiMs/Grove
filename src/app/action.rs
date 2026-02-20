@@ -1,16 +1,14 @@
 use uuid::Uuid;
 
-/// All possible actions that can modify application state.
-/// This provides a single point of control for state transitions.
+use crate::agent::ProjectMgmtTaskStatus;
+
 #[derive(Debug, Clone)]
 pub enum Action {
-    // Navigation
     SelectNext,
     SelectPrevious,
     SelectFirst,
     SelectLast,
 
-    // Agent lifecycle
     CreateAgent {
         name: String,
         branch: String,
@@ -29,7 +27,6 @@ pub enum Action {
         id: Uuid,
     },
 
-    // Agent status updates (from background tasks)
     UpdateAgentStatus {
         id: Uuid,
         status: crate::agent::AgentStatus,
@@ -43,12 +40,10 @@ pub enum Action {
         note: Option<String>,
     },
 
-    // Agent commands
     RequestSummary {
         id: Uuid,
     },
 
-    // Git operations
     CheckoutBranch {
         id: Uuid,
     },
@@ -66,7 +61,6 @@ pub enum Action {
         status: crate::git::GitSyncStatus,
     },
 
-    // GitLab operations
     UpdateMrStatus {
         id: Uuid,
         status: crate::gitlab::MergeRequestStatus,
@@ -75,7 +69,6 @@ pub enum Action {
         id: Uuid,
     },
 
-    // GitHub operations
     UpdatePrStatus {
         id: Uuid,
         status: crate::github::PullRequestStatus,
@@ -84,7 +77,6 @@ pub enum Action {
         id: Uuid,
     },
 
-    // Codeberg operations
     UpdateCodebergPrStatus {
         id: Uuid,
         status: crate::codeberg::PullRequestStatus,
@@ -93,7 +85,6 @@ pub enum Action {
         id: Uuid,
     },
 
-    // Asana operations
     AssignAsanaTask {
         id: Uuid,
         url_or_gid: String,
@@ -109,7 +100,21 @@ pub enum Action {
         id: Uuid,
     },
 
-    // UI state
+    AssignProjectTask {
+        id: Uuid,
+        url_or_id: String,
+    },
+    UpdateProjectTaskStatus {
+        id: Uuid,
+        status: ProjectMgmtTaskStatus,
+    },
+    OpenProjectTaskInBrowser {
+        id: Uuid,
+    },
+    DeleteAgentAndCompleteTask {
+        id: Uuid,
+    },
+
     ToggleDiffView,
     ToggleHelp,
     ToggleLogs,
@@ -120,32 +125,26 @@ pub enum Action {
     UpdateInput(String),
     SubmitInput,
 
-    // Activity tracking
     RecordActivity {
         id: Uuid,
         had_activity: bool,
     },
 
-    // Checklist progress
     UpdateChecklistProgress {
         id: Uuid,
         progress: Option<(u32, u32)>,
     },
 
-    // Global system metrics
     UpdateGlobalSystemMetrics {
         cpu_percent: f32,
         memory_used: u64,
         memory_total: u64,
     },
 
-    // Loading state
     SetLoading(Option<String>),
 
-    // Preview pane content
     UpdatePreviewContent(Option<String>),
 
-    // Background task completions
     DeleteAgentComplete {
         id: Uuid,
         success: bool,
@@ -162,18 +161,15 @@ pub enum Action {
         message: String,
     },
 
-    // Clipboard
     CopyAgentName {
         id: Uuid,
     },
 
-    // Application
     RefreshAll,
     RefreshSelected,
     Tick,
     Quit,
 
-    // Settings
     ToggleSettings,
     SettingsSwitchSection,
     SettingsSwitchSectionBack,
@@ -188,7 +184,6 @@ pub enum Action {
     SettingsSave,
     SettingsPromptSave,
 
-    // Global Setup Wizard
     GlobalSetupNextStep,
     GlobalSetupPrevStep,
     GlobalSetupSelectNext,
@@ -201,7 +196,6 @@ pub enum Action {
     GlobalSetupConfirmDropdown,
     GlobalSetupComplete,
 
-    // Project Setup Wizard
     ProjectSetupNavigateNext,
     ProjectSetupNavigatePrev,
     ProjectSetupEditField,
@@ -219,11 +213,13 @@ pub enum Action {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputMode {
-    NewAgent, // Just enter branch name, used as both name and branch
+    NewAgent,
     SetNote,
     ConfirmDelete,
     ConfirmMerge,
     ConfirmPush,
-    ConfirmDeleteAsana,
+    ConfirmDeleteTask,
+    AssignProjectTask,
     AssignAsana,
+    ConfirmDeleteAsana,
 }

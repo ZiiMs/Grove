@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use super::action::InputMode;
 use super::config::{
-    AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, RepoConfig, UiConfig,
-    WorktreeLocation,
+    AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, ProjectMgmtProvider, RepoConfig,
+    UiConfig, WorktreeLocation,
 };
 use crate::agent::Agent;
 
@@ -73,9 +73,14 @@ pub enum SettingsField {
     BranchPrefix,
     MainBranch,
     WorktreeSymlinks,
+    ProjectMgmtProvider,
     AsanaProjectGid,
     AsanaInProgressGid,
     AsanaDoneGid,
+    NotionDatabaseId,
+    NotionStatusProperty,
+    NotionInProgressOption,
+    NotionDoneOption,
     SummaryPrompt,
     MergePrompt,
     PushPrompt,
@@ -89,7 +94,9 @@ pub enum SettingsCategory {
     GitProvider,
     GitConfig,
     Ci,
+    ProjectMgmt,
     Asana,
+    Notion,
     Prompts,
 }
 
@@ -102,7 +109,9 @@ impl SettingsCategory {
             SettingsCategory::GitProvider => "Provider",
             SettingsCategory::GitConfig => "Configuration",
             SettingsCategory::Ci => "CI/CD",
+            SettingsCategory::ProjectMgmt => "Project Mgmt",
             SettingsCategory::Asana => "Asana",
+            SettingsCategory::Notion => "Notion",
             SettingsCategory::Prompts => "Prompts",
         }
     }
@@ -139,9 +148,14 @@ impl SettingsField {
             | SettingsField::BranchPrefix
             | SettingsField::MainBranch
             | SettingsField::WorktreeSymlinks => SettingsTab::Git,
-            SettingsField::AsanaProjectGid
+            SettingsField::ProjectMgmtProvider
+            | SettingsField::AsanaProjectGid
             | SettingsField::AsanaInProgressGid
-            | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
+            | SettingsField::AsanaDoneGid
+            | SettingsField::NotionDatabaseId
+            | SettingsField::NotionStatusProperty
+            | SettingsField::NotionInProgressOption
+            | SettingsField::NotionDoneOption => SettingsTab::ProjectMgmt,
         }
     }
 
@@ -154,7 +168,11 @@ impl SettingsField {
 }
 
 impl SettingsItem {
-    pub fn all_for_tab(tab: SettingsTab, provider: GitProvider) -> Vec<SettingsItem> {
+    pub fn all_for_tab(
+        tab: SettingsTab,
+        provider: GitProvider,
+        pm_provider: ProjectMgmtProvider,
+    ) -> Vec<SettingsItem> {
         match tab {
             SettingsTab::General => vec![
                 SettingsItem::Category(SettingsCategory::Agent),
@@ -200,12 +218,28 @@ impl SettingsItem {
                 items.push(SettingsItem::Field(SettingsField::WorktreeSymlinks));
                 items
             }
-            SettingsTab::ProjectMgmt => vec![
-                SettingsItem::Category(SettingsCategory::Asana),
-                SettingsItem::Field(SettingsField::AsanaProjectGid),
-                SettingsItem::Field(SettingsField::AsanaInProgressGid),
-                SettingsItem::Field(SettingsField::AsanaDoneGid),
-            ],
+            SettingsTab::ProjectMgmt => {
+                let mut items = vec![
+                    SettingsItem::Category(SettingsCategory::ProjectMgmt),
+                    SettingsItem::Field(SettingsField::ProjectMgmtProvider),
+                ];
+                match pm_provider {
+                    ProjectMgmtProvider::Asana => {
+                        items.push(SettingsItem::Category(SettingsCategory::Asana));
+                        items.push(SettingsItem::Field(SettingsField::AsanaProjectGid));
+                        items.push(SettingsItem::Field(SettingsField::AsanaInProgressGid));
+                        items.push(SettingsItem::Field(SettingsField::AsanaDoneGid));
+                    }
+                    ProjectMgmtProvider::Notion => {
+                        items.push(SettingsItem::Category(SettingsCategory::Notion));
+                        items.push(SettingsItem::Field(SettingsField::NotionDatabaseId));
+                        items.push(SettingsItem::Field(SettingsField::NotionStatusProperty));
+                        items.push(SettingsItem::Field(SettingsField::NotionInProgressOption));
+                        items.push(SettingsItem::Field(SettingsField::NotionDoneOption));
+                    }
+                }
+                items
+            }
         }
     }
 
@@ -266,7 +300,11 @@ impl Default for SettingsState {
 
 impl SettingsState {
     pub fn all_items(&self) -> Vec<SettingsItem> {
-        SettingsItem::all_for_tab(self.tab, self.repo_config.git.provider)
+        SettingsItem::all_for_tab(
+            self.tab,
+            self.repo_config.git.provider,
+            self.repo_config.project_mgmt.provider,
+        )
     }
 
     pub fn navigable_items(&self) -> Vec<(usize, SettingsField)> {
