@@ -10,7 +10,10 @@ tokio = { version = "1", features = ["full"] }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 git2 = "0.19"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "json"
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
