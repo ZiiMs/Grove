@@ -2245,7 +2245,7 @@ async fn process_action(
         }
 
         Action::SettingsConfirmSelection => {
-            if state.settings.editing_text {
+            if state.settings.editing_text || state.settings.editing_prompt {
                 let field = state.settings.current_field();
                 match field {
                     flock::app::SettingsField::BranchPrefix => {
