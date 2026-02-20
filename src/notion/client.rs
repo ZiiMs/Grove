@@ -63,6 +63,8 @@ impl NotionClient {
         let clean_id = clean_page_id(page_id);
         let url = format!("{}/pages/{}", Self::BASE_URL, clean_id);
 
+        tracing::debug!("Notion get_page: url={}", url);
+
         let response = self
             .client
             .get(&url)
@@ -70,15 +72,17 @@ impl NotionClient {
             .await
             .context("Failed to fetch Notion page")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("Notion API error: {} - {}", status, body);
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!("Notion get_page response: status={}, body={}", status, response_text);
+
+        if !status.is_success() {
+            tracing::error!("Notion API error: {} - {}", status, response_text);
+            bail!("Notion API error: {} - {}", status, response_text);
         }
 
-        let page: NotionPageResponse = response
-            .json()
-            .await
+        let page: NotionPageResponse = serde_json::from_str(&response_text)
             .context("Failed to parse Notion page response")?;
 
         Ok(NotionPageData::from(page))
@@ -104,6 +108,12 @@ impl NotionClient {
             serde_json::json!({})
         };
 
+        tracing::debug!(
+            "Notion query_database: url={}, body={}",
+            url,
+            serde_json::to_string(&body).unwrap_or_default()
+        );
+
         let response = self
             .client
             .post(&url)
@@ -112,15 +122,17 @@ impl NotionClient {
             .await
             .context("Failed to query Notion database")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("Notion API error: {} - {}", status, body);
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!("Notion query_database response: status={}, body={}", status, response_text);
+
+        if !status.is_success() {
+            tracing::error!("Notion API error: {} - {}", status, response_text);
+            bail!("Notion API error: {} - {}", status, response_text);
         }
 
-        let query_response: NotionQueryResponse = response
-            .json()
-            .await
+        let query_response: NotionQueryResponse = serde_json::from_str(&response_text)
             .context("Failed to parse Notion query response")?;
 
         Ok(query_response
@@ -140,6 +152,8 @@ impl NotionClient {
 
         let url = format!("{}/databases/{}", Self::BASE_URL, self.database_id);
 
+        tracing::debug!("Notion get_status_options: url={}", url);
+
         let response = self
             .client
             .get(&url)
@@ -147,15 +161,17 @@ impl NotionClient {
             .await
             .context("Failed to fetch Notion database")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("Notion API error: {} - {}", status, body);
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!("Notion get_status_options response: status={}, body={}", status, response_text);
+
+        if !status.is_success() {
+            tracing::error!("Notion API error: {} - {}", status, response_text);
+            bail!("Notion API error: {} - {}", status, response_text);
         }
 
-        let db: NotionDatabaseResponse = response
-            .json()
-            .await
+        let db: NotionDatabaseResponse = serde_json::from_str(&response_text)
             .context("Failed to parse Notion database response")?;
 
         let status_prop = db
@@ -229,6 +245,12 @@ impl NotionClient {
             }
         });
 
+        tracing::debug!(
+            "Notion update_page_status: url={}, body={}",
+            url,
+            serde_json::to_string(&body).unwrap_or_default()
+        );
+
         let response = self
             .client
             .patch(&url)
@@ -237,10 +259,14 @@ impl NotionClient {
             .await
             .context("Failed to update Notion page status")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            bail!("Notion API error: {} - {}", status, body);
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!("Notion update_page_status response: status={}, body={}", status, response_text);
+
+        if !status.is_success() {
+            tracing::error!("Notion API error: {} - {}", status, response_text);
+            bail!("Notion API error: {} - {}", status, response_text);
         }
 
         Ok(())
