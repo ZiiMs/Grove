@@ -1676,11 +1676,17 @@ async fn process_action(
                 match mode {
                     InputMode::NewAgent => {
                         if !input.is_empty() {
-                            // Use branch name as both agent name and branch
-                            action_tx.send(Action::CreateAgent {
-                                name: input.clone(),
-                                branch: input,
-                            })?;
+                            let branch = flock::util::sanitize_branch_name(&input);
+                            if branch.is_empty() {
+                                action_tx.send(Action::ShowError(
+                                    "Invalid name: name cannot be only spaces".to_string(),
+                                ))?;
+                            } else {
+                                action_tx.send(Action::CreateAgent {
+                                    name: input.trim().to_string(),
+                                    branch,
+                                })?;
+                            }
                         }
                     }
                     InputMode::SetNote => {
