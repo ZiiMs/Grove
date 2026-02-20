@@ -1,7 +1,8 @@
+use ansi_to_tui::IntoText;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
@@ -37,8 +38,14 @@ impl<'a> OutputViewWidget<'a> {
             .replace("\r\n", "\n") // Normalize Windows line endings
             .replace('\r', ""); // Remove carriage returns (some programs use \r to overwrite lines)
 
-        // Since we capture without ANSI codes (-e), just use raw text
-        let lines: Vec<Line> = processed_content.lines().map(Line::from).collect();
+        // Parse ANSI content into styled Text
+        let text = match processed_content.as_bytes().into_text() {
+            Ok(text) => text,
+            Err(_) => Text::raw(processed_content),
+        };
+
+        // Convert to lines for scroll handling
+        let lines: Vec<Line> = text.lines.into_iter().map(|l| l.clone()).collect();
 
         // Calculate scroll position (show latest content by default)
         let total_lines = lines.len();

@@ -3203,8 +3203,6 @@ async fn poll_agents(
             // This ensures preview updates even if status detection crashes
             // Note: Don't use -J (join wrapped lines) - we want lines to stay wrapped
             // at the tmux terminal width so they display correctly in the preview pane
-            // Note: Don't use -e (ANSI codes) - ansi_to_tui has issues with some escape sequences
-            // causing spacing problems
             if is_selected {
                 match std::process::Command::new("tmux")
                     .args([
@@ -3212,6 +3210,7 @@ async fn poll_agents(
                         "-t",
                         &session_name,
                         "-p",
+                        "-e",
                         "-S",
                         "-1000",
                     ])
