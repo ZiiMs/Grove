@@ -131,6 +131,7 @@ impl<'a> TaskListModal<'a> {
                 "[Enter] Create Agent  ",
                 Style::default().fg(Color::DarkGray),
             ),
+            Span::styled("[a] Assign  ", Style::default().fg(Color::DarkGray)),
             Span::styled("[Esc] Cancel", Style::default().fg(Color::DarkGray)),
         ]))
         .alignment(ratatui::layout::Alignment::Center);

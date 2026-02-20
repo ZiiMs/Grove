@@ -859,6 +859,7 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
         return match key {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectTaskNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
+            KeyCode::Char('a') => Some(Action::AssignSelectedTaskToAgent),
             KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
             KeyCode::Esc => Some(Action::ExitInputMode),
             _ => None,
@@ -2191,6 +2192,20 @@ async fn process_action(
                         branch,
                         task: Some(task),
                     })?;
+                }
+            }
+        }
+
+        Action::AssignSelectedTaskToAgent => {
+            if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
+                if let Some(agent_id) = state.selected_agent_id() {
+                    state.exit_input_mode();
+                    action_tx.send(Action::AssignProjectTask {
+                        id: agent_id,
+                        url_or_id: task.id.clone(),
+                    })?;
+                } else {
+                    state.error_message = Some("No agent selected".to_string());
                 }
             }
         }
