@@ -81,15 +81,19 @@ impl NotionClient {
         let status = response.status();
         let response_text = response.text().await.unwrap_or_default();
 
-        tracing::debug!("Notion get_page response: status={}, body={}", status, response_text);
+        tracing::debug!(
+            "Notion get_page response: status={}, body={}",
+            status,
+            response_text
+        );
 
         if !status.is_success() {
             tracing::error!("Notion API error: {} - {}", status, response_text);
             bail!("Notion API error: {} - {}", status, response_text);
         }
 
-        let page: NotionPageResponse = serde_json::from_str(&response_text)
-            .context("Failed to parse Notion page response")?;
+        let page: NotionPageResponse =
+            serde_json::from_str(&response_text).context("Failed to parse Notion page response")?;
 
         Ok(NotionPageData::from(page))
     }
@@ -131,7 +135,11 @@ impl NotionClient {
         let status = response.status();
         let response_text = response.text().await.unwrap_or_default();
 
-        tracing::debug!("Notion query_database response: status={}, body={}", status, response_text);
+        tracing::debug!(
+            "Notion query_database response: status={}, body={}",
+            status,
+            response_text
+        );
 
         if !status.is_success() {
             tracing::error!("Notion API error: {} - {}", status, response_text);
@@ -170,7 +178,11 @@ impl NotionClient {
         let status = response.status();
         let response_text = response.text().await.unwrap_or_default();
 
-        tracing::debug!("Notion get_status_options response: status={}, body={}", status, response_text);
+        tracing::debug!(
+            "Notion get_status_options response: status={}, body={}",
+            status,
+            response_text
+        );
 
         if !status.is_success() {
             tracing::error!("Notion API error: {} - {}", status, response_text);
@@ -268,7 +280,11 @@ impl NotionClient {
         let status = response.status();
         let response_text = response.text().await.unwrap_or_default();
 
-        tracing::debug!("Notion update_page_status response: status={}, body={}", status, response_text);
+        tracing::debug!(
+            "Notion update_page_status response: status={}, body={}",
+            status,
+            response_text
+        );
 
         if !status.is_success() {
             tracing::error!("Notion API error: {} - {}", status, response_text);

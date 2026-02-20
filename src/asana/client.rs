@@ -52,15 +52,19 @@ impl AsanaClient {
         let status = response.status();
         let response_text = response.text().await.unwrap_or_default();
 
-        tracing::debug!("Asana get_task response: status={}, body={}", status, response_text);
+        tracing::debug!(
+            "Asana get_task response: status={}, body={}",
+            status,
+            response_text
+        );
 
         if !status.is_success() {
             tracing::error!("Asana API error: {} - {}", status, response_text);
             anyhow::bail!("Asana API error: {} - {}", status, response_text);
         }
 
-        let task_resp: AsanaTaskResponse = serde_json::from_str(&response_text)
-            .context("Failed to parse Asana task response")?;
+        let task_resp: AsanaTaskResponse =
+            serde_json::from_str(&response_text).context("Failed to parse Asana task response")?;
 
         Ok(task_resp.data)
     }
@@ -90,7 +94,11 @@ impl AsanaClient {
         let status = response.status();
         let response_text = response.text().await.unwrap_or_default();
 
-        tracing::debug!("Asana get_project_tasks response: status={}, body={}", status, response_text);
+        tracing::debug!(
+            "Asana get_project_tasks response: status={}, body={}",
+            status,
+            response_text
+        );
 
         if !status.is_success() {
             tracing::error!("Asana API error: {} - {}", status, response_text);

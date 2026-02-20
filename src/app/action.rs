@@ -13,6 +13,7 @@ pub enum Action {
     CreateAgent {
         name: String,
         branch: String,
+        task: Option<TaskListItem>,
     },
     DeleteAgent {
         id: Uuid,

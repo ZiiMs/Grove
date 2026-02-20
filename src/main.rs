@@ -1020,13 +1020,36 @@ async fn process_action(
         }
 
         // Agent lifecycle
-        Action::CreateAgent { name, branch } => {
+        Action::CreateAgent { name, branch, task } => {
             state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
             let ai_agent = state.config.global.ai_agent.clone();
             let worktree_symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
             match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks) {
-                Ok(agent) => {
+                Ok(mut agent) => {
                     state.log_info(format!("Agent '{}' created successfully", agent.name));
+
+                    if let Some(ref task_item) = task {
+                        let pm_status = match pm_provider {
+                            ProjectMgmtProvider::Asana => {
+                                ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                    gid: task_item.id.clone(),
+                                    name: task_item.name.clone(),
+                                    url: task_item.url.clone(),
+                                })
+                            }
+                            ProjectMgmtProvider::Notion => {
+                                ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                                    page_id: task_item.id.clone(),
+                                    name: task_item.name.clone(),
+                                    url: task_item.url.clone(),
+                                    status_option_id: String::new(),
+                                })
+                            }
+                        };
+                        agent.pm_task_status = pm_status;
+                        state.log_info(format!("Linked task '{}' to agent", task_item.name));
+                    }
+
                     state.add_agent(agent);
                     state.select_last();
                     state.error_message = None;
@@ -2092,8 +2115,12 @@ async fn process_action(
                             let items: Vec<TaskListItem> = pages
                                 .into_iter()
                                 .map(|p| {
-                                    let status_name = p.status_name.clone().unwrap_or_else(|| "Unknown".to_string());
-                                    let status = if status_name.to_lowercase().contains("progress") {
+                                    let status_name = p
+                                        .status_name
+                                        .clone()
+                                        .unwrap_or_else(|| "Unknown".to_string());
+                                    let status = if status_name.to_lowercase().contains("progress")
+                                    {
                                         TaskItemStatus::InProgress
                                     } else {
                                         TaskItemStatus::NotStarted
@@ -2159,33 +2186,11 @@ async fn process_action(
                     state.error_message = Some("Invalid task name for branch".to_string());
                 } else {
                     let name = task.name.clone();
-                    let task_id = task.id.clone();
-                    let task_url = task.url.clone();
-                    action_tx.send(Action::CreateAgent { name, branch })?;
-                    let agent_id = *state.agent_order.last().unwrap_or(&Uuid::nil());
-                    if agent_id != Uuid::nil() {
-                        let pm_status = match pm_provider {
-                            ProjectMgmtProvider::Asana => {
-                                ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
-                                    gid: task_id,
-                                    name: task.name,
-                                    url: task_url,
-                                })
-                            }
-                            ProjectMgmtProvider::Notion => {
-                                ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
-                                    page_id: task_id,
-                                    name: task.name,
-                                    url: task_url,
-                                    status_option_id: String::new(),
-                                })
-                            }
-                        };
-                        action_tx.send(Action::UpdateProjectTaskStatus {
-                            id: agent_id,
-                            status: pm_status,
-                        })?;
-                    }
+                    action_tx.send(Action::CreateAgent {
+                        name,
+                        branch,
+                        task: Some(task),
+                    })?;
                 }
             }
         }
@@ -2246,6 +2251,7 @@ async fn process_action(
                                 action_tx.send(Action::CreateAgent {
                                     name: input.trim().to_string(),
                                     branch,
+                                    task: None,
                                 })?;
                             }
                         }
