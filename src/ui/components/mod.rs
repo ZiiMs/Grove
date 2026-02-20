@@ -1,4 +1,6 @@
 pub mod agent_list;
+pub mod devserver_view;
+pub mod devserver_warning;
 pub mod diff_view;
 pub mod global_setup;
 pub mod help_overlay;
@@ -11,6 +13,8 @@ pub mod status_bar;
 pub mod system_metrics;
 
 pub use agent_list::AgentListWidget;
+pub use devserver_view::{DevServerViewWidget, EmptyDevServerWidget};
+pub use devserver_warning::DevServerWarningModal;
 pub use diff_view::{DiffViewWidget, EmptyDiffWidget};
 pub use global_setup::GlobalSetupWizard;
 pub use help_overlay::HelpOverlay;

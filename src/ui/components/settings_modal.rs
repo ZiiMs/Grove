@@ -440,6 +440,46 @@ impl<'a> SettingsModal<'a> {
                     .unwrap_or_default(),
                 false,
             ),
+            SettingsField::DevServerCommand => (
+                "Command".to_string(),
+                self.state
+                    .repo_config
+                    .dev_server
+                    .command
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::DevServerRunBefore => (
+                "Run Before".to_string(),
+                self.state.repo_config.dev_server.run_before.join(", "),
+                false,
+            ),
+            SettingsField::DevServerWorkingDir => (
+                "Working Dir".to_string(),
+                self.state.repo_config.dev_server.working_dir.clone(),
+                false,
+            ),
+            SettingsField::DevServerPort => (
+                "Port".to_string(),
+                self.state
+                    .repo_config
+                    .dev_server
+                    .port
+                    .map(|p| p.to_string())
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::DevServerAutoStart => (
+                "Auto Start".to_string(),
+                if self.state.repo_config.dev_server.auto_start {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
+                true,
+            ),
         }
     }
 
@@ -456,6 +496,7 @@ impl<'a> SettingsModal<'a> {
                     | SettingsField::ShowMetrics
                     | SettingsField::ShowLogs
                     | SettingsField::ShowBanner
+                    | SettingsField::DevServerAutoStart
             );
             if is_toggle {
                 "[Tab] Switch tab  [Enter] Toggle  [↑/↓] Navigate  [Esc] Close"

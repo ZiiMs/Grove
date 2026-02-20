@@ -6,15 +6,23 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AppState, InputMode, LogLevel};
+use crate::app::{AppState, InputMode, LogLevel, PreviewTab};
+use crate::devserver::DevServerStatus;
 
 use super::components::{
-    render_confirm_modal, render_input_modal, AgentListWidget, EmptyOutputWidget,
-    GlobalSetupWizard, HelpOverlay, LoadingOverlay, OutputViewWidget, ProjectSetupWizard,
-    SettingsModal, StatusBarWidget, SystemMetricsWidget,
+    render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
+    DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GlobalSetupWizard, HelpOverlay,
+    LoadingOverlay, OutputViewWidget, ProjectSetupWizard, SettingsModal, StatusBarWidget,
+    SystemMetricsWidget,
 };
 
-/// ASCII art banner for FLOCK (with padding)
+#[derive(Clone)]
+pub struct DevServerRenderInfo {
+    pub status: DevServerStatus,
+    pub logs: Vec<String>,
+    pub agent_name: String,
+}
+
 const BANNER: &[&str] = &[
     "",
     " ███████╗██╗      ██████╗  ██████╗██╗  ██╗",
@@ -26,14 +34,22 @@ const BANNER: &[&str] = &[
     "",
 ];
 
-/// Main application UI renderer.
 pub struct AppWidget<'a> {
     state: &'a AppState,
+    devserver_info: Option<DevServerRenderInfo>,
 }
 
 impl<'a> AppWidget<'a> {
     pub fn new(state: &'a AppState) -> Self {
-        Self { state }
+        Self {
+            state,
+            devserver_info: None,
+        }
+    }
+
+    pub fn with_devserver(mut self, info: Option<DevServerRenderInfo>) -> Self {
+        self.devserver_info = info;
+        self
     }
 
     pub fn render(self, frame: &mut Frame) {
@@ -138,7 +154,9 @@ impl<'a> AppWidget<'a> {
             }
         }
 
-        if let Some(mode) = &self.state.input_mode {
+        if let Some(warning) = &self.state.devserver_warning {
+            DevServerWarningModal::new(warning).render(frame);
+        } else if let Some(mode) = &self.state.input_mode {
             self.render_modal(frame, mode, size);
         }
 
@@ -286,14 +304,66 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_preview(&self, frame: &mut Frame, area: Rect) {
-        // Check if selected agent is paused
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(8)])
+            .split(area);
+
+        self.render_preview_tabs(frame, chunks[0]);
+
         if let Some(agent) = self.state.selected_agent() {
             if matches!(agent.status, crate::agent::AgentStatus::Paused) {
-                self.render_paused_preview(frame, area, &agent.name);
+                self.render_paused_preview(frame, chunks[1], &agent.name);
                 return;
             }
         }
 
+        match self.state.preview_tab {
+            PreviewTab::Preview => self.render_preview_content(frame, chunks[1]),
+            PreviewTab::DevServer => self.render_devserver_content(frame, chunks[1]),
+        }
+    }
+
+    fn render_preview_tabs(&self, frame: &mut Frame, area: Rect) {
+        let preview_style = if self.state.preview_tab == PreviewTab::Preview {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let has_running = self
+            .devserver_info
+            .as_ref()
+            .map(|info| info.status.is_running())
+            .unwrap_or(false);
+        let devserver_indicator = if has_running { " *" } else { "" };
+
+        let devserver_style = if self.state.preview_tab == PreviewTab::DevServer {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let tabs = Line::from(vec![
+            Span::styled(" Preview ", preview_style),
+            Span::raw(" "),
+            Span::styled(
+                format!(" Dev Server{} ", devserver_indicator),
+                devserver_style,
+            ),
+        ]);
+
+        let paragraph = Paragraph::new(tabs);
+        frame.render_widget(paragraph, area);
+    }
+
+    fn render_preview_content(&self, frame: &mut Frame, area: Rect) {
         if let Some(content) = &self.state.preview_content {
             let agent_name = self
                 .state
@@ -306,6 +376,19 @@ impl<'a> AppWidget<'a> {
                 .render(frame, area);
         } else {
             EmptyOutputWidget::render(frame, area);
+        }
+    }
+
+    fn render_devserver_content(&self, frame: &mut Frame, area: Rect) {
+        if let Some(info) = &self.devserver_info {
+            DevServerViewWidget::new(
+                info.status.clone(),
+                info.logs.clone(),
+                info.agent_name.clone(),
+            )
+            .render(frame, area);
+        } else {
+            EmptyDevServerWidget::render(frame, area);
         }
     }
 
@@ -417,7 +500,6 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        // Always show keybindings - modals handle input display
         StatusBarWidget::new(None, false).render(frame, area);
     }
 }

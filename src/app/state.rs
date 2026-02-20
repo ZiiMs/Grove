@@ -11,11 +11,25 @@ use crate::agent::Agent;
 
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreviewTab {
+    #[default]
+    Preview,
+    DevServer,
+}
+
+#[derive(Debug, Clone)]
+pub struct DevServerWarning {
+    pub agent_id: Uuid,
+    pub running_servers: Vec<(String, Option<u16>)>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     General,
     Git,
     ProjectMgmt,
+    DevServer,
 }
 
 impl SettingsTab {
@@ -24,6 +38,7 @@ impl SettingsTab {
             SettingsTab::General,
             SettingsTab::Git,
             SettingsTab::ProjectMgmt,
+            SettingsTab::DevServer,
         ]
     }
 
@@ -32,6 +47,7 @@ impl SettingsTab {
             SettingsTab::General => "General",
             SettingsTab::Git => "Git",
             SettingsTab::ProjectMgmt => "Project Mgmt",
+            SettingsTab::DevServer => "Dev Server",
         }
     }
 
@@ -39,15 +55,17 @@ impl SettingsTab {
         match self {
             SettingsTab::General => SettingsTab::Git,
             SettingsTab::Git => SettingsTab::ProjectMgmt,
-            SettingsTab::ProjectMgmt => SettingsTab::General,
+            SettingsTab::ProjectMgmt => SettingsTab::DevServer,
+            SettingsTab::DevServer => SettingsTab::General,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            SettingsTab::General => SettingsTab::ProjectMgmt,
+            SettingsTab::General => SettingsTab::DevServer,
             SettingsTab::Git => SettingsTab::General,
             SettingsTab::ProjectMgmt => SettingsTab::Git,
+            SettingsTab::DevServer => SettingsTab::ProjectMgmt,
         }
     }
 }
@@ -76,6 +94,11 @@ pub enum SettingsField {
     AsanaProjectGid,
     AsanaInProgressGid,
     AsanaDoneGid,
+    DevServerCommand,
+    DevServerRunBefore,
+    DevServerWorkingDir,
+    DevServerPort,
+    DevServerAutoStart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +110,7 @@ pub enum SettingsCategory {
     GitConfig,
     Ci,
     Asana,
+    DevServer,
 }
 
 impl SettingsCategory {
@@ -99,6 +123,7 @@ impl SettingsCategory {
             SettingsCategory::GitConfig => "Configuration",
             SettingsCategory::Ci => "CI/CD",
             SettingsCategory::Asana => "Asana",
+            SettingsCategory::DevServer => "Dev Server",
         }
     }
 }
@@ -134,6 +159,11 @@ impl SettingsField {
             SettingsField::AsanaProjectGid
             | SettingsField::AsanaInProgressGid
             | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
+            SettingsField::DevServerCommand
+            | SettingsField::DevServerRunBefore
+            | SettingsField::DevServerWorkingDir
+            | SettingsField::DevServerPort
+            | SettingsField::DevServerAutoStart => SettingsTab::DevServer,
         }
     }
 }
@@ -186,6 +216,14 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::AsanaProjectGid),
                 SettingsItem::Field(SettingsField::AsanaInProgressGid),
                 SettingsItem::Field(SettingsField::AsanaDoneGid),
+            ],
+            SettingsTab::DevServer => vec![
+                SettingsItem::Category(SettingsCategory::DevServer),
+                SettingsItem::Field(SettingsField::DevServerCommand),
+                SettingsItem::Field(SettingsField::DevServerRunBefore),
+                SettingsItem::Field(SettingsField::DevServerWorkingDir),
+                SettingsItem::Field(SettingsField::DevServerPort),
+                SettingsItem::Field(SettingsField::DevServerAutoStart),
             ],
         }
     }
@@ -305,6 +343,9 @@ pub struct AppState {
     pub show_project_setup: bool,
     pub project_setup: Option<ProjectSetupState>,
     pub worktree_base: std::path::PathBuf,
+    pub preview_tab: PreviewTab,
+    pub devserver_scroll: usize,
+    pub devserver_warning: Option<DevServerWarning>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -392,6 +433,9 @@ impl AppState {
             show_project_setup: false,
             project_setup: None,
             worktree_base,
+            preview_tab: PreviewTab::default(),
+            devserver_scroll: 0,
+            devserver_warning: None,
         }
     }
 
