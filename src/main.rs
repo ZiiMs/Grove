@@ -466,8 +466,15 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
+            
+            let devserver_statuses = devserver_manager
+                .try_lock()
+                .map(|m| m.all_statuses())
+                .unwrap_or_default();
+            
             AppWidget::new(&state)
                 .with_devserver(devserver_info)
+                .with_devserver_statuses(devserver_statuses)
                 .render(f);
         })?;
 

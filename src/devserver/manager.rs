@@ -96,6 +96,17 @@ impl DevServerManager {
             .get(&agent_id)
             .and_then(|s| s.tmux_session().map(String::from))
     }
+
+    pub fn all_statuses(&self) -> HashMap<Uuid, super::process::DevServerStatus> {
+        self.servers
+            .iter()
+            .map(|(id, server)| (*id, server.status().clone()))
+            .collect()
+    }
+
+    pub fn server_count(&self) -> usize {
+        self.servers.len()
+    }
 }
 
 pub type SharedDevServerManager = Arc<tokio::sync::Mutex<DevServerManager>>;
