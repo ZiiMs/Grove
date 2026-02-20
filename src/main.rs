@@ -2822,7 +2822,15 @@ async fn process_action(
             if let Some(agent) = state.selected_agent() {
                 let agent_id = agent.id;
                 if let Ok(manager) = devserver_manager.try_lock() {
-                    if manager.has_running_server() {
+                    let current_running = manager
+                        .get(agent_id)
+                        .map(|s| s.status().is_running())
+                        .unwrap_or(false);
+                    
+                    if current_running {
+                        drop(manager);
+                        action_tx.send(Action::StopDevServer)?;
+                    } else if manager.has_running_server() {
                         let running = manager.running_servers();
                         state.devserver_warning = Some(flock::app::DevServerWarning {
                             agent_id,
