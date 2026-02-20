@@ -67,6 +67,8 @@ jobs:
 
       - name: Build binary
         run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          OPENSSL_NO_PKG_CONFIG: "1"
 
       - name: Package binary
         run: |
