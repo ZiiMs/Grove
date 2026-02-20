@@ -626,7 +626,7 @@ impl<'a> SettingsModal<'a> {
         let paragraph = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(paragraph, chunks[0]);
 
-        let hint = "[Enter] New line  [Ctrl+S] Save  [Ctrl+Q] Save & Close  [Esc] Cancel";
+        let hint = "[Enter] Save  [Shift+Enter] New line  [Ctrl+S] Save & Close  [Esc] Close";
         let footer = Paragraph::new(Line::from(Span::styled(
             hint,
             Style::default().fg(Color::DarkGray),

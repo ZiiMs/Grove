@@ -768,12 +768,15 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
     if state.settings.editing_prompt {
         return match key.code {
             KeyCode::Esc => Some(Action::SettingsCancelSelection),
-            KeyCode::Enter => Some(Action::SettingsInputChar('\n')),
+            KeyCode::Enter => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    Some(Action::SettingsInputChar('\n'))
+                } else {
+                    Some(Action::SettingsPromptSave)
+                }
+            }
             KeyCode::Backspace => Some(Action::SettingsBackspace),
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(Action::SettingsPromptSave)
-            }
-            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(Action::SettingsConfirmSelection)
             }
             KeyCode::Char(c) => Some(Action::SettingsInputChar(c)),
