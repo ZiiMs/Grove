@@ -125,6 +125,27 @@ impl GitProvider {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
+pub enum ProjectMgmtProvider {
+    #[default]
+    Asana,
+    Notion,
+}
+
+impl ProjectMgmtProvider {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ProjectMgmtProvider::Asana => "Asana",
+            ProjectMgmtProvider::Notion => "Notion",
+        }
+    }
+
+    pub fn all() -> &'static [ProjectMgmtProvider] {
+        &[ProjectMgmtProvider::Asana, ProjectMgmtProvider::Notion]
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Debug,
     #[default]
@@ -200,6 +221,8 @@ pub struct Config {
     #[serde(default)]
     pub asana: AsanaConfig,
     #[serde(default)]
+    pub notion: NotionConfig,
+    #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
     pub performance: PerformanceConfig,
@@ -221,6 +244,24 @@ impl Default for AsanaConfig {
     fn default() -> Self {
         Self {
             refresh_secs: default_asana_refresh(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotionConfig {
+    #[serde(default = "default_notion_refresh")]
+    pub refresh_secs: u64,
+}
+
+fn default_notion_refresh() -> u64 {
+    120
+}
+
+impl Default for NotionConfig {
+    fn default() -> Self {
+        Self {
+            refresh_secs: default_notion_refresh(),
         }
     }
 }
@@ -650,6 +691,10 @@ impl Config {
         std::env::var("ASANA_TOKEN").ok()
     }
 
+    pub fn notion_token() -> Option<String> {
+        std::env::var("NOTION_TOKEN").ok()
+    }
+
     pub fn codeberg_token() -> Option<String> {
         std::env::var("CODEBERG_TOKEN").ok()
     }
@@ -687,9 +732,29 @@ pub struct RepoConfig {
     #[serde(default)]
     pub git: RepoGitConfig,
     #[serde(default)]
-    pub asana: RepoAsanaConfig,
+    pub project_mgmt: RepoProjectMgmtConfig,
     #[serde(default)]
     pub prompts: PromptsConfig,
+    #[serde(default)]
+    pub dev_server: DevServerConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoProjectMgmtConfig {
+    #[serde(default)]
+    pub provider: ProjectMgmtProvider,
+    #[serde(default)]
+    pub asana: RepoAsanaConfig,
+    #[serde(default)]
+    pub notion: RepoNotionConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoNotionConfig {
+    pub database_id: Option<String>,
+    pub status_property_name: Option<String>,
+    pub in_progress_option: Option<String>,
+    pub done_option: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -707,7 +772,7 @@ impl PromptsConfig {
             "Please provide a brief, non-technical summary of the work done on this branch. \
              Format it as 1-5 bullet points suitable for sharing with non-technical colleagues on Slack. \
              Focus on what was accomplished and why, not implementation details. \
-             Keep each bullet point to one sentence."
+             Keep each bullet point to one sentence.",
         )
     }
 
@@ -773,8 +838,6 @@ pub struct RepoGitConfig {
     #[serde(default = "default_main_branch")]
     pub main_branch: String,
     #[serde(default)]
-    pub worktree_symlinks: Vec<String>,
-    #[serde(default)]
     pub gitlab: RepoGitLabConfig,
     #[serde(default)]
     pub github: RepoGitHubConfig,
@@ -796,7 +859,6 @@ impl Default for RepoGitConfig {
             provider: GitProvider::default(),
             branch_prefix: default_branch_prefix(),
             main_branch: default_main_branch(),
-            worktree_symlinks: Vec::new(),
             gitlab: RepoGitLabConfig::default(),
             github: RepoGitHubConfig::default(),
             codeberg: RepoCodebergConfig::default(),
@@ -861,6 +923,20 @@ pub struct RepoAsanaConfig {
     pub done_section_gid: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DevServerConfig {
+    pub command: Option<String>,
+    #[serde(default)]
+    pub run_before: Vec<String>,
+    #[serde(default)]
+    pub working_dir: String,
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub auto_start: bool,
+    #[serde(default)]
+    pub worktree_symlinks: Vec<String>,
+}
+
 impl RepoConfig {
     pub fn load(repo_path: &str) -> Result<Self> {
         let config_path = Self::config_path(repo_path)?;
@@ -868,7 +944,32 @@ impl RepoConfig {
         if config_path.exists() {
             let content =
                 std::fs::read_to_string(&config_path).context("Failed to read repo config")?;
-            toml::from_str(&content).context("Failed to parse repo config")
+
+            if let Ok(config) = toml::from_str::<RepoConfig>(&content) {
+                return Ok(config);
+            }
+
+            #[derive(Deserialize)]
+            struct LegacyRepoConfig {
+                git: RepoGitConfig,
+                asana: RepoAsanaConfig,
+                prompts: PromptsConfig,
+            }
+
+            if let Ok(legacy) = toml::from_str::<LegacyRepoConfig>(&content) {
+                return Ok(RepoConfig {
+                    git: legacy.git,
+                    project_mgmt: RepoProjectMgmtConfig {
+                        provider: ProjectMgmtProvider::Asana,
+                        asana: legacy.asana,
+                        notion: RepoNotionConfig::default(),
+                    },
+                    prompts: legacy.prompts,
+                    dev_server: DevServerConfig::default(),
+                });
+            }
+
+            anyhow::bail!("Failed to parse repo config (neither new nor legacy format)")
         } else {
             Ok(Self::default())
         }

@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use uuid::Uuid;
+
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
@@ -5,11 +8,13 @@ use ratatui::{
     Frame,
 };
 
-use crate::agent::{Agent, AgentStatus};
+use crate::agent::{Agent, AgentStatus, ProjectMgmtTaskStatus};
 use crate::app::config::GitProvider;
 use crate::asana::AsanaTaskStatus;
+use crate::devserver::DevServerStatus;
 use crate::github::CheckStatus;
 use crate::gitlab::PipelineStatus;
+use crate::notion::NotionTaskStatus;
 
 /// Braille spinner frames for running status
 const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -23,6 +28,7 @@ pub struct AgentListWidget<'a> {
     animation_frame: usize,
     count: usize,
     provider: GitProvider,
+    devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
 }
 
 impl<'a> AgentListWidget<'a> {
@@ -31,6 +37,7 @@ impl<'a> AgentListWidget<'a> {
         selected: usize,
         animation_frame: usize,
         provider: GitProvider,
+        devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
     ) -> Self {
         Self {
             agents,
@@ -38,6 +45,7 @@ impl<'a> AgentListWidget<'a> {
             animation_frame,
             count: agents.len(),
             provider,
+            devserver_statuses,
         }
     }
 
@@ -48,7 +56,8 @@ impl<'a> AgentListWidget<'a> {
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let header_cells = [
-            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Asana", "Note",
+            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Server",
+            "PM Task", "Note",
         ]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
@@ -83,6 +92,7 @@ impl<'a> AgentListWidget<'a> {
                         Cell::from("────────"),
                         Cell::from("──────────"),
                         Cell::from("──────────"),
+                        Cell::from("────────"),
                         Cell::from("────────────────"),
                         Cell::from("──────────"),
                     ])
@@ -104,6 +114,7 @@ impl<'a> AgentListWidget<'a> {
                 Constraint::Length(8),  // Tasks (checklist progress)
                 Constraint::Length(10), // MR
                 Constraint::Length(10), // Pipeline
+                Constraint::Length(10), // Server
                 Constraint::Length(16), // Asana
                 Constraint::Min(10),    // Note (fills remaining)
             ],
@@ -178,9 +189,13 @@ impl<'a> AgentListWidget<'a> {
         let (pipeline_text, pipeline_style) = self.format_pipeline_status(agent);
         let pipeline_cell = Cell::from(pipeline_text).style(pipeline_style);
 
-        // Asana column
-        let (asana_text, asana_style) = self.format_asana_status(agent);
-        let asana_cell = Cell::from(asana_text).style(asana_style);
+        // Server column
+        let (server_text, server_style) = self.format_devserver_status(agent);
+        let server_cell = Cell::from(server_text).style(server_style);
+
+        // PM Task column
+        let (pm_text, pm_style) = self.format_pm_status(agent);
+        let pm_cell = Cell::from(pm_text).style(pm_style);
 
         // Note column
         let note = agent.custom_note.as_deref().unwrap_or("");
@@ -204,7 +219,8 @@ impl<'a> AgentListWidget<'a> {
             tasks_cell,
             mr_cell,
             pipeline_cell,
-            asana_cell,
+            server_cell,
+            pm_cell,
             note_cell,
         ])
     }
@@ -360,16 +376,49 @@ impl<'a> AgentListWidget<'a> {
         }
     }
 
-    fn format_asana_status(&self, agent: &Agent) -> (String, Style) {
-        let text = agent.asana_task_status.format_short();
-        let style = match &agent.asana_task_status {
-            AsanaTaskStatus::None => Style::default().fg(Color::DarkGray),
-            AsanaTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-            AsanaTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-            AsanaTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-            AsanaTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+    fn format_pm_status(&self, agent: &Agent) -> (String, Style) {
+        let text = agent.pm_task_status.format_short();
+        let style = match &agent.pm_task_status {
+            ProjectMgmtTaskStatus::None => Style::default().fg(Color::DarkGray),
+            ProjectMgmtTaskStatus::Asana(s) => match s {
+                AsanaTaskStatus::None => Style::default().fg(Color::DarkGray),
+                AsanaTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                AsanaTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                AsanaTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                AsanaTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
+            ProjectMgmtTaskStatus::Notion(s) => match s {
+                NotionTaskStatus::None => Style::default().fg(Color::DarkGray),
+                NotionTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                NotionTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                NotionTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                NotionTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
         };
         (text, style)
+    }
+
+    fn format_devserver_status(&self, agent: &Agent) -> (String, Style) {
+        let status = self.devserver_statuses.get(&agent.id);
+
+        match status {
+            Some(DevServerStatus::Running { .. }) => {
+                ("● Running".to_string(), Style::default().fg(Color::Green))
+            }
+            Some(DevServerStatus::Starting) => {
+                ("◐ Starting".to_string(), Style::default().fg(Color::Yellow))
+            }
+            Some(DevServerStatus::Stopping) => {
+                ("◑ Stopping".to_string(), Style::default().fg(Color::Yellow))
+            }
+            Some(DevServerStatus::Failed(_)) => {
+                ("✗ Failed".to_string(), Style::default().fg(Color::Red))
+            }
+            Some(DevServerStatus::Stopped) | None => (
+                "○ Stopped".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ),
+        }
     }
 
     fn render_sparkline(&self, agent: &Agent) -> String {

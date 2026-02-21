@@ -7,9 +7,11 @@ use ratatui::{
 };
 
 use crate::app::{
-    AiAgent, CodebergCiProvider, Config, ConfigLogLevel, GitProvider, SettingsCategory,
-    SettingsField, SettingsItem, SettingsState, SettingsTab, UiConfig, WorktreeLocation,
+    AiAgent, CodebergCiProvider, Config, ConfigLogLevel, GitProvider, ProjectMgmtProvider,
+    SettingsCategory, SettingsField, SettingsItem, SettingsState, SettingsTab, UiConfig,
+    WorktreeLocation,
 };
+use crate::ui::components::file_browser;
 
 pub struct SettingsModal<'a> {
     state: &'a SettingsState,
@@ -71,6 +73,10 @@ impl<'a> SettingsModal<'a> {
 
         if self.state.capturing_keybind.is_some() {
             self.render_keybind_capture(frame);
+        }
+
+        if self.state.file_browser.active {
+            self.render_file_browser(frame);
         }
     }
 
@@ -164,6 +170,22 @@ impl<'a> SettingsModal<'a> {
                                         Config::woodpecker_token().is_some(),
                                     ));
                                 }
+                            }
+                        }
+                    }
+                    if *field == SettingsField::ProjectMgmtProvider {
+                        match self.state.repo_config.project_mgmt.provider {
+                            ProjectMgmtProvider::Asana => {
+                                lines.push(Self::render_token_status_line(
+                                    "ASANA_TOKEN",
+                                    Config::asana_token().is_some(),
+                                ));
+                            }
+                            ProjectMgmtProvider::Notion => {
+                                lines.push(Self::render_token_status_line(
+                                    "NOTION_TOKEN",
+                                    Config::notion_token().is_some(),
+                                ));
                             }
                         }
                     }
@@ -425,13 +447,18 @@ impl<'a> SettingsModal<'a> {
             ),
             SettingsField::WorktreeSymlinks => (
                 "Symlinks".to_string(),
-                self.state.repo_config.git.worktree_symlinks.join(", "),
+                self.state
+                    .repo_config
+                    .dev_server
+                    .worktree_symlinks
+                    .join(", "),
                 false,
             ),
             SettingsField::AsanaProjectGid => (
                 "Project GID".to_string(),
                 self.state
                     .repo_config
+                    .project_mgmt
                     .asana
                     .project_gid
                     .clone()
@@ -442,6 +469,7 @@ impl<'a> SettingsModal<'a> {
                 "In Progress GID".to_string(),
                 self.state
                     .repo_config
+                    .project_mgmt
                     .asana
                     .in_progress_section_gid
                     .clone()
@@ -452,11 +480,106 @@ impl<'a> SettingsModal<'a> {
                 "Done GID".to_string(),
                 self.state
                     .repo_config
+                    .project_mgmt
                     .asana
                     .done_section_gid
                     .clone()
                     .unwrap_or_default(),
                 false,
+            ),
+            SettingsField::ProjectMgmtProvider => (
+                "Provider".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .provider
+                    .display_name()
+                    .to_string(),
+                false,
+            ),
+            SettingsField::NotionDatabaseId => (
+                "Database ID".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .notion
+                    .database_id
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::NotionStatusProperty => (
+                "Status Property".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .notion
+                    .status_property_name
+                    .clone()
+                    .unwrap_or_else(|| "Status".to_string()),
+                false,
+            ),
+            SettingsField::NotionInProgressOption => (
+                "In Progress".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .notion
+                    .in_progress_option
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
+            SettingsField::NotionDoneOption => (
+                "Done".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .notion
+                    .done_option
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
+            SettingsField::DevServerCommand => (
+                "Command".to_string(),
+                self.state
+                    .repo_config
+                    .dev_server
+                    .command
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::DevServerRunBefore => (
+                "Run Before".to_string(),
+                self.state.repo_config.dev_server.run_before.join(", "),
+                false,
+            ),
+            SettingsField::DevServerWorkingDir => (
+                "Working Dir".to_string(),
+                self.state.repo_config.dev_server.working_dir.clone(),
+                false,
+            ),
+            SettingsField::DevServerPort => (
+                "Port".to_string(),
+                self.state
+                    .repo_config
+                    .dev_server
+                    .port
+                    .map(|p| p.to_string())
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::DevServerAutoStart => (
+                "Auto Start".to_string(),
+                if self.state.repo_config.dev_server.auto_start {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
+                true,
             ),
             SettingsField::SummaryPrompt => (
                 "Summary".to_string(),
@@ -520,6 +643,7 @@ impl<'a> SettingsModal<'a> {
                     | SettingsField::ShowMetrics
                     | SettingsField::ShowLogs
                     | SettingsField::ShowBanner
+                    | SettingsField::DevServerAutoStart
             );
             let is_keybind = field.is_keybind_field();
             if is_keybind {
@@ -566,6 +690,10 @@ impl<'a> SettingsModal<'a> {
             SettingsField::CodebergCiProvider => CodebergCiProvider::all()
                 .iter()
                 .map(|c| c.display_name())
+                .collect(),
+            SettingsField::ProjectMgmtProvider => ProjectMgmtProvider::all()
+                .iter()
+                .map(|p| p.display_name())
                 .collect(),
             _ => return,
         };
@@ -706,6 +834,18 @@ impl<'a> SettingsModal<'a> {
 
         let paragraph = Paragraph::new(lines).alignment(Alignment::Left);
         frame.render_widget(paragraph, inner);
+    }
+
+    fn render_file_browser(&self, frame: &mut Frame) {
+        let fb = &self.state.file_browser;
+        let widget = file_browser::FileBrowserWidget::new(
+            &fb.entries,
+            fb.selected_index,
+            &fb.selected_files,
+            &fb.current_path,
+            &fb.current_path,
+        );
+        widget.render(frame);
     }
 }
 

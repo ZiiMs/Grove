@@ -1,7 +1,6 @@
 # Rust build artifacts
 /target
-Cargo.lock
-.flock
+.flock/
 
 # Editor files
 *.swp
@@ -29,3 +28,4 @@ Cargo.lock
 # Debug files
 *.log
 *.pdb
+.flock/project.toml

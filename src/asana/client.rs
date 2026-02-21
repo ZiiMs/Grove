@@ -2,14 +2,18 @@ use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use tokio::sync::Mutex;
 
-use super::types::{AsanaSectionsResponse, AsanaTaskData, AsanaTaskResponse};
+use super::types::{
+    AsanaSectionsResponse, AsanaTaskData, AsanaTaskListResponse, AsanaTaskResponse,
+    AsanaTaskSummary,
+};
 
 /// Asana API client.
+#[allow(clippy::type_complexity)]
 pub struct AsanaClient {
     client: reqwest::Client,
     project_gid: Option<String>,
-    /// Cached section GIDs: (in_progress_gid, done_gid)
-    cached_sections: Mutex<Option<(Option<String>, Option<String>)>>,
+    /// Cached section GIDs: (not_started_gid, in_progress_gid, done_gid)
+    cached_sections: Mutex<Option<(Option<String>, Option<String>, Option<String>)>>,
 }
 
 impl AsanaClient {
@@ -36,26 +40,152 @@ impl AsanaClient {
     pub async fn get_task(&self, gid: &str) -> Result<AsanaTaskData> {
         let url = format!("https://app.asana.com/api/1.0/tasks/{}", gid);
 
+        tracing::debug!("Asana get_task: url={}", url);
+
         let response = self
             .client
             .get(&url)
-            .query(&[("opt_fields", "gid,name,completed,permalink_url")])
+            .query(&[(
+                "opt_fields",
+                "gid,name,completed,permalink_url,parent,num_subtasks",
+            )])
             .send()
             .await
             .context("Failed to fetch Asana task")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Asana API error: {} - {}", status, body);
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Asana get_task response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            tracing::error!("Asana API error: {} - {}", status, response_text);
+            anyhow::bail!("Asana API error: {} - {}", status, response_text);
         }
 
-        let task_resp: AsanaTaskResponse = response
-            .json()
-            .await
-            .context("Failed to parse Asana task response")?;
+        let task_resp: AsanaTaskResponse =
+            serde_json::from_str(&response_text).context("Failed to parse Asana task response")?;
 
         Ok(task_resp.data)
+    }
+
+    /// Fetch subtasks of a parent task.
+    pub async fn get_subtasks(&self, parent_gid: &str) -> Result<Vec<AsanaTaskSummary>> {
+        let url = format!(
+            "https://app.asana.com/api/1.0/tasks/{}/subtasks",
+            parent_gid
+        );
+
+        tracing::debug!("Asana get_subtasks: url={}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&[(
+                "opt_fields",
+                "gid,name,completed,permalink_url,parent,num_subtasks",
+            )])
+            .send()
+            .await
+            .context("Failed to fetch Asana subtasks")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Asana get_subtasks response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            tracing::error!("Asana API error: {} - {}", status, response_text);
+            anyhow::bail!("Asana API error: {} - {}", status, response_text);
+        }
+
+        let task_list: AsanaTaskListResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse Asana subtasks response")?;
+
+        Ok(task_list
+            .data
+            .into_iter()
+            .map(AsanaTaskSummary::from)
+            .collect())
+    }
+
+    /// Fetch all tasks from the configured project, including subtasks.
+    pub async fn get_project_tasks_with_subtasks(&self) -> Result<Vec<AsanaTaskSummary>> {
+        let mut all_tasks = self.get_project_tasks().await?;
+
+        let parent_gids: Vec<String> = all_tasks
+            .iter()
+            .filter(|t| t.num_subtasks > 0)
+            .map(|t| t.gid.clone())
+            .collect();
+
+        for parent_gid in parent_gids {
+            match self.get_subtasks(&parent_gid).await {
+                Ok(subtasks) => {
+                    all_tasks.extend(subtasks);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch subtasks for task {}: {}", parent_gid, e);
+                }
+            }
+        }
+
+        Ok(all_tasks)
+    }
+    pub async fn get_project_tasks(&self) -> Result<Vec<AsanaTaskSummary>> {
+        let project_gid = match &self.project_gid {
+            Some(gid) => gid,
+            None => anyhow::bail!("No Asana project GID configured"),
+        };
+
+        let url = format!(
+            "https://app.asana.com/api/1.0/projects/{}/tasks",
+            project_gid
+        );
+
+        tracing::debug!("Asana get_project_tasks: url={}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&[(
+                "opt_fields",
+                "gid,name,completed,permalink_url,parent,num_subtasks",
+            )])
+            .send()
+            .await
+            .context("Failed to fetch Asana project tasks")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Asana get_project_tasks response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            tracing::error!("Asana API error: {} - {}", status, response_text);
+            anyhow::bail!("Asana API error: {} - {}", status, response_text);
+        }
+
+        let task_list: AsanaTaskListResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse Asana task list response")?;
+
+        Ok(task_list
+            .data
+            .into_iter()
+            .map(AsanaTaskSummary::from)
+            .collect())
     }
 
     /// Mark a task as completed.
@@ -123,11 +253,17 @@ impl AsanaClient {
             None => return Ok(None),
         };
 
-        // Check cache first
         {
             let cache = self.cached_sections.lock().await;
-            if let Some((ref in_progress, ref done)) = *cache {
+            if let Some((ref not_started, ref in_progress, ref done)) = *cache {
                 let lower = name.to_lowercase();
+                if lower.contains("not started")
+                    || lower.contains("todo")
+                    || lower.contains("to do")
+                    || lower.contains("backlog")
+                {
+                    return Ok(not_started.clone());
+                }
                 if lower.contains("in progress") || lower.contains("in_progress") {
                     return Ok(in_progress.clone());
                 }
@@ -137,7 +273,6 @@ impl AsanaClient {
             }
         }
 
-        // Fetch sections from API
         let url = format!(
             "https://app.asana.com/api/1.0/projects/{}/sections",
             project_gid
@@ -161,12 +296,19 @@ impl AsanaClient {
             .await
             .context("Failed to parse Asana sections response")?;
 
-        // Find "In Progress" and "Done" sections by name
+        let mut not_started_gid = None;
         let mut in_progress_gid = None;
         let mut done_gid = None;
 
         for section in &sections.data {
             let lower = section.name.to_lowercase();
+            if lower.contains("not started")
+                || lower.contains("todo")
+                || lower.contains("to do")
+                || lower.contains("backlog")
+            {
+                not_started_gid = Some(section.gid.clone());
+            }
             if lower.contains("in progress") {
                 in_progress_gid = Some(section.gid.clone());
             }
@@ -175,14 +317,23 @@ impl AsanaClient {
             }
         }
 
-        // Cache the results
         {
             let mut cache = self.cached_sections.lock().await;
-            *cache = Some((in_progress_gid.clone(), done_gid.clone()));
+            *cache = Some((
+                not_started_gid.clone(),
+                in_progress_gid.clone(),
+                done_gid.clone(),
+            ));
         }
 
         let lower = name.to_lowercase();
-        if lower.contains("in progress") || lower.contains("in_progress") {
+        if lower.contains("not started")
+            || lower.contains("todo")
+            || lower.contains("to do")
+            || lower.contains("backlog")
+        {
+            Ok(not_started_gid)
+        } else if lower.contains("in progress") || lower.contains("in_progress") {
             Ok(in_progress_gid)
         } else if lower.contains("done") || lower.contains("complete") {
             Ok(done_gid)
@@ -210,6 +361,54 @@ impl AsanaClient {
                 Ok(())
             }
         }
+    }
+
+    /// Move a task to "Not Started" / "To Do" section.
+    /// Uses `override_gid` if provided, otherwise auto-detects by section name.
+    pub async fn move_to_not_started(
+        &self,
+        task_gid: &str,
+        override_gid: Option<&str>,
+    ) -> Result<()> {
+        let section_gid = match override_gid {
+            Some(gid) => Some(gid.to_string()),
+            None => self.find_section_gid("Not Started").await?,
+        };
+
+        match section_gid {
+            Some(gid) => self.move_task_to_section(task_gid, &gid).await,
+            None => {
+                tracing::warn!("No 'Not Started' section found; skipping move");
+                Ok(())
+            }
+        }
+    }
+
+    /// Mark a task as not completed (uncomplete).
+    pub async fn uncomplete_task(&self, gid: &str) -> Result<()> {
+        let url = format!("https://app.asana.com/api/1.0/tasks/{}", gid);
+
+        let body = serde_json::json!({
+            "data": {
+                "completed": false
+            }
+        });
+
+        let response = self
+            .client
+            .put(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to uncomplete Asana task")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Asana API error uncompleting task: {} - {}", status, body);
+        }
+
+        Ok(())
     }
     /// Move a task to the "Done" section.
     /// Uses `override_gid` if provided, otherwise auto-detects by section name.
@@ -251,6 +450,20 @@ impl OptionalAsanaClient {
         }
     }
 
+    pub async fn get_project_tasks(&self) -> Result<Vec<AsanaTaskSummary>> {
+        match &self.client {
+            Some(c) => c.get_project_tasks().await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
+    pub async fn get_project_tasks_with_subtasks(&self) -> Result<Vec<AsanaTaskSummary>> {
+        match &self.client {
+            Some(c) => c.get_project_tasks_with_subtasks().await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
     pub async fn complete_task(&self, gid: &str) -> Result<()> {
         match &self.client {
             Some(c) => c.complete_task(gid).await,
@@ -272,6 +485,24 @@ impl OptionalAsanaClient {
     pub async fn move_to_done(&self, task_gid: &str, override_gid: Option<&str>) -> Result<()> {
         match &self.client {
             Some(c) => c.move_to_done(task_gid, override_gid).await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
+    pub async fn move_to_not_started(
+        &self,
+        task_gid: &str,
+        override_gid: Option<&str>,
+    ) -> Result<()> {
+        match &self.client {
+            Some(c) => c.move_to_not_started(task_gid, override_gid).await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
+    pub async fn uncomplete_task(&self, gid: &str) -> Result<()> {
+        match &self.client {
+            Some(c) => c.uncomplete_task(gid).await,
             None => anyhow::bail!("Asana not configured"),
         }
     }

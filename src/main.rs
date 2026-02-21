@@ -19,71 +19,22 @@ use uuid::Uuid;
 
 use flock::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
-    AgentStatus, ForegroundProcess,
+    AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
 };
-use flock::app::{Action, AppState, Config, InputMode};
+use flock::app::{
+    Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, StatusOption,
+    TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast, ToastLevel,
+};
 use flock::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use flock::codeberg::OptionalCodebergClient;
-use flock::git::GitSync;
+use flock::devserver::DevServerManager;
+use flock::git::{GitSync, Worktree};
 use flock::github::OptionalGitHubClient;
 use flock::gitlab::OptionalGitLabClient;
+use flock::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
 use flock::storage::{save_session, SessionStorage};
 use flock::tmux::is_tmux_available;
-use flock::ui::AppWidget;
-
-fn matches_keybind(key: crossterm::event::KeyEvent, keybind: &flock::app::config::Keybind) -> bool {
-    let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let has_alt = key.modifiers.contains(KeyModifiers::ALT);
-
-    let expected_ctrl = keybind.modifiers.iter().any(|m| m == "Control");
-    let expected_shift = keybind.modifiers.iter().any(|m| m == "Shift");
-    let expected_alt = keybind.modifiers.iter().any(|m| m == "Alt");
-
-    if has_ctrl != expected_ctrl || has_alt != expected_alt {
-        return false;
-    }
-
-    let key_matches = match &keybind.key[..] {
-        "Up" => key.code == KeyCode::Up,
-        "Down" => key.code == KeyCode::Down,
-        "Left" => key.code == KeyCode::Left,
-        "Right" => key.code == KeyCode::Right,
-        "Enter" => key.code == KeyCode::Enter,
-        "Backspace" => key.code == KeyCode::Backspace,
-        "Tab" => key.code == KeyCode::Tab,
-        "Esc" => key.code == KeyCode::Esc,
-        "Delete" => key.code == KeyCode::Delete,
-        "Home" => key.code == KeyCode::Home,
-        "End" => key.code == KeyCode::End,
-        "PageUp" => key.code == KeyCode::PageUp,
-        "PageDown" => key.code == KeyCode::PageDown,
-        c => {
-            if let Some(ch) = c.chars().next() {
-                match key.code {
-                    KeyCode::Char(input_ch) => {
-                        if ch.is_ascii_alphabetic() {
-                            let expected_ch = ch.to_ascii_lowercase();
-                            let actual_ch = input_ch.to_ascii_lowercase();
-                            if expected_shift {
-                                expected_ch == actual_ch && has_shift
-                            } else {
-                                expected_ch == actual_ch && !has_shift
-                            }
-                        } else {
-                            ch == input_ch
-                        }
-                    }
-                    _ => false,
-                }
-            } else {
-                false
-            }
-        }
-    };
-
-    key_matches
-}
+use flock::ui::{AppWidget, DevServerRenderInfo};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -168,7 +119,8 @@ async fn main() -> Result<()> {
 
     if let Ok(Some(session)) = storage.load() {
         let count = session.agents.len();
-        for agent in session.agents {
+        for mut agent in session.agents {
+            agent.migrate_legacy();
             state.add_agent(agent);
         }
         state.selected_index = session
@@ -181,7 +133,27 @@ async fn main() -> Result<()> {
 
     let gitlab_base_url = &state.settings.repo_config.git.gitlab.base_url;
     let gitlab_project_id = state.settings.repo_config.git.gitlab.project_id;
-    let asana_project_gid = state.settings.repo_config.asana.project_gid.clone();
+    let asana_project_gid = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .asana
+        .project_gid
+        .clone();
+    let notion_database_id = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .notion
+        .database_id
+        .clone();
+    let notion_status_property = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .notion
+        .status_property_name
+        .clone();
 
     let gitlab_client = Arc::new(OptionalGitLabClient::new(
         gitlab_base_url,
@@ -234,11 +206,6 @@ async fn main() -> Result<()> {
         codeberg_woodpecker_repo_id,
     ));
 
-    let asana_client = Arc::new(OptionalAsanaClient::new(
-        Config::asana_token().as_deref(),
-        asana_project_gid,
-    ));
-
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -248,6 +215,11 @@ async fn main() -> Result<()> {
 
     // Create action channel
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
+
+    // Create dev server manager
+    let devserver_manager = Arc::new(tokio::sync::Mutex::new(DevServerManager::new(
+        action_tx.clone(),
+    )));
 
     // Create watch channel for agent list updates (polling task needs current agents)
     let initial_agents: HashSet<Uuid> = state.agents.keys().cloned().collect();
@@ -382,16 +354,42 @@ async fn main() -> Result<()> {
         state.log_debug(msg);
     }
 
-    // Create watch channel for Asana task tracking (agent_id, task_gid) pairs
+    let asana_client = Arc::new(OptionalAsanaClient::new(
+        Config::asana_token().as_deref(),
+        asana_project_gid,
+    ));
+
+    let notion_client = Arc::new(OptionalNotionClient::new(
+        Config::notion_token().as_deref(),
+        notion_database_id,
+        notion_status_property,
+    ));
+
+    let pm_provider = state.settings.repo_config.project_mgmt.provider;
+
     let initial_asana_tasks: Vec<(Uuid, String)> = state
         .agents
         .values()
-        .filter_map(|a| a.asana_task_status.gid().map(|gid| (a.id, gid.to_string())))
+        .filter_map(|a| {
+            a.pm_task_status
+                .as_asana()
+                .and_then(|s| s.gid().map(|gid| (a.id, gid.to_string())))
+        })
         .collect();
     let (asana_watch_tx, asana_watch_rx) = watch::channel(initial_asana_tasks);
 
-    // Start Asana polling task (if configured)
-    if asana_client.is_configured() {
+    let initial_notion_tasks: Vec<(Uuid, String)> = state
+        .agents
+        .values()
+        .filter_map(|a| {
+            a.pm_task_status
+                .as_notion()
+                .and_then(|s| s.page_id().map(|id| (a.id, id.to_string())))
+        })
+        .collect();
+    let (notion_watch_tx, notion_watch_rx) = watch::channel(initial_notion_tasks);
+
+    if asana_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Asana) {
         let asana_poll_tx = action_tx.clone();
         let asana_client_clone = Arc::clone(&asana_client);
         let refresh_secs = config.asana.refresh_secs;
@@ -409,13 +407,76 @@ async fn main() -> Result<()> {
         state.log_debug("Asana not configured (set ASANA_TOKEN)".to_string());
     }
 
+    if notion_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Notion) {
+        let notion_poll_tx = action_tx.clone();
+        let notion_client_clone = Arc::clone(&notion_client);
+        let refresh_secs = config.notion.refresh_secs;
+        tokio::spawn(async move {
+            poll_notion_tasks(
+                notion_watch_rx,
+                notion_client_clone,
+                notion_poll_tx,
+                refresh_secs,
+            )
+            .await;
+        });
+        state.log_info("Notion integration enabled".to_string());
+    } else {
+        state.log_debug("Notion not configured (set NOTION_TOKEN and database_id)".to_string());
+    }
+
     // Main event loop
     let poll_timeout = Duration::from_millis(50);
     let tick_interval = Duration::from_millis(100);
     let mut last_tick = std::time::Instant::now();
     let mut pending_attach: Option<Uuid> = None;
+    let mut pending_devserver_attach: Option<Uuid> = None;
 
     loop {
+        // Handle pending dev server attach (outside of async context)
+        if let Some(id) = pending_devserver_attach.take() {
+            let session_name = devserver_manager
+                .try_lock()
+                .ok()
+                .and_then(|m| m.get_tmux_session(id));
+
+            if let Some(session_name) = session_name {
+                state.log_info(format!(
+                    "Attaching to dev server session '{}'",
+                    session_name
+                ));
+
+                // Save session before attaching
+                let agents: Vec<Agent> = state.agents.values().cloned().collect();
+                let _ = save_session(&storage, &state.repo_path, &agents, state.selected_index);
+
+                // Leave TUI mode
+                disable_raw_mode()?;
+                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+
+                // Attach to tmux (blocks until detach)
+                let tmux_session = flock::tmux::TmuxSession::new(&session_name);
+                let attach_result = tmux_session.attach();
+
+                // Restore TUI mode
+                enable_raw_mode()?;
+                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                terminal.clear()?;
+
+                // Drain any stale input events
+                while poll(Duration::from_millis(1))? {
+                    let _ = event::read();
+                }
+
+                state.log_info("Returned from dev server session");
+
+                if let Err(e) = attach_result {
+                    state.log_error(format!("Attach error: {}", e));
+                }
+            }
+            continue;
+        }
+
         // Handle pending attach (outside of async context)
         if let Some(id) = pending_attach.take() {
             // Clone agent data we need before borrowing state mutably
@@ -456,7 +517,29 @@ async fn main() -> Result<()> {
 
         // Render
         terminal.draw(|f| {
-            AppWidget::new(&state).render(f);
+            let devserver_info = if let Some(agent) = state.selected_agent() {
+                if let Ok(manager) = devserver_manager.try_lock() {
+                    manager.get(agent.id).map(|server| DevServerRenderInfo {
+                        status: server.status().clone(),
+                        logs: server.logs().to_vec(),
+                        agent_name: server.agent_name().to_string(),
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let devserver_statuses = devserver_manager
+                .try_lock()
+                .map(|m| m.all_statuses())
+                .unwrap_or_default();
+
+            AppWidget::new(&state)
+                .with_devserver(devserver_info)
+                .with_devserver_statuses(devserver_statuses)
+                .render(f);
         })?;
 
         // Poll for keyboard input (non-blocking with timeout)
@@ -464,11 +547,17 @@ async fn main() -> Result<()> {
             if let Event::Key(key) = event::read()? {
                 if let Some(action) = handle_key_event(key, &state) {
                     // Check if it's an attach action
-                    if let Action::AttachToAgent { id } = action {
-                        pending_attach = Some(id);
-                        continue;
+                    match action {
+                        Action::AttachToAgent { id } => {
+                            pending_attach = Some(id);
+                            continue;
+                        }
+                        Action::AttachToDevServer { agent_id } => {
+                            pending_devserver_attach = Some(agent_id);
+                            continue;
+                        }
+                        _ => action_tx.send(action)?,
                     }
-                    action_tx.send(action)?;
                 }
             }
         }
@@ -489,12 +578,16 @@ async fn main() -> Result<()> {
                 &github_client,
                 &codeberg_client,
                 &asana_client,
+                &notion_client,
+                pm_provider,
                 &storage,
                 &action_tx,
                 &agent_watch_tx,
                 &branch_watch_tx,
                 &selected_watch_tx,
                 &asana_watch_tx,
+                &notion_watch_tx,
+                &devserver_manager,
             )
             .await
             {
@@ -535,6 +628,24 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Handle settings mode first
     if state.settings.active {
         return handle_settings_key(key, state);
+    }
+
+    // Handle task reassignment warning modal
+    if state.task_reassignment_warning.is_some() {
+        return match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Some(Action::ConfirmTaskReassignment),
+            KeyCode::Char('n') | KeyCode::Esc => Some(Action::DismissTaskReassignmentWarning),
+            _ => None,
+        };
+    }
+
+    // Handle dev server warning modal
+    if state.devserver_warning.is_some() {
+        return match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Some(Action::ConfirmStartDevServer),
+            KeyCode::Char('n') | KeyCode::Esc => Some(Action::DismissDevServerWarning),
+            _ => None,
+        };
     }
 
     // Handle input mode
@@ -653,174 +764,178 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         .map(|a| matches!(a.status, flock::agent::AgentStatus::Paused))
         .unwrap_or(false);
 
-    let kb = &state.config.keybinds;
+    // Normal mode key handling
+    match key.code {
+        // Quit
+        KeyCode::Char('q') => Some(Action::Quit),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
 
-    // Quit (Ctrl+C always works)
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        return Some(Action::Quit);
-    }
-    if matches_keybind(key, &kb.quit) {
-        return Some(Action::Quit);
-    }
+        // Navigation (always allowed)
+        KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectNext),
+        KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrevious),
+        KeyCode::Char('g') => Some(Action::SelectFirst),
+        KeyCode::Char('G') => Some(Action::SelectLast),
 
-    // Navigation
-    if matches_keybind(key, &kb.nav_down) {
-        return Some(Action::SelectNext);
-    }
-    if matches_keybind(key, &kb.nav_up) {
-        return Some(Action::SelectPrevious);
-    }
-    if matches_keybind(key, &kb.nav_first) {
-        return Some(Action::SelectFirst);
-    }
-    if matches_keybind(key, &kb.nav_last) {
-        return Some(Action::SelectLast);
-    }
-
-    // Resume (only when paused)
-    if is_paused && matches_keybind(key, &kb.resume) {
-        return state
+        // Resume (only when paused)
+        KeyCode::Char('r') if is_paused => state
             .selected_agent_id()
-            .map(|id| Action::ResumeAgent { id });
-    }
+            .map(|id| Action::ResumeAgent { id }),
 
-    // Refresh selected agent status (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.resume) && state.selected_agent_id().is_some() {
-        return Some(Action::RefreshSelected);
-    }
+        // Refresh selected agent status (only when not paused)
+        KeyCode::Char('r') if !is_paused => {
+            if state.selected_agent_id().is_some() {
+                Some(Action::RefreshSelected)
+            } else {
+                None
+            }
+        }
 
-    // Yank (copy) agent name to clipboard
-    if matches_keybind(key, &kb.yank) {
-        return state
+        // Yank (copy) agent name to clipboard
+        KeyCode::Char('y') => state
             .selected_agent_id()
-            .map(|id| Action::CopyAgentName { id });
-    }
+            .map(|id| Action::CopyAgentName { id }),
 
-    // Notes
-    if matches_keybind(key, &kb.set_note) {
-        return Some(Action::EnterInputMode(InputMode::SetNote));
-    }
+        // Notes (always allowed)
+        KeyCode::Char('N') => Some(Action::EnterInputMode(InputMode::SetNote)),
 
-    // New agent
-    if matches_keybind(key, &kb.new_agent) {
-        return Some(Action::EnterInputMode(InputMode::NewAgent));
-    }
-
-    // Delete agent
-    if matches_keybind(key, &kb.delete_agent) {
-        let has_asana = state
-            .selected_agent()
-            .map(|a| a.asana_task_status.is_linked())
-            .unwrap_or(false);
-        return Some(if has_asana {
-            Action::EnterInputMode(InputMode::ConfirmDeleteAsana)
-        } else {
-            Action::EnterInputMode(InputMode::ConfirmDelete)
-        });
-    }
-
-    // Attach to agent
-    if matches_keybind(key, &kb.attach) {
-        return state
-            .selected_agent_id()
-            .map(|id| Action::AttachToAgent { id });
-    }
-
-    // Pause (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.pause) {
-        return state
-            .selected_agent_id()
-            .map(|id| Action::PauseAgent { id });
-    }
-
-    // Merge (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.merge) && state.selected_agent_id().is_some() {
-        return Some(Action::EnterInputMode(InputMode::ConfirmMerge));
-    }
-
-    // Push (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.push) && state.selected_agent_id().is_some() {
-        return Some(Action::EnterInputMode(InputMode::ConfirmPush));
-    }
-
-    // Fetch (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.fetch) {
-        return state
-            .selected_agent_id()
-            .map(|id| Action::FetchRemote { id });
-    }
-
-    // Summary (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.summary) {
-        return state
-            .selected_agent_id()
-            .map(|id| Action::RequestSummary { id });
-    }
-
-    // Toggle diff
-    if matches_keybind(key, &kb.toggle_diff) {
-        return Some(Action::ToggleDiffView);
-    }
-
-    // Toggle logs
-    if matches_keybind(key, &kb.toggle_logs) {
-        return Some(Action::ToggleLogs);
-    }
-
-    // Toggle settings
-    if matches_keybind(key, &kb.toggle_settings) {
-        return Some(Action::ToggleSettings);
-    }
-
-    // Open MR/PR
-    if matches_keybind(key, &kb.open_mr) {
-        let provider = state.settings.repo_config.git.provider;
-        return match provider {
-            flock::app::GitProvider::GitLab => state
+        // These actions work regardless of pause state
+        KeyCode::Char('n') => Some(Action::EnterInputMode(InputMode::NewAgent)),
+        KeyCode::Char('d') => {
+            let has_task = state
+                .selected_agent()
+                .map(|a| a.pm_task_status.is_linked())
+                .unwrap_or(false);
+            if has_task {
+                Some(Action::EnterInputMode(InputMode::ConfirmDeleteTask))
+            } else {
+                Some(Action::EnterInputMode(InputMode::ConfirmDelete))
+            }
+        }
+        KeyCode::Enter => match state.preview_tab {
+            PreviewTab::Preview => state
                 .selected_agent_id()
-                .map(|id| Action::OpenMrInBrowser { id }),
-            flock::app::GitProvider::GitHub => state
+                .map(|id| Action::AttachToAgent { id }),
+            PreviewTab::DevServer => state
                 .selected_agent_id()
-                .map(|id| Action::OpenPrInBrowser { id }),
-            flock::app::GitProvider::Codeberg => state
-                .selected_agent_id()
-                .map(|id| Action::OpenCodebergPrInBrowser { id }),
-        };
-    }
+                .map(|id| Action::AttachToDevServer { agent_id: id }),
+        },
 
-    // Asana assign
-    if matches_keybind(key, &kb.asana_assign) {
-        return Some(Action::EnterInputMode(InputMode::AssignAsana));
-    }
-
-    // Asana open
-    if matches_keybind(key, &kb.asana_open) {
-        return state
+        // Pause/checkout (only when not paused)
+        KeyCode::Char('c') if !is_paused => state
             .selected_agent_id()
-            .map(|id| Action::OpenAsanaInBrowser { id });
-    }
+            .map(|id| Action::PauseAgent { id }),
+        KeyCode::Char('m') if !is_paused => {
+            if state.selected_agent_id().is_some() {
+                Some(Action::EnterInputMode(InputMode::ConfirmMerge))
+            } else {
+                None
+            }
+        }
+        KeyCode::Char('p') if !is_paused => {
+            if state.selected_agent_id().is_some() {
+                Some(Action::EnterInputMode(InputMode::ConfirmPush))
+            } else {
+                None
+            }
+        }
+        KeyCode::Char('f') if !is_paused => state
+            .selected_agent_id()
+            .map(|id| Action::FetchRemote { id }),
+        KeyCode::Char('s') if !is_paused && !key.modifiers.contains(KeyModifiers::CONTROL) => state
+            .selected_agent_id()
+            .map(|id| Action::RequestSummary { id }),
+        KeyCode::Char('/') => Some(Action::ToggleDiffView),
+        KeyCode::Char('L') => Some(Action::ToggleLogs),
+        KeyCode::Char('S') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::ToggleSettings)
+        }
 
-    // Refresh all
-    if matches_keybind(key, &kb.refresh_all) {
-        return Some(Action::RefreshAll);
-    }
+        // Git provider operations
+        KeyCode::Char('o') => {
+            let provider = state.settings.repo_config.git.provider;
+            match provider {
+                flock::app::GitProvider::GitLab => state
+                    .selected_agent_id()
+                    .map(|id| Action::OpenMrInBrowser { id }),
+                flock::app::GitProvider::GitHub => state
+                    .selected_agent_id()
+                    .map(|id| Action::OpenPrInBrowser { id }),
+                flock::app::GitProvider::Codeberg => state
+                    .selected_agent_id()
+                    .map(|id| Action::OpenCodebergPrInBrowser { id }),
+            }
+        }
 
-    // Toggle help
-    if matches_keybind(key, &kb.toggle_help) {
-        return Some(Action::ToggleHelp);
-    }
+        KeyCode::Char('a') => Some(Action::EnterInputMode(InputMode::AssignProjectTask)),
+        KeyCode::Char('A') => state
+            .selected_agent_id()
+            .map(|id| Action::OpenProjectTaskInBrowser { id }),
+        KeyCode::Char('t') => Some(Action::EnterInputMode(InputMode::BrowseTasks)),
+        KeyCode::Char('T') => {
+            tracing::info!("Shift+T pressed");
+            let selected_id = state.selected_agent_id();
+            if selected_id.is_none() {
+                tracing::info!("No agent selected");
+            }
+            let result = selected_id
+                .filter(|id| {
+                    let is_linked = state
+                        .agents
+                        .get(id)
+                        .map(|a| a.pm_task_status.is_linked())
+                        .unwrap_or(false);
+                    tracing::info!("Agent has linked task: {}", is_linked);
+                    is_linked
+                })
+                .map(|id| Action::OpenTaskStatusDropdown { id });
+            if result.is_none() {
+                tracing::info!("Shift+T: no action generated");
+            }
+            result
+        }
 
-    // Clear error with Esc
-    if key.code == KeyCode::Esc {
-        return Some(Action::ClearError);
-    }
+        // Other
+        KeyCode::Char('R') => Some(Action::RefreshAll),
+        KeyCode::Char('?') => Some(Action::ToggleHelp),
+        KeyCode::Esc => Some(Action::ClearError),
 
-    None
+        // Preview tab navigation
+        KeyCode::Tab => Some(Action::NextPreviewTab),
+        KeyCode::BackTab => Some(Action::PrevPreviewTab),
+
+        // Dev server controls
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::RequestStartDevServer)
+        }
+        KeyCode::Char('S') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::RestartDevServer)
+        }
+        KeyCode::Char('C') if state.preview_tab == PreviewTab::DevServer => {
+            Some(Action::ClearDevServerLogs)
+        }
+        KeyCode::Char('O') if state.preview_tab == PreviewTab::DevServer => {
+            Some(Action::OpenDevServerInBrowser)
+        }
+
+        _ => None,
+    }
 }
 
 /// Handle key events in input mode.
 fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
-    // Special 3-way confirm for delete with Asana: y=delete+complete, n=delete only, Esc=cancel
+    if matches!(state.input_mode, Some(InputMode::ConfirmDeleteTask)) {
+        return match key {
+            KeyCode::Char('y') | KeyCode::Char('Y') => state
+                .selected_agent_id()
+                .map(|id| Action::DeleteAgentAndCompleteTask { id }),
+            KeyCode::Char('n') | KeyCode::Char('N') => state
+                .selected_agent_id()
+                .map(|id| Action::DeleteAgent { id }),
+            KeyCode::Esc => Some(Action::ExitInputMode),
+            _ => None,
+        };
+    }
+
     if matches!(state.input_mode, Some(InputMode::ConfirmDeleteAsana)) {
         return match key {
             KeyCode::Char('y') | KeyCode::Char('Y') => state
@@ -834,7 +949,28 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
         };
     }
 
-    // Check if we're in a confirmation mode
+    if matches!(state.input_mode, Some(InputMode::BrowseTasks)) {
+        return match key {
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectTaskNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
+            KeyCode::Char('a') => Some(Action::AssignSelectedTaskToAgent),
+            KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
+            KeyCode::Left | KeyCode::Right => Some(Action::ToggleTaskExpand),
+            KeyCode::Esc => Some(Action::ExitInputMode),
+            _ => None,
+        };
+    }
+
+    if matches!(state.input_mode, Some(InputMode::SelectTaskStatus)) {
+        return match key {
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::TaskStatusDropdownNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::TaskStatusDropdownPrev),
+            KeyCode::Enter => Some(Action::TaskStatusDropdownSelect),
+            KeyCode::Esc => Some(Action::ExitInputMode),
+            _ => None,
+        };
+    }
+
     let is_confirm_mode = matches!(
         state.input_mode,
         Some(InputMode::ConfirmDelete)
@@ -873,71 +1009,6 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
 fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
     use flock::app::DropdownState;
 
-    // Handle keybind capture mode
-    if state.settings.capturing_keybind.is_some() {
-        return match key.code {
-            KeyCode::Esc => Some(Action::SettingsCancelKeybindCapture),
-            KeyCode::Char(c) => {
-                let mut modifiers = Vec::new();
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    modifiers.push("Control".to_string());
-                }
-                if key.modifiers.contains(KeyModifiers::ALT) {
-                    modifiers.push("Alt".to_string());
-                }
-                let key_char =
-                    if c.is_ascii_alphabetic() && key.modifiers.contains(KeyModifiers::SHIFT) {
-                        modifiers.push("Shift".to_string());
-                        c.to_ascii_lowercase().to_string()
-                    } else {
-                        c.to_string()
-                    };
-                Some(Action::SettingsCaptureKeybind {
-                    key: key_char,
-                    modifiers,
-                })
-            }
-            _ => {
-                let key_name = match key.code {
-                    KeyCode::Enter => "Enter",
-                    KeyCode::Backspace => "Backspace",
-                    KeyCode::Tab => "Tab",
-                    KeyCode::Delete => "Delete",
-                    KeyCode::Home => "Home",
-                    KeyCode::End => "End",
-                    KeyCode::PageUp => "PageUp",
-                    KeyCode::PageDown => "PageDown",
-                    KeyCode::Up => "Up",
-                    KeyCode::Down => "Down",
-                    KeyCode::Left => "Left",
-                    KeyCode::Right => "Right",
-                    KeyCode::Esc => "Esc",
-                    KeyCode::F(n) => {
-                        return Some(Action::SettingsCaptureKeybind {
-                            key: format!("F{}", n),
-                            modifiers: vec![],
-                        })
-                    }
-                    _ => return None,
-                };
-                let mut modifiers = Vec::new();
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    modifiers.push("Control".to_string());
-                }
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    modifiers.push("Shift".to_string());
-                }
-                if key.modifiers.contains(KeyModifiers::ALT) {
-                    modifiers.push("Alt".to_string());
-                }
-                Some(Action::SettingsCaptureKeybind {
-                    key: key_name.to_string(),
-                    modifiers,
-                })
-            }
-        };
-    }
-
     // Handle prompt editing mode (multi-line text editor)
     if state.settings.editing_prompt {
         return match key.code {
@@ -974,8 +1045,22 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         return match key.code {
             KeyCode::Esc => Some(Action::SettingsCancelSelection),
             KeyCode::Enter => Some(Action::SettingsConfirmSelection),
-            KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
-            KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsDropdownPrev),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsDropdownNext),
+            _ => None,
+        };
+    }
+
+    // Handle file browser mode
+    if state.settings.file_browser.active {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCloseFileBrowser),
+            KeyCode::Enter => Some(Action::FileBrowserToggle),
+            KeyCode::Char(' ') => Some(Action::FileBrowserToggle),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::FileBrowserSelectPrev),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::FileBrowserSelectNext),
+            KeyCode::Right => Some(Action::FileBrowserEnterDir),
+            KeyCode::Left => Some(Action::FileBrowserGoParent),
             _ => None,
         };
     }
@@ -988,14 +1073,7 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::BackTab => Some(Action::SettingsSwitchSectionBack),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
-        KeyCode::Enter => {
-            let field = state.settings.current_field();
-            if field.is_keybind_field() {
-                Some(Action::SettingsStartKeybindCapture)
-            } else {
-                Some(Action::SettingsSelectField)
-            }
-        }
+        KeyCode::Enter => Some(Action::SettingsSelectField),
         _ => None,
     }
 }
@@ -1010,22 +1088,28 @@ async fn process_action(
     github_client: &Arc<OptionalGitHubClient>,
     codeberg_client: &Arc<OptionalCodebergClient>,
     asana_client: &Arc<OptionalAsanaClient>,
+    notion_client: &Arc<OptionalNotionClient>,
+    pm_provider: ProjectMgmtProvider,
     _storage: &SessionStorage,
     action_tx: &mpsc::UnboundedSender<Action>,
     agent_watch_tx: &watch::Sender<HashSet<Uuid>>,
     branch_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     selected_watch_tx: &watch::Sender<Option<Uuid>>,
     asana_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
+    notion_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
+    devserver_manager: &Arc<tokio::sync::Mutex<DevServerManager>>,
 ) -> Result<bool> {
     match action {
         Action::Quit => {
+            let mut manager = devserver_manager.lock().await;
+            let _ = manager.stop_all().await;
             state.running = false;
             return Ok(true);
         }
 
         // Navigation (clear any lingering messages)
         Action::SelectNext => {
-            state.error_message = None;
+            state.toast = None;
             state.select_next();
             let new_selected = state.selected_agent_id();
             tracing::info!("DEBUG SelectNext: new_selected={:?}", new_selected);
@@ -1035,7 +1119,7 @@ async fn process_action(
             }
         }
         Action::SelectPrevious => {
-            state.error_message = None;
+            state.toast = None;
             state.select_previous();
             let new_selected = state.selected_agent_id();
             tracing::info!("DEBUG SelectPrevious: new_selected={:?}", new_selected);
@@ -1045,27 +1129,55 @@ async fn process_action(
             }
         }
         Action::SelectFirst => {
-            state.error_message = None;
+            state.toast = None;
             state.select_first();
             let _ = selected_watch_tx.send(state.selected_agent_id());
         }
         Action::SelectLast => {
-            state.error_message = None;
+            state.toast = None;
             state.select_last();
             let _ = selected_watch_tx.send(state.selected_agent_id());
         }
 
         // Agent lifecycle
-        Action::CreateAgent { name, branch } => {
+        Action::CreateAgent { name, branch, task } => {
             state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
             let ai_agent = state.config.global.ai_agent.clone();
-            let worktree_symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
+            let worktree_symlinks = state
+                .settings
+                .repo_config
+                .dev_server
+                .worktree_symlinks
+                .clone();
             match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks) {
-                Ok(agent) => {
+                Ok(mut agent) => {
                     state.log_info(format!("Agent '{}' created successfully", agent.name));
+
+                    if let Some(ref task_item) = task {
+                        let pm_status = match pm_provider {
+                            ProjectMgmtProvider::Asana => {
+                                ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                    gid: task_item.id.clone(),
+                                    name: task_item.name.clone(),
+                                    url: task_item.url.clone(),
+                                })
+                            }
+                            ProjectMgmtProvider::Notion => {
+                                ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                                    page_id: task_item.id.clone(),
+                                    name: task_item.name.clone(),
+                                    url: task_item.url.clone(),
+                                    status_option_id: String::new(),
+                                })
+                            }
+                        };
+                        agent.pm_task_status = pm_status;
+                        state.log_info(format!("Linked task '{}' to agent", task_item.name));
+                    }
+
                     state.add_agent(agent);
                     state.select_last();
-                    state.error_message = None;
+                    state.toast = None;
                     // Notify polling tasks of new agent
                     let _ = agent_watch_tx.send(state.agents.keys().cloned().collect());
                     let _ = branch_watch_tx.send(
@@ -1079,7 +1191,10 @@ async fn process_action(
                 }
                 Err(e) => {
                     state.log_error(format!("Failed to create agent: {}", e));
-                    state.error_message = Some(format!("Failed to create agent: {}", e));
+                    state.toast = Some(Toast::new(
+                        format!("Failed to create agent: {}", e),
+                        ToastLevel::Error,
+                    ));
                 }
             }
         }
@@ -1145,7 +1260,13 @@ async fn process_action(
                 if let Some(task_gid) = agent.asana_task_status.gid() {
                     let gid = task_gid.to_string();
                     let client = Arc::clone(asana_client);
-                    let done_gid = state.settings.repo_config.asana.done_section_gid.clone();
+                    let done_gid = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .asana
+                        .done_section_gid
+                        .clone();
                     tokio::spawn(async move {
                         let _ = client.move_to_done(&gid, done_gid.as_deref()).await;
                         let _ = client.complete_task(&gid).await;
@@ -1162,6 +1283,10 @@ async fn process_action(
             // Handled in main loop for terminal access
         }
 
+        Action::AttachToDevServer { .. } => {
+            // Handled in main loop for terminal access
+        }
+
         Action::DetachFromAgent => {
             // Handled in main loop
         }
@@ -1169,71 +1294,18 @@ async fn process_action(
         // Status updates
         Action::UpdateAgentStatus { id, status } => {
             if let Some(agent) = state.agents.get_mut(&id) {
-                // Don't overwrite Paused status - that's manually controlled
                 if matches!(agent.status, flock::agent::AgentStatus::Paused) {
                     return Ok(false);
                 }
 
-                // Trust the process-informed detector directly
-                let final_status = status;
-
-                // Only log if status actually changed
                 let old_label = agent.status.label();
-                let new_label = final_status.label();
+                let new_label = status.label();
                 let name = agent.name.clone();
                 let changed = old_label != new_label;
 
-                // Check if transitioning to Running with a NotStarted Asana task
-                let should_move_asana = changed
-                    && matches!(&final_status, AgentStatus::Running)
-                    && matches!(&agent.asana_task_status, AsanaTaskStatus::NotStarted { .. });
-                let asana_info = if should_move_asana {
-                    if let AsanaTaskStatus::NotStarted { gid, name, url } = &agent.asana_task_status
-                    {
-                        Some((id, gid.clone(), name.clone(), url.clone()))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                agent.set_status(final_status);
+                agent.set_status(status);
                 if changed {
                     state.log_debug(format!("Agent '{}': {} -> {}", name, old_label, new_label));
-                }
-
-                // Move Asana task to In Progress when agent starts running
-                if let Some((agent_id, task_gid, task_name, task_url)) = asana_info {
-                    if let Some(agent) = state.agents.get_mut(&agent_id) {
-                        agent.asana_task_status = AsanaTaskStatus::InProgress {
-                            gid: task_gid.clone(),
-                            name: task_name.clone(),
-                            url: task_url.clone(),
-                        };
-                    }
-                    let client = Arc::clone(asana_client);
-                    let override_gid = state
-                        .settings
-                        .repo_config
-                        .asana
-                        .in_progress_section_gid
-                        .clone();
-                    let tx = action_tx.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = client
-                            .move_to_in_progress(&task_gid, override_gid.as_deref())
-                            .await
-                        {
-                            let _ = tx.send(Action::UpdateAsanaTaskStatus {
-                                id: agent_id,
-                                status: AsanaTaskStatus::Error {
-                                    gid: task_gid,
-                                    message: format!("Failed to move to In Progress: {}", e),
-                                },
-                            });
-                        }
-                    });
                 }
             }
         }
@@ -1350,7 +1422,12 @@ async fn process_action(
                 let name_clone = name.clone();
                 let ai_agent = state.config.global.ai_agent.clone();
                 let repo_path = state.repo_path.clone();
-                let worktree_symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
+                let worktree_symlinks = state
+                    .settings
+                    .repo_config
+                    .dev_server
+                    .worktree_symlinks
+                    .clone();
                 let worktree_base = state.worktree_base.clone();
                 tokio::spawn(async move {
                     // Check if worktree already exists
@@ -1438,12 +1515,11 @@ async fn process_action(
                             agent.custom_note = Some("merging main...".to_string());
                         }
                         state.log_info(format!("Sent merge request to agent '{}'", name));
-                        state.error_message =
-                            Some(format!("Sent merge {} request to Claude", main_branch));
+                        state.show_success(format!("Sent merge {} request to Claude", main_branch));
                     }
                     Err(e) => {
                         state.log_error(format!("Failed to send merge request: {}", e));
-                        state.error_message = Some(format!("Failed to send merge request: {}", e));
+                        state.show_error(format!("Failed to send merge request: {}", e));
                     }
                 }
             }
@@ -1475,7 +1551,7 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to send {}: {}", cmd, e));
-                            state.error_message = Some(format!("Failed to send {}: {}", cmd, e));
+                            state.show_error(format!("Failed to send {}: {}", cmd, e));
                         }
                     }
                 }
@@ -1488,8 +1564,7 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to send push prompt: {}", e));
-                            state.error_message =
-                                Some(format!("Failed to send push prompt: {}", e));
+                            state.show_error(format!("Failed to send push prompt: {}", e));
                         }
                     }
                 }
@@ -1498,7 +1573,7 @@ async fn process_action(
                     if let Some(agent) = state.agents.get_mut(&id) {
                         agent.custom_note = Some("pushing...".to_string());
                     }
-                    state.error_message = Some(format!(
+                    state.show_success(format!(
                         "Sent push command to {}",
                         agent_type.display_name()
                     ));
@@ -1510,7 +1585,7 @@ async fn process_action(
             if let Some(agent) = state.agents.get(&id) {
                 let git_sync = GitSync::new(&agent.worktree_path);
                 if let Err(e) = git_sync.fetch() {
-                    state.error_message = Some(format!("Fetch failed: {}", e));
+                    state.show_error(format!("Fetch failed: {}", e));
                 }
             }
         }
@@ -1536,12 +1611,11 @@ async fn process_action(
                             agent.custom_note = Some("summary...".to_string());
                         }
                         state.log_info(format!("Requested summary from agent '{}'", name));
-                        state.error_message =
-                            Some("Requested work summary from Claude".to_string());
+                        state.show_success("Requested work summary from Claude");
                     }
                     Err(e) => {
                         state.log_error(format!("Failed to request summary: {}", e));
-                        state.error_message = Some(format!("Failed to request summary: {}", e));
+                        state.show_error(format!("Failed to request summary: {}", e));
                     }
                 }
             }
@@ -1600,7 +1674,7 @@ async fn process_action(
             // Log after mutation is done
             if let Some((name, iid, url)) = should_log {
                 state.log_info(format!("MR !{} detected for '{}'", iid, name));
-                state.error_message = Some(format!("MR !{}: {}", iid, url));
+                state.show_success(format!("MR !{}: {}", iid, url));
             }
         }
 
@@ -1613,11 +1687,11 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message = Some("No MR available for this agent".to_string());
+                    state.show_error("No MR available for this agent");
                 }
             }
         }
@@ -1662,7 +1736,7 @@ async fn process_action(
 
             if let Some((name, number, url)) = should_log {
                 state.log_info(format!("PR #{} detected for '{}'", number, name));
-                state.error_message = Some(format!("PR #{}: {}", number, url));
+                state.show_success(format!("PR #{}: {}", number, url));
             }
         }
 
@@ -1675,11 +1749,11 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message = Some("No PR available for this agent".to_string());
+                    state.show_error("No PR available for this agent");
                 }
             }
         }
@@ -1709,7 +1783,7 @@ async fn process_action(
 
             if let Some((name, number, url)) = should_log {
                 state.log_info(format!("Codeberg PR #{} detected for '{}'", number, name));
-                state.error_message = Some(format!("PR #{}: {}", number, url));
+                state.show_success(format!("PR #{}: {}", number, url));
             }
         }
 
@@ -1722,12 +1796,11 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message =
-                        Some("No Codeberg PR available for this agent".to_string());
+                    state.show_error("No Codeberg PR available for this agent");
                 }
             }
         }
@@ -1783,37 +1856,953 @@ async fn process_action(
                 AsanaTaskStatus::None => None,
             };
             if let Some(agent) = state.agents.get_mut(&id) {
-                agent.asana_task_status = status;
+                agent.pm_task_status = ProjectMgmtTaskStatus::Asana(status);
             }
             if let Some(msg) = log_msg {
                 state.log_info(&msg);
-                state.error_message = Some(msg);
+                state.show_info(msg);
             }
-            // Update the Asana watch channel
             let asana_tasks: Vec<(Uuid, String)> = state
                 .agents
                 .values()
-                .filter_map(|a| a.asana_task_status.gid().map(|gid| (a.id, gid.to_string())))
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_asana()
+                        .and_then(|s| s.gid().map(|gid| (a.id, gid.to_string())))
+                })
                 .collect();
             let _ = asana_watch_tx.send(asana_tasks);
         }
 
         Action::OpenAsanaInBrowser { id } => {
             if let Some(agent) = state.agents.get(&id) {
-                if let Some(url) = agent.asana_task_status.url() {
+                if let Some(url) = agent.pm_task_status.url() {
                     match open::that(url) {
                         Ok(_) => {
                             state.log_info("Opening Asana task in browser".to_string());
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message = Some("No Asana task linked to this agent".to_string());
+                    state.show_error("No Asana task linked to this agent");
                 }
             }
+        }
+
+        Action::AssignProjectTask { id, url_or_id } => match pm_provider {
+            ProjectMgmtProvider::Asana => {
+                let gid = parse_asana_task_gid(&url_or_id);
+                let client = Arc::clone(asana_client);
+                let tx = action_tx.clone();
+                tokio::spawn(async move {
+                    match client.get_task(&gid).await {
+                        Ok(task) => {
+                            let url = task.permalink_url.unwrap_or_else(|| {
+                                format!("https://app.asana.com/0/0/{}/f", task.gid)
+                            });
+                            let status = if task.completed {
+                                AsanaTaskStatus::Completed {
+                                    gid: task.gid,
+                                    name: task.name,
+                                }
+                            } else {
+                                AsanaTaskStatus::NotStarted {
+                                    gid: task.gid,
+                                    name: task.name,
+                                    url,
+                                }
+                            };
+                            let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                id,
+                                status: ProjectMgmtTaskStatus::Asana(status),
+                            });
+                        }
+                        Err(e) => {
+                            let status = ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Error {
+                                gid,
+                                message: e.to_string(),
+                            });
+                            let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                        }
+                    }
+                });
+            }
+            ProjectMgmtProvider::Notion => {
+                let page_id = parse_notion_page_id(&url_or_id);
+                let client = Arc::clone(notion_client);
+                let tx = action_tx.clone();
+                tokio::spawn(async move {
+                    match client.get_page(&page_id).await {
+                        Ok(page) => {
+                            let status = if page.is_completed {
+                                NotionTaskStatus::Completed {
+                                    page_id: page.id,
+                                    name: page.name,
+                                }
+                            } else {
+                                NotionTaskStatus::NotStarted {
+                                    page_id: page.id,
+                                    name: page.name,
+                                    url: page.url,
+                                    status_option_id: page.status_id.unwrap_or_default(),
+                                }
+                            };
+                            let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                id,
+                                status: ProjectMgmtTaskStatus::Notion(status),
+                            });
+                        }
+                        Err(e) => {
+                            let status = ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Error {
+                                page_id,
+                                message: e.to_string(),
+                            });
+                            let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                        }
+                    }
+                });
+            }
+        },
+
+        Action::UpdateProjectTaskStatus { id, status } => {
+            let log_msg = match &status {
+                ProjectMgmtTaskStatus::Asana(s) => match s {
+                    AsanaTaskStatus::NotStarted { name, .. } => {
+                        Some(format!("Asana task '{}' linked", name))
+                    }
+                    AsanaTaskStatus::InProgress { name, .. } => {
+                        Some(format!("Asana task '{}' in progress", name))
+                    }
+                    AsanaTaskStatus::Completed { name, .. } => {
+                        Some(format!("Asana task '{}' completed", name))
+                    }
+                    AsanaTaskStatus::Error { message, .. } => {
+                        Some(format!("Asana error: {}", message))
+                    }
+                    AsanaTaskStatus::None => None,
+                },
+                ProjectMgmtTaskStatus::Notion(s) => match s {
+                    NotionTaskStatus::NotStarted { name, .. } => {
+                        Some(format!("Notion task '{}' linked", name))
+                    }
+                    NotionTaskStatus::InProgress { name, .. } => {
+                        Some(format!("Notion task '{}' in progress", name))
+                    }
+                    NotionTaskStatus::Completed { name, .. } => {
+                        Some(format!("Notion task '{}' completed", name))
+                    }
+                    NotionTaskStatus::Error { message, .. } => {
+                        Some(format!("Notion error: {}", message))
+                    }
+                    NotionTaskStatus::None => None,
+                },
+                ProjectMgmtTaskStatus::None => None,
+            };
+            if let Some(agent) = state.agents.get_mut(&id) {
+                agent.pm_task_status = status;
+            }
+            if let Some(msg) = log_msg {
+                state.log_info(&msg);
+                state.show_info(msg);
+            }
+            let asana_tasks: Vec<(Uuid, String)> = state
+                .agents
+                .values()
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_asana()
+                        .and_then(|s| s.gid().map(|gid| (a.id, gid.to_string())))
+                })
+                .collect();
+            let _ = asana_watch_tx.send(asana_tasks);
+            let notion_tasks: Vec<(Uuid, String)> = state
+                .agents
+                .values()
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_notion()
+                        .and_then(|s| s.page_id().map(|id| (a.id, id.to_string())))
+                })
+                .collect();
+            let _ = notion_watch_tx.send(notion_tasks);
+        }
+
+        Action::CycleTaskStatus { id } => {
+            if let Some(agent) = state.agents.get(&id) {
+                let current_status = agent.pm_task_status.clone();
+                match &current_status {
+                    ProjectMgmtTaskStatus::Asana(asana_status) => match asana_status {
+                        AsanaTaskStatus::NotStarted { gid, name, url } => {
+                            let gid = gid.clone();
+                            let name = name.clone();
+                            let url = url.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
+                                        gid: gid.clone(),
+                                        name: name.clone(),
+                                        url: url.clone(),
+                                    });
+                            }
+                            let client = Arc::clone(asana_client);
+                            let override_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .in_progress_section_gid
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client
+                                    .move_to_in_progress(&gid, override_gid.as_deref())
+                                    .await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Asana(
+                                            AsanaTaskStatus::Error {
+                                                gid,
+                                                message: format!(
+                                                    "Failed to move to In Progress: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Asana task '{}' → In Progress", name));
+                        }
+                        AsanaTaskStatus::InProgress { gid, name, .. } => {
+                            let gid = gid.clone();
+                            let name = name.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
+                                        gid: gid.clone(),
+                                        name: name.clone(),
+                                    });
+                            }
+                            let client = Arc::clone(asana_client);
+                            let done_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .done_section_gid
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client.complete_task(&gid).await {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Asana(
+                                            AsanaTaskStatus::Error {
+                                                gid,
+                                                message: format!("Failed to complete task: {}", e),
+                                            },
+                                        ),
+                                    });
+                                } else {
+                                    let _ = client.move_to_done(&gid, done_gid.as_deref()).await;
+                                }
+                            });
+                            state.log_info(format!("Asana task '{}' → Done", name));
+                        }
+                        AsanaTaskStatus::Completed { name, .. } => {
+                            let gid = match asana_status.gid() {
+                                Some(g) => g.to_string(),
+                                None => return Ok(false),
+                            };
+                            let name = name.clone();
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                        gid: gid.clone(),
+                                        name: name.clone(),
+                                        url: String::new(),
+                                    });
+                            }
+                            let client = Arc::clone(asana_client);
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client.uncomplete_task(&gid).await {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Asana(
+                                            AsanaTaskStatus::Error {
+                                                gid,
+                                                message: format!(
+                                                    "Failed to uncomplete task: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Asana task '{}' → Not Started", name));
+                        }
+                        AsanaTaskStatus::Error { .. } | AsanaTaskStatus::None => {}
+                    },
+                    ProjectMgmtTaskStatus::Notion(_) | ProjectMgmtTaskStatus::None => {}
+                }
+            }
+        }
+
+        Action::OpenTaskStatusDropdown { id } => {
+            tracing::info!("OpenTaskStatusDropdown called for agent {}", id);
+            if let Some(agent) = state.agents.get(&id) {
+                tracing::info!("Agent found, pm_task_status: {:?}", agent.pm_task_status);
+                match &agent.pm_task_status {
+                    ProjectMgmtTaskStatus::Notion(notion_status) => {
+                        if !notion_client.is_configured() {
+                            state.show_error(
+                                "Notion not configured. Set NOTION_TOKEN and database_id.",
+                            );
+                            return Ok(false);
+                        }
+                        let page_id = notion_status.page_id();
+                        if page_id.is_none() || page_id.map(|p| p.is_empty()).unwrap_or(true) {
+                            state.show_error("No Notion page linked to this task");
+                            return Ok(false);
+                        }
+                        let agent_id = id;
+                        let client = Arc::clone(notion_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading status options...".to_string());
+                        tokio::spawn(async move {
+                            tracing::info!("Fetching Notion status options...");
+                            match client.get_status_options().await {
+                                Ok(opts) => {
+                                    tracing::info!("Got {} status options", opts.all_options.len());
+                                    let options: Vec<StatusOption> = opts
+                                        .all_options
+                                        .into_iter()
+                                        .map(|o| StatusOption {
+                                            id: o.id,
+                                            name: o.name,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                        id: agent_id,
+                                        options,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load status options: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load status options: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                    ProjectMgmtTaskStatus::Asana(asana_status) => {
+                        if !asana_client.is_configured() {
+                            state.show_error(
+                                "Asana not configured. Set ASANA_TOKEN and project_gid.",
+                            );
+                            return Ok(false);
+                        }
+                        if asana_status.gid().is_none() {
+                            state.show_error("No Asana task linked to this agent");
+                            return Ok(false);
+                        }
+                        let options = vec![
+                            StatusOption {
+                                id: "not_started".to_string(),
+                                name: "Not Started".to_string(),
+                            },
+                            StatusOption {
+                                id: "in_progress".to_string(),
+                                name: "In Progress".to_string(),
+                            },
+                            StatusOption {
+                                id: "done".to_string(),
+                                name: "Done".to_string(),
+                            },
+                        ];
+                        state.task_status_dropdown = Some(TaskStatusDropdownState {
+                            agent_id: id,
+                            status_options: options,
+                            selected_index: 0,
+                        });
+                        state.input_mode = Some(InputMode::SelectTaskStatus);
+                    }
+                    ProjectMgmtTaskStatus::None => {}
+                }
+            }
+        }
+
+        Action::TaskStatusOptionsLoaded { id, options } => {
+            tracing::info!(
+                "TaskStatusOptionsLoaded: {} options for agent {}",
+                options.len(),
+                id
+            );
+            state.loading_message = None;
+            if !options.is_empty() {
+                state.task_status_dropdown = Some(TaskStatusDropdownState {
+                    agent_id: id,
+                    status_options: options,
+                    selected_index: 0,
+                });
+                state.input_mode = Some(InputMode::SelectTaskStatus);
+                tracing::info!("Dropdown opened with input_mode = SelectTaskStatus");
+            } else {
+                state.show_warning("No status options found");
+            }
+        }
+
+        Action::TaskStatusDropdownNext => {
+            if let Some(ref mut dropdown) = state.task_status_dropdown {
+                if dropdown.selected_index < dropdown.status_options.len().saturating_sub(1) {
+                    dropdown.selected_index += 1;
+                }
+            }
+        }
+
+        Action::TaskStatusDropdownPrev => {
+            if let Some(ref mut dropdown) = state.task_status_dropdown {
+                if dropdown.selected_index > 0 {
+                    dropdown.selected_index -= 1;
+                }
+            }
+        }
+
+        Action::TaskStatusDropdownSelect => {
+            tracing::info!("TaskStatusDropdownSelect triggered");
+            let dropdown = state.task_status_dropdown.take();
+            state.exit_input_mode();
+            if let Some(dropdown) = dropdown {
+                let agent_id = dropdown.agent_id;
+                if let Some(selected_option) = dropdown.status_options.get(dropdown.selected_index)
+                {
+                    let option_id = selected_option.id.clone();
+                    let option_name = selected_option.name.clone();
+
+                    if let Some(agent) = state.agents.get(&agent_id) {
+                        match &agent.pm_task_status {
+                            ProjectMgmtTaskStatus::Notion(notion_status) => {
+                                if let Some(page_id) = notion_status.page_id() {
+                                    if page_id.is_empty() {
+                                        state.show_error("No Notion page linked to this task");
+                                        return Ok(false);
+                                    }
+                                    let page_id = page_id.to_string();
+                                    let task_name = match notion_status {
+                                        NotionTaskStatus::NotStarted { name, .. } => name.clone(),
+                                        NotionTaskStatus::InProgress { name, .. } => name.clone(),
+                                        NotionTaskStatus::Completed { name, .. } => name.clone(),
+                                        NotionTaskStatus::Error { .. } => "Task".to_string(),
+                                        NotionTaskStatus::None => "Task".to_string(),
+                                    };
+                                    let client = Arc::clone(notion_client);
+                                    let status_prop_name = state
+                                        .settings
+                                        .repo_config
+                                        .project_mgmt
+                                        .notion
+                                        .status_property_name
+                                        .clone();
+                                    let tx = action_tx.clone();
+
+                                    let new_status = if option_name.to_lowercase().contains("done")
+                                        || option_name.to_lowercase().contains("complete")
+                                    {
+                                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
+                                            page_id: page_id.clone(),
+                                            name: task_name.clone(),
+                                        })
+                                    } else if option_name.to_lowercase().contains("progress") {
+                                        ProjectMgmtTaskStatus::Notion(
+                                            NotionTaskStatus::InProgress {
+                                                page_id: page_id.clone(),
+                                                name: task_name.clone(),
+                                                url: String::new(),
+                                                status_option_id: option_id.clone(),
+                                            },
+                                        )
+                                    } else {
+                                        ProjectMgmtTaskStatus::Notion(
+                                            NotionTaskStatus::NotStarted {
+                                                page_id: page_id.clone(),
+                                                name: task_name.clone(),
+                                                url: String::new(),
+                                                status_option_id: option_id.clone(),
+                                            },
+                                        )
+                                    };
+
+                                    if let Some(agent) = state.agents.get_mut(&agent_id) {
+                                        agent.pm_task_status = new_status;
+                                    }
+
+                                    tracing::info!(
+                                        "Updating Notion page {} status to '{}'",
+                                        page_id,
+                                        option_name
+                                    );
+                                    tokio::spawn(async move {
+                                        let prop_name = status_prop_name
+                                            .unwrap_or_else(|| "Status".to_string());
+                                        if let Err(e) = client
+                                            .update_page_status(&page_id, &prop_name, &option_id)
+                                            .await
+                                        {
+                                            tracing::error!(
+                                                "Failed to update Notion status: {}",
+                                                e
+                                            );
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Failed to update status: {}",
+                                                e
+                                            )));
+                                        }
+                                    });
+                                    state.show_success(format!("Task → {}", option_name));
+                                } else {
+                                    state.show_error("No Notion page linked to this task");
+                                }
+                            }
+                            ProjectMgmtTaskStatus::Asana(asana_status) => {
+                                if let Some(gid_str) = asana_status.gid() {
+                                    let gid = gid_str.to_string();
+                                    let name = asana_status.format_short();
+                                    let client = Arc::clone(asana_client);
+                                    let in_progress_gid = state
+                                        .settings
+                                        .repo_config
+                                        .project_mgmt
+                                        .asana
+                                        .in_progress_section_gid
+                                        .clone();
+                                    let done_gid = state
+                                        .settings
+                                        .repo_config
+                                        .project_mgmt
+                                        .asana
+                                        .done_section_gid
+                                        .clone();
+                                    let agent_id_clone = agent_id;
+
+                                    let new_status = match option_id.as_str() {
+                                        "not_started" => {
+                                            let status = ProjectMgmtTaskStatus::Asana(
+                                                AsanaTaskStatus::NotStarted {
+                                                    gid: gid.clone(),
+                                                    name: name.clone(),
+                                                    url: String::new(),
+                                                },
+                                            );
+                                            tokio::spawn(async move {
+                                                let _ = client.uncomplete_task(&gid).await;
+                                            });
+                                            status
+                                        }
+                                        "in_progress" => {
+                                            let status = ProjectMgmtTaskStatus::Asana(
+                                                AsanaTaskStatus::InProgress {
+                                                    gid: gid.clone(),
+                                                    name: name.clone(),
+                                                    url: String::new(),
+                                                },
+                                            );
+                                            let client = Arc::clone(&client);
+                                            tokio::spawn(async move {
+                                                let _ = client
+                                                    .move_to_in_progress(
+                                                        &gid,
+                                                        in_progress_gid.as_deref(),
+                                                    )
+                                                    .await;
+                                            });
+                                            status
+                                        }
+                                        "done" => {
+                                            let status = ProjectMgmtTaskStatus::Asana(
+                                                AsanaTaskStatus::Completed {
+                                                    gid: gid.clone(),
+                                                    name: name.clone(),
+                                                },
+                                            );
+                                            tokio::spawn(async move {
+                                                let _ = client.complete_task(&gid).await;
+                                                let _ = client
+                                                    .move_to_done(&gid, done_gid.as_deref())
+                                                    .await;
+                                            });
+                                            status
+                                        }
+                                        _ => return Ok(false),
+                                    };
+
+                                    if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
+                                        agent.pm_task_status = new_status;
+                                    }
+                                    state.show_success(format!("Task → {}", option_name));
+                                }
+                            }
+                            ProjectMgmtTaskStatus::None => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        Action::OpenProjectTaskInBrowser { id } => {
+            if let Some(agent) = state.agents.get(&id) {
+                if let Some(url) = agent.pm_task_status.url() {
+                    match open::that(url) {
+                        Ok(_) => {
+                            state.log_info("Opening task in browser".to_string());
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
+                        }
+                    }
+                } else {
+                    state.show_error("No task linked to this agent");
+                }
+            }
+        }
+
+        Action::DeleteAgentAndCompleteTask { id } => {
+            state.exit_input_mode();
+
+            if let Some(agent) = state.agents.get(&id) {
+                match &agent.pm_task_status {
+                    ProjectMgmtTaskStatus::Asana(asana_status) => {
+                        if let Some(task_gid) = asana_status.gid() {
+                            let gid = task_gid.to_string();
+                            let client = Arc::clone(asana_client);
+                            let done_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .done_section_gid
+                                .clone();
+                            tokio::spawn(async move {
+                                let _ = client.move_to_done(&gid, done_gid.as_deref()).await;
+                                let _ = client.complete_task(&gid).await;
+                            });
+                            state.log_info("Moving Asana task to Done".to_string());
+                        }
+                    }
+                    ProjectMgmtTaskStatus::Notion(notion_status) => {
+                        if let Some(page_id) = notion_status.page_id() {
+                            let pid = page_id.to_string();
+                            let client = Arc::clone(notion_client);
+                            let status_prop_name = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone();
+                            tokio::spawn(async move {
+                                if let Ok(opts) = client.get_status_options().await {
+                                    if let Some(done_id) = opts.done_id {
+                                        let prop_name = status_prop_name
+                                            .unwrap_or_else(|| "Status".to_string());
+                                        let _ = client
+                                            .update_page_status(&pid, &prop_name, &done_id)
+                                            .await;
+                                    }
+                                }
+                            });
+                            state.log_info("Moving Notion task to Done".to_string());
+                        }
+                    }
+                    ProjectMgmtTaskStatus::None => {}
+                }
+            }
+
+            action_tx.send(Action::DeleteAgent { id })?;
+        }
+
+        Action::FetchTaskList => {
+            let provider = pm_provider;
+            let asana_client = Arc::clone(asana_client);
+            let notion_client = Arc::clone(notion_client);
+            let tx = action_tx.clone();
+            tokio::spawn(async move {
+                let result = match provider {
+                    ProjectMgmtProvider::Asana => {
+                        match asana_client.get_project_tasks_with_subtasks().await {
+                            Ok(tasks) => {
+                                let items: Vec<TaskListItem> = tasks
+                                    .into_iter()
+                                    .filter(|t| !t.completed)
+                                    .map(|t| TaskListItem {
+                                        id: t.gid,
+                                        name: t.name,
+                                        status: TaskItemStatus::NotStarted,
+                                        status_name: "Not Started".to_string(),
+                                        url: t.permalink_url.unwrap_or_default(),
+                                        parent_id: t.parent_gid,
+                                        has_children: t.num_subtasks > 0,
+                                    })
+                                    .collect();
+                                Ok(items)
+                            }
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
+                    ProjectMgmtProvider::Notion => {
+                        match notion_client.query_database_with_children(true).await {
+                            Ok(pages) => {
+                                let parent_ids: std::collections::HashSet<String> = pages
+                                    .iter()
+                                    .filter_map(|p| p.parent_page_id.as_ref())
+                                    .cloned()
+                                    .collect();
+
+                                let items: Vec<TaskListItem> = pages
+                                    .into_iter()
+                                    .map(|p| {
+                                        let status_name = p
+                                            .status_name
+                                            .clone()
+                                            .unwrap_or_else(|| "Unknown".to_string());
+                                        let status =
+                                            if status_name.to_lowercase().contains("progress") {
+                                                TaskItemStatus::InProgress
+                                            } else {
+                                                TaskItemStatus::NotStarted
+                                            };
+                                        let has_children = parent_ids.contains(&p.id);
+                                        TaskListItem {
+                                            id: p.id,
+                                            name: p.name,
+                                            status,
+                                            status_name,
+                                            url: p.url,
+                                            parent_id: p.parent_page_id,
+                                            has_children,
+                                        }
+                                    })
+                                    .collect();
+                                Ok(items)
+                            }
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
+                };
+                match result {
+                    Ok(tasks) => {
+                        let _ = tx.send(Action::TaskListFetched { tasks });
+                    }
+                    Err(msg) => {
+                        let _ = tx.send(Action::TaskListFetchError { message: msg });
+                    }
+                }
+            });
+        }
+
+        Action::TaskListFetched { tasks } => {
+            state.task_list_loading = false;
+            state.task_list = tasks.clone();
+            state.task_list_selected = 0;
+            state.task_list_expanded_ids = tasks
+                .iter()
+                .filter(|t| t.has_children)
+                .map(|t| t.id.clone())
+                .collect();
+        }
+
+        Action::TaskListFetchError { message } => {
+            state.task_list_loading = false;
+            state.show_error(format!("Failed to fetch tasks: {}", message));
+            state.exit_input_mode();
+        }
+
+        Action::SelectTaskNext => {
+            let visible_indices =
+                compute_visible_task_indices(&state.task_list, &state.task_list_expanded_ids);
+            if !visible_indices.is_empty() {
+                let visible_pos = visible_indices
+                    .iter()
+                    .position(|&i| i == state.task_list_selected)
+                    .unwrap_or(0);
+                let next_pos = (visible_pos + 1) % visible_indices.len();
+                state.task_list_selected = visible_indices[next_pos];
+            }
+        }
+
+        Action::SelectTaskPrev => {
+            let visible_indices =
+                compute_visible_task_indices(&state.task_list, &state.task_list_expanded_ids);
+            if !visible_indices.is_empty() {
+                let visible_pos = visible_indices
+                    .iter()
+                    .position(|&i| i == state.task_list_selected)
+                    .unwrap_or(0);
+                let prev_pos = if visible_pos == 0 {
+                    visible_indices.len() - 1
+                } else {
+                    visible_pos - 1
+                };
+                state.task_list_selected = visible_indices[prev_pos];
+            }
+        }
+
+        Action::ToggleTaskExpand => {
+            if let Some(task) = state.task_list.get(state.task_list_selected) {
+                if task.has_children {
+                    if state.task_list_expanded_ids.contains(&task.id) {
+                        state.task_list_expanded_ids.remove(&task.id);
+                    } else {
+                        state.task_list_expanded_ids.insert(task.id.clone());
+                    }
+                }
+            }
+        }
+
+        Action::CreateAgentFromSelectedTask => {
+            if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
+                let branch = flock::util::sanitize_branch_name(&task.name);
+                if branch.is_empty() {
+                    state.show_error("Invalid task name for branch");
+                } else {
+                    let name = task.name.clone();
+                    state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
+                    let ai_agent = state.config.global.ai_agent.clone();
+                    let worktree_symlinks = state
+                        .settings
+                        .repo_config
+                        .dev_server
+                        .worktree_symlinks
+                        .clone();
+                    match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks)
+                    {
+                        Ok(mut agent) => {
+                            state.log_info(format!("Agent '{}' created successfully", agent.name));
+
+                            let pm_status = match pm_provider {
+                                ProjectMgmtProvider::Asana => {
+                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                        gid: task.id.clone(),
+                                        name: task.name.clone(),
+                                        url: task.url.clone(),
+                                    })
+                                }
+                                ProjectMgmtProvider::Notion => {
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                                        page_id: task.id.clone(),
+                                        name: task.name.clone(),
+                                        url: task.url.clone(),
+                                        status_option_id: String::new(),
+                                    })
+                                }
+                            };
+                            agent.pm_task_status = pm_status;
+                            state.log_info(format!("Linked task '{}' to agent", task.name));
+
+                            state.add_agent(agent);
+                            state.select_last();
+                            state.toast = None;
+                            state.exit_input_mode();
+
+                            let _ = agent_watch_tx.send(state.agents.keys().cloned().collect());
+                            let _ = branch_watch_tx.send(
+                                state
+                                    .agents
+                                    .values()
+                                    .map(|a| (a.id, a.branch.clone()))
+                                    .collect(),
+                            );
+                            let _ = selected_watch_tx.send(state.selected_agent_id());
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Failed to create agent: {}", e));
+                            state.show_error(format!("Failed to create agent: {}", e));
+                        }
+                    }
+                }
+            }
+        }
+
+        Action::AssignSelectedTaskToAgent => {
+            if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
+                if let Some(agent_id) = state.selected_agent_id() {
+                    let agent_current_task = state.agents.get(&agent_id).and_then(|a| {
+                        if a.pm_task_status.is_linked() {
+                            Some((
+                                a.pm_task_status.id().unwrap_or_default().to_string(),
+                                a.pm_task_status.name().unwrap_or_default().to_string(),
+                            ))
+                        } else {
+                            None
+                        }
+                    });
+
+                    let task_id_normalized = task.id.replace('-', "").to_lowercase();
+                    let task_current_agent = state.agents.values().find_map(|a| {
+                        let agent_task_id = a
+                            .pm_task_status
+                            .id()
+                            .map(|id| id.replace('-', "").to_lowercase());
+                        if agent_task_id.as_deref() == Some(&task_id_normalized) {
+                            Some((a.id, a.name.clone()))
+                        } else {
+                            None
+                        }
+                    });
+
+                    if agent_current_task.is_some() || task_current_agent.is_some() {
+                        state.task_reassignment_warning =
+                            Some(flock::app::TaskReassignmentWarning {
+                                target_agent_id: agent_id,
+                                task_id: task.id.clone(),
+                                task_name: task.name.clone(),
+                                agent_current_task,
+                                task_current_agent,
+                            });
+                    } else {
+                        state.exit_input_mode();
+                        action_tx.send(Action::AssignProjectTask {
+                            id: agent_id,
+                            url_or_id: task.id.clone(),
+                        })?;
+                    }
+                } else {
+                    state.show_warning("No agent selected");
+                }
+            }
+        }
+
+        Action::ConfirmTaskReassignment => {
+            if let Some(warning) = state.task_reassignment_warning.take() {
+                if let Some((old_agent_id, old_agent_name)) = warning.task_current_agent {
+                    if let Some(old_agent) = state.agents.get_mut(&old_agent_id) {
+                        old_agent.pm_task_status = ProjectMgmtTaskStatus::None;
+                    }
+                    state.log_info(format!("Removed task from agent '{}'", old_agent_name));
+                }
+
+                state.exit_input_mode();
+                action_tx.send(Action::AssignProjectTask {
+                    id: warning.target_agent_id,
+                    url_or_id: warning.task_id,
+                })?;
+            }
+        }
+
+        Action::DismissTaskReassignmentWarning => {
+            state.task_reassignment_warning = None;
         }
 
         // UI state
@@ -1830,15 +2819,25 @@ async fn process_action(
         }
 
         Action::ShowError(msg) => {
-            state.error_message = Some(msg);
+            state.toast = Some(Toast::new(msg, ToastLevel::Error));
+        }
+
+        Action::ShowToast { message, level } => {
+            state.toast = Some(Toast::new(message, level));
         }
 
         Action::ClearError => {
-            state.error_message = None;
+            state.toast = None;
         }
 
         Action::EnterInputMode(mode) => {
-            state.enter_input_mode(mode);
+            state.enter_input_mode(mode.clone());
+            if mode == InputMode::BrowseTasks {
+                state.task_list_loading = true;
+                state.task_list.clear();
+                state.task_list_selected = 0;
+                let _ = action_tx.send(Action::FetchTaskList);
+            }
         }
 
         Action::ExitInputMode => {
@@ -1866,6 +2865,7 @@ async fn process_action(
                                 action_tx.send(Action::CreateAgent {
                                     name: input.trim().to_string(),
                                     branch,
+                                    task: None,
                                 })?;
                             }
                         }
@@ -1904,8 +2904,73 @@ async fn process_action(
                             }
                         }
                     }
+                    InputMode::AssignProjectTask => {
+                        if !input.is_empty() {
+                            if let Some(agent_id) = state.selected_agent_id() {
+                                let agent_current_task =
+                                    state.agents.get(&agent_id).and_then(|a| {
+                                        if a.pm_task_status.is_linked() {
+                                            Some((
+                                                a.pm_task_status
+                                                    .id()
+                                                    .unwrap_or_default()
+                                                    .to_string(),
+                                                a.pm_task_status
+                                                    .name()
+                                                    .unwrap_or_default()
+                                                    .to_string(),
+                                            ))
+                                        } else {
+                                            None
+                                        }
+                                    });
+
+                                let input_normalized = input.replace('-', "").to_lowercase();
+                                let parts: Vec<&str> = input_normalized.split('/').collect();
+                                let task_id_part = parts.last().unwrap_or(&"").to_string();
+
+                                let task_current_agent = state.agents.values().find_map(|a| {
+                                    let agent_task_id = a
+                                        .pm_task_status
+                                        .id()
+                                        .map(|id| id.replace('-', "").to_lowercase());
+                                    if agent_task_id.as_deref() == Some(&task_id_part) {
+                                        Some((a.id, a.name.clone()))
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                                if agent_current_task.is_some() || task_current_agent.is_some() {
+                                    state.task_reassignment_warning =
+                                        Some(flock::app::TaskReassignmentWarning {
+                                            target_agent_id: agent_id,
+                                            task_id: input.clone(),
+                                            task_name: input.clone(),
+                                            agent_current_task,
+                                            task_current_agent,
+                                        });
+                                } else {
+                                    state.exit_input_mode();
+                                    action_tx.send(Action::AssignProjectTask {
+                                        id: agent_id,
+                                        url_or_id: input,
+                                    })?;
+                                }
+                            }
+                        }
+                    }
                     InputMode::ConfirmDeleteAsana => {
                         // Handled directly by key handler (y/n/Esc), not through SubmitInput
+                    }
+                    InputMode::ConfirmDeleteTask => {
+                        // Handled directly by key handler (y/n/Esc), not through SubmitInput
+                    }
+                    InputMode::BrowseTasks => {
+                        // Handled by SelectTaskNext/Prev and CreateAgentFromSelectedTask
+                    }
+                    InputMode::SelectTaskStatus => {
+                        // Handled by TaskStatusDropdownNext/Prev/Select
                     }
                 }
             }
@@ -1917,10 +2982,10 @@ async fn process_action(
                 let name = agent.name.clone();
                 match Clipboard::new().and_then(|mut c| c.set_text(&name)) {
                     Ok(()) => {
-                        state.error_message = Some(format!("Copied '{}'", name));
+                        state.show_success(format!("Copied '{}'", name));
                     }
                     Err(e) => {
-                        state.error_message = Some(format!("Copy failed: {}", e));
+                        state.show_error(format!("Copy failed: {}", e));
                     }
                 }
             }
@@ -1928,7 +2993,7 @@ async fn process_action(
 
         // Application
         Action::RefreshAll => {
-            state.error_message = Some("Refreshing...".to_string());
+            state.show_info("Refreshing...");
 
             if let Some(agent) = state.selected_agent() {
                 let git_sync = GitSync::new(&agent.worktree_path);
@@ -1941,7 +3006,7 @@ async fn process_action(
         }
 
         Action::RefreshSelected => {
-            state.error_message = Some("Refreshing...".to_string());
+            state.show_info("Refreshing...");
 
             if let Some(agent) = state.selected_agent() {
                 let id = agent.id;
@@ -1994,38 +3059,77 @@ async fn process_action(
                     }
                 });
 
-                // Refresh Asana task status
-                if let Some(task_gid) = agent.asana_task_status.gid() {
-                    let asana_client_clone = Arc::clone(asana_client);
-                    let tx_clone = action_tx.clone();
-                    let gid = task_gid.to_string();
-                    tokio::spawn(async move {
-                        if let Ok(task) = asana_client_clone.get_task(&gid).await {
-                            let url = task.permalink_url.unwrap_or_else(|| {
-                                format!("https://app.asana.com/0/0/{}/f", task.gid)
+                match &agent.pm_task_status {
+                    ProjectMgmtTaskStatus::Asana(asana_status) => {
+                        if let Some(task_gid) = asana_status.gid() {
+                            let asana_client_clone = Arc::clone(asana_client);
+                            let tx_clone = action_tx.clone();
+                            let gid = task_gid.to_string();
+                            tokio::spawn(async move {
+                                if let Ok(task) = asana_client_clone.get_task(&gid).await {
+                                    let url = task.permalink_url.unwrap_or_else(|| {
+                                        format!("https://app.asana.com/0/0/{}/f", task.gid)
+                                    });
+                                    let status = if task.completed {
+                                        flock::asana::AsanaTaskStatus::Completed {
+                                            gid: task.gid,
+                                            name: task.name,
+                                        }
+                                    } else {
+                                        flock::asana::AsanaTaskStatus::InProgress {
+                                            gid: task.gid,
+                                            name: task.name,
+                                            url,
+                                        }
+                                    };
+                                    let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
+                                        id,
+                                        status: ProjectMgmtTaskStatus::Asana(status),
+                                    });
+                                }
                             });
-                            let status = if task.completed {
-                                flock::asana::AsanaTaskStatus::Completed {
-                                    gid: task.gid,
-                                    name: task.name,
-                                }
-                            } else {
-                                flock::asana::AsanaTaskStatus::InProgress {
-                                    gid: task.gid,
-                                    name: task.name,
-                                    url,
-                                }
-                            };
-                            let _ = tx_clone.send(Action::UpdateAsanaTaskStatus { id, status });
                         }
-                    });
+                    }
+                    ProjectMgmtTaskStatus::Notion(notion_status) => {
+                        if let Some(page_id) = notion_status.page_id() {
+                            let notion_client_clone = Arc::clone(notion_client);
+                            let tx_clone = action_tx.clone();
+                            let pid = page_id.to_string();
+                            tokio::spawn(async move {
+                                if let Ok(page) = notion_client_clone.get_page(&pid).await {
+                                    let status = if page.is_completed {
+                                        NotionTaskStatus::Completed {
+                                            page_id: page.id,
+                                            name: page.name,
+                                        }
+                                    } else {
+                                        NotionTaskStatus::InProgress {
+                                            page_id: page.id,
+                                            name: page.name,
+                                            url: page.url,
+                                            status_option_id: page.status_id.unwrap_or_default(),
+                                        }
+                                    };
+                                    let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
+                                        id,
+                                        status: ProjectMgmtTaskStatus::Notion(status),
+                                    });
+                                }
+                            });
+                        }
+                    }
+                    ProjectMgmtTaskStatus::None => {}
                 }
             }
         }
 
         Action::Tick => {
-            // Advance animation frame for spinner
             state.advance_animation();
+            if let Some(ref toast) = state.toast {
+                if toast.is_expired() {
+                    state.toast = None;
+                }
+            }
         }
 
         Action::RecordActivity { id, had_activity } => {
@@ -2077,7 +3181,7 @@ async fn process_action(
             } else {
                 state.log_error(&message);
             }
-            state.error_message = Some(message);
+            state.show_info(message);
         }
 
         Action::PauseAgentComplete {
@@ -2091,10 +3195,11 @@ async fn process_action(
                     agent.status = flock::agent::AgentStatus::Paused;
                 }
                 state.log_info(&message);
+                state.show_success(message);
             } else {
                 state.log_error(&message);
+                state.show_error(message);
             }
-            state.error_message = Some(message);
         }
 
         Action::ResumeAgentComplete {
@@ -2108,10 +3213,11 @@ async fn process_action(
                     agent.status = flock::agent::AgentStatus::Running;
                 }
                 state.log_info(&message);
+                state.show_success(message);
             } else {
                 state.log_error(&message);
+                state.show_error(message);
             }
-            state.error_message = Some(message);
         }
 
         // Settings actions
@@ -2146,6 +3252,34 @@ async fn process_action(
         }
 
         Action::SettingsSelectNext => {
+            if state.settings.editing_text {
+            } else {
+                let total = state.settings.total_fields();
+                state.settings.field_index = (state.settings.field_index + 1) % total;
+            }
+        }
+
+        Action::SettingsSelectPrev => {
+            if state.settings.editing_text {
+            } else {
+                let total = state.settings.total_fields();
+                state.settings.field_index = if state.settings.field_index == 0 {
+                    total.saturating_sub(1)
+                } else {
+                    state.settings.field_index - 1
+                };
+            }
+        }
+
+        Action::SettingsDropdownPrev => {
+            if let flock::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
+                state.settings.dropdown = flock::app::DropdownState::Open {
+                    selected_index: selected_index.saturating_sub(1),
+                };
+            }
+        }
+
+        Action::SettingsDropdownNext => {
             let field = state.settings.current_field();
             if let flock::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
                 let max = match field {
@@ -2158,30 +3292,13 @@ async fn process_action(
                     flock::app::SettingsField::CodebergCiProvider => {
                         flock::app::CodebergCiProvider::all().len()
                     }
+                    flock::app::SettingsField::ProjectMgmtProvider => {
+                        flock::app::ProjectMgmtProvider::all().len()
+                    }
                     _ => 0,
                 };
                 state.settings.dropdown = flock::app::DropdownState::Open {
                     selected_index: (*selected_index + 1).min(max.saturating_sub(1)),
-                };
-            } else if state.settings.editing_text {
-            } else {
-                let total = state.settings.total_fields();
-                state.settings.field_index = (state.settings.field_index + 1) % total;
-            }
-        }
-
-        Action::SettingsSelectPrev => {
-            if let flock::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
-                state.settings.dropdown = flock::app::DropdownState::Open {
-                    selected_index: selected_index.saturating_sub(1),
-                };
-            } else if state.settings.editing_text {
-            } else {
-                let total = state.settings.total_fields();
-                state.settings.field_index = if state.settings.field_index == 0 {
-                    total.saturating_sub(1)
-                } else {
-                    state.settings.field_index - 1
                 };
             }
         }
@@ -2249,9 +3366,7 @@ async fn process_action(
                     state.settings.text_buffer = state.settings.repo_config.git.main_branch.clone();
                 }
                 flock::app::SettingsField::WorktreeSymlinks => {
-                    state.settings.editing_text = true;
-                    state.settings.text_buffer =
-                        state.settings.repo_config.git.worktree_symlinks.join(", ");
+                    state.settings.init_file_browser(&state.repo_path);
                 }
                 flock::app::SettingsField::GitLabProjectId => {
                     state.settings.editing_text = true;
@@ -2323,6 +3438,7 @@ async fn process_action(
                     state.settings.text_buffer = state
                         .settings
                         .repo_config
+                        .project_mgmt
                         .asana
                         .project_gid
                         .clone()
@@ -2333,6 +3449,7 @@ async fn process_action(
                     state.settings.text_buffer = state
                         .settings
                         .repo_config
+                        .project_mgmt
                         .asana
                         .in_progress_section_gid
                         .clone()
@@ -2343,6 +3460,7 @@ async fn process_action(
                     state.settings.text_buffer = state
                         .settings
                         .repo_config
+                        .project_mgmt
                         .asana
                         .done_section_gid
                         .clone()
@@ -2384,7 +3502,7 @@ async fn process_action(
                 flock::app::SettingsField::PushPrompt => {
                     let agent = &state.settings.pending_ai_agent;
                     if agent.push_command().is_some() {
-                        state.error_message = Some(format!(
+                        state.show_warning(format!(
                             "{} uses /push command, no prompt to configure",
                             agent.display_name()
                         ));
@@ -2428,8 +3546,96 @@ async fn process_action(
                     state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
                     state.config.ui.show_banner = state.settings.pending_ui.show_banner;
                 }
+                flock::app::SettingsField::ProjectMgmtProvider => {
+                    let current = state.settings.repo_config.project_mgmt.provider;
+                    let idx = flock::app::ProjectMgmtProvider::all()
+                        .iter()
+                        .position(|p| *p == current)
+                        .unwrap_or(0);
+                    state.settings.dropdown = flock::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
+                flock::app::SettingsField::NotionDatabaseId => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .database_id
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::NotionStatusProperty => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .status_property_name
+                        .clone()
+                        .unwrap_or_else(|| "Status".to_string());
+                }
+                flock::app::SettingsField::NotionInProgressOption => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .in_progress_option
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::NotionDoneOption => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .done_option
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::DevServerCommand => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .dev_server
+                        .command
+                        .clone()
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::DevServerRunBefore => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer =
+                        state.settings.repo_config.dev_server.run_before.join(", ");
+                }
+                flock::app::SettingsField::DevServerWorkingDir => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer =
+                        state.settings.repo_config.dev_server.working_dir.clone();
+                }
+                flock::app::SettingsField::DevServerPort => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .dev_server
+                        .port
+                        .map(|p| p.to_string())
+                        .unwrap_or_default();
+                }
+                flock::app::SettingsField::DevServerAutoStart => {
+                    state.settings.repo_config.dev_server.auto_start =
+                        !state.settings.repo_config.dev_server.auto_start;
+                }
                 _ => {
-                    // Keybind fields and other non-editable fields are handled elsewhere
+                    // Keybind fields are handled by SettingsStartKeybindCapture
                 }
             }
         }
@@ -2447,7 +3653,7 @@ async fn process_action(
                             state.settings.text_buffer.clone();
                     }
                     flock::app::SettingsField::WorktreeSymlinks => {
-                        state.settings.repo_config.git.worktree_symlinks = state
+                        state.settings.repo_config.dev_server.worktree_symlinks = state
                             .settings
                             .text_buffer
                             .split(',')
@@ -2489,18 +3695,49 @@ async fn process_action(
                     }
                     flock::app::SettingsField::AsanaProjectGid => {
                         let val = state.settings.text_buffer.clone();
-                        state.settings.repo_config.asana.project_gid =
+                        state.settings.repo_config.project_mgmt.asana.project_gid =
                             if val.is_empty() { None } else { Some(val) };
                     }
                     flock::app::SettingsField::AsanaInProgressGid => {
                         let val = state.settings.text_buffer.clone();
-                        state.settings.repo_config.asana.in_progress_section_gid =
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .asana
+                            .in_progress_section_gid =
                             if val.is_empty() { None } else { Some(val) };
                     }
                     flock::app::SettingsField::AsanaDoneGid => {
                         let val = state.settings.text_buffer.clone();
-                        state.settings.repo_config.asana.done_section_gid =
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .asana
+                            .done_section_gid = if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::DevServerCommand => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.dev_server.command =
                             if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::DevServerRunBefore => {
+                        state.settings.repo_config.dev_server.run_before = state
+                            .settings
+                            .text_buffer
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                    flock::app::SettingsField::DevServerWorkingDir => {
+                        state.settings.repo_config.dev_server.working_dir =
+                            state.settings.text_buffer.clone();
+                    }
+                    flock::app::SettingsField::DevServerPort => {
+                        state.settings.repo_config.dev_server.port =
+                            state.settings.text_buffer.parse().ok();
                     }
                     flock::app::SettingsField::SummaryPrompt => {
                         let val = state.settings.text_buffer.clone();
@@ -2529,6 +3766,34 @@ async fn process_action(
                             }
                             flock::app::AiAgent::ClaudeCode => {}
                         }
+                    }
+                    flock::app::SettingsField::NotionDatabaseId => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.notion.database_id =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::NotionStatusProperty => {
+                        let val = state.settings.text_buffer.clone();
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .notion
+                            .status_property_name = if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::NotionInProgressOption => {
+                        let val = state.settings.text_buffer.clone();
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .notion
+                            .in_progress_option = if val.is_empty() { None } else { Some(val) };
+                    }
+                    flock::app::SettingsField::NotionDoneOption => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.notion.done_option =
+                            if val.is_empty() { None } else { Some(val) };
                     }
                     _ => {}
                 }
@@ -2569,6 +3834,13 @@ async fn process_action(
                             flock::app::CodebergCiProvider::all().get(selected_index)
                         {
                             state.settings.repo_config.git.codeberg.ci_provider = *provider;
+                        }
+                    }
+                    flock::app::SettingsField::ProjectMgmtProvider => {
+                        if let Some(provider) =
+                            flock::app::ProjectMgmtProvider::all().get(selected_index)
+                        {
+                            state.settings.repo_config.project_mgmt.provider = *provider;
                         }
                     }
                     _ => {}
@@ -2617,7 +3889,7 @@ async fn process_action(
                 }
                 _ => {}
             }
-            state.error_message = Some("Saved".to_string());
+            state.show_success("Saved");
         }
 
         Action::SettingsInputChar(c) => {
@@ -2677,6 +3949,120 @@ async fn process_action(
 
         Action::SettingsCancelKeybindCapture => {
             state.settings.capturing_keybind = None;
+        }
+
+        // File Browser Actions
+        Action::SettingsCloseFileBrowser => {
+            let repo_path = std::path::PathBuf::from(&state.repo_path);
+            let selected: Vec<String> = state
+                .settings
+                .file_browser
+                .selected_files
+                .iter()
+                .filter_map(|p| {
+                    p.strip_prefix(&repo_path)
+                        .ok()
+                        .map(|s| s.to_string_lossy().to_string())
+                })
+                .collect();
+
+            state.settings.repo_config.dev_server.worktree_symlinks = selected;
+
+            if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                state.log_error(format!("Failed to save repo config: {}", e));
+            }
+
+            let symlinks = state
+                .settings
+                .repo_config
+                .dev_server
+                .worktree_symlinks
+                .clone();
+            let worktree = Worktree::new(&state.repo_path, state.worktree_base.clone());
+
+            let agent_worktrees: Vec<(String, String)> = state
+                .agents
+                .values()
+                .map(|a| (a.name.clone(), a.worktree_path.clone()))
+                .collect();
+
+            let mut refreshed_count = 0;
+            let mut errors = Vec::new();
+            for (name, worktree_path) in agent_worktrees {
+                if std::path::Path::new(&worktree_path).exists() {
+                    if let Err(e) = worktree.create_symlinks(&worktree_path, &symlinks) {
+                        errors.push(format!("{}: {}", name, e));
+                    } else {
+                        refreshed_count += 1;
+                    }
+                }
+            }
+
+            for error in errors {
+                state.log_error(format!("Failed to create symlinks for {}", error));
+            }
+
+            state.settings.file_browser.active = false;
+            state.log_info(format!(
+                "Symlinks saved and refreshed for {} worktrees",
+                refreshed_count
+            ));
+        }
+
+        Action::FileBrowserToggle => {
+            let fb = &mut state.settings.file_browser;
+            if let Some(entry) = fb.entries.get(fb.selected_index) {
+                if !entry.is_dir || entry.name == ".." {
+                    if fb.selected_files.contains(&entry.path) {
+                        fb.selected_files.remove(&entry.path);
+                    } else {
+                        fb.selected_files.insert(entry.path.clone());
+                    }
+                    fb.entries = flock::ui::components::file_browser::load_directory_entries(
+                        &fb.current_path,
+                        &fb.selected_files,
+                        &fb.current_path,
+                    );
+                }
+            }
+        }
+
+        Action::FileBrowserSelectNext => {
+            let fb = &mut state.settings.file_browser;
+            fb.selected_index = (fb.selected_index + 1).min(fb.entries.len().saturating_sub(1));
+        }
+
+        Action::FileBrowserSelectPrev => {
+            let fb = &mut state.settings.file_browser;
+            fb.selected_index = fb.selected_index.saturating_sub(1);
+        }
+
+        Action::FileBrowserEnterDir => {
+            let fb = &mut state.settings.file_browser;
+            if let Some(entry) = fb.entries.get(fb.selected_index) {
+                if entry.is_dir {
+                    fb.current_path = entry.path.clone();
+                    fb.selected_index = 0;
+                    fb.entries = flock::ui::components::file_browser::load_directory_entries(
+                        &fb.current_path,
+                        &fb.selected_files,
+                        &fb.current_path,
+                    );
+                }
+            }
+        }
+
+        Action::FileBrowserGoParent => {
+            let fb = &mut state.settings.file_browser;
+            if let Some(parent) = fb.current_path.parent() {
+                fb.current_path = parent.to_path_buf();
+                fb.selected_index = 0;
+                fb.entries = flock::ui::components::file_browser::load_directory_entries(
+                    &fb.current_path,
+                    &fb.selected_files,
+                    &fb.current_path,
+                );
+            }
         }
 
         // Global Setup Wizard Actions
@@ -2911,6 +4297,154 @@ async fn process_action(
             }
             state.show_project_setup = false;
         }
+
+        // Dev Server Actions
+        Action::RequestStartDevServer => {
+            if let Some(agent) = state.selected_agent() {
+                let agent_id = agent.id;
+                if let Ok(manager) = devserver_manager.try_lock() {
+                    let current_running = manager
+                        .get(agent_id)
+                        .map(|s| s.status().is_running())
+                        .unwrap_or(false);
+
+                    if current_running {
+                        drop(manager);
+                        action_tx.send(Action::StopDevServer)?;
+                    } else if manager.has_running_server() {
+                        let running = manager.running_servers();
+                        state.devserver_warning = Some(flock::app::DevServerWarning {
+                            agent_id,
+                            running_servers: running
+                                .into_iter()
+                                .map(|(_, name, port)| (name, port))
+                                .collect(),
+                        });
+                    } else {
+                        drop(manager);
+                        action_tx.send(Action::StartDevServer)?;
+                    }
+                }
+            }
+        }
+
+        Action::ConfirmStartDevServer => {
+            state.devserver_warning = None;
+            action_tx.send(Action::StartDevServer)?;
+        }
+
+        Action::DismissDevServerWarning => {
+            state.devserver_warning = None;
+        }
+
+        Action::StartDevServer => {
+            if let Some(agent) = state.selected_agent() {
+                let config = state.settings.repo_config.dev_server.clone();
+                let worktree = std::path::PathBuf::from(agent.worktree_path.clone());
+                let agent_id = agent.id;
+                let agent_name = agent.name.clone();
+                let manager = Arc::clone(devserver_manager);
+
+                state.log_info(format!("Starting dev server for '{}'", agent.name));
+
+                tokio::spawn(async move {
+                    let mut m = manager.lock().await;
+                    if let Err(e) = m.start(agent_id, agent_name, &config, &worktree).await {
+                        tracing::error!("Failed to start dev server: {}", e);
+                    }
+                });
+            }
+        }
+
+        Action::StopDevServer => {
+            if let Some(agent) = state.selected_agent() {
+                let agent_id = agent.id;
+                let manager = Arc::clone(devserver_manager);
+                let name = agent.name.clone();
+
+                state.log_info(format!("Stopping dev server for '{}'", name));
+
+                tokio::spawn(async move {
+                    let mut m = manager.lock().await;
+                    let _ = m.stop(agent_id).await;
+                });
+            }
+        }
+
+        Action::RestartDevServer => {
+            if let Some(agent) = state.selected_agent() {
+                let config = state.settings.repo_config.dev_server.clone();
+                let worktree = std::path::PathBuf::from(agent.worktree_path.clone());
+                let agent_id = agent.id;
+                let agent_name = agent.name.clone();
+                let manager = Arc::clone(devserver_manager);
+
+                state.log_info(format!("Restarting dev server for '{}'", agent.name));
+
+                tokio::spawn(async move {
+                    let mut m = manager.lock().await;
+                    let _ = m.stop(agent_id).await;
+                    if let Err(e) = m.start(agent_id, agent_name, &config, &worktree).await {
+                        tracing::error!("Failed to restart dev server: {}", e);
+                    }
+                });
+            }
+        }
+
+        Action::NextPreviewTab => {
+            state.preview_tab = match state.preview_tab {
+                PreviewTab::Preview => PreviewTab::DevServer,
+                PreviewTab::DevServer => PreviewTab::Preview,
+            };
+        }
+
+        Action::PrevPreviewTab => {
+            state.preview_tab = match state.preview_tab {
+                PreviewTab::Preview => PreviewTab::DevServer,
+                PreviewTab::DevServer => PreviewTab::Preview,
+            };
+        }
+
+        Action::ClearDevServerLogs => {
+            if let Some(agent) = state.selected_agent() {
+                let agent_id = agent.id;
+                let mut manager = devserver_manager.lock().await;
+                if let Some(server) = manager.get_mut(agent_id) {
+                    server.clear_logs();
+                }
+            }
+        }
+
+        Action::OpenDevServerInBrowser => {
+            if let Some(agent) = state.selected_agent() {
+                let agent_id = agent.id;
+                let manager = devserver_manager.lock().await;
+                if let Some(server) = manager.get(agent_id) {
+                    if let Some(port) = server.status().port() {
+                        let url = format!("http://localhost:{}", port);
+                        match open::that(&url) {
+                            Ok(_) => state.log_info("Opening dev server in browser"),
+                            Err(e) => state.log_error(format!("Failed to open browser: {}", e)),
+                        }
+                    }
+                }
+            }
+        }
+
+        Action::AppendDevServerLog { agent_id, line } => {
+            let mut manager = devserver_manager.lock().await;
+            if let Some(server) = manager.get_mut(agent_id) {
+                server.append_log(line);
+            }
+        }
+
+        Action::UpdateDevServerStatus { agent_id, status } => {
+            state.log_debug(format!(
+                "Dev server {} status: {}",
+                agent_id,
+                status.label()
+            ));
+        }
     }
 
     Ok(false)
@@ -2972,7 +4506,12 @@ fn get_project_field_value(config: &flock::app::RepoConfig, field: &ProjectSetup
         ProjectSetupField::CodebergBaseUrl => config.git.codeberg.base_url.clone(),
         ProjectSetupField::BranchPrefix => config.git.branch_prefix.clone(),
         ProjectSetupField::MainBranch => config.git.main_branch.clone(),
-        ProjectSetupField::AsanaProjectGid => config.asana.project_gid.clone().unwrap_or_default(),
+        ProjectSetupField::AsanaProjectGid => config
+            .project_mgmt
+            .asana
+            .project_gid
+            .clone()
+            .unwrap_or_default(),
     }
 }
 
@@ -3017,7 +4556,7 @@ fn set_project_field_value(
             };
         }
         ProjectSetupField::AsanaProjectGid => {
-            config.asana.project_gid = if value.is_empty() {
+            config.project_mgmt.asana.project_gid = if value.is_empty() {
                 None
             } else {
                 Some(value.to_string())
@@ -3301,6 +4840,50 @@ fn parse_asana_task_gid(input: &str) -> String {
     trimmed.to_string()
 }
 
+fn compute_visible_task_indices(
+    tasks: &[TaskListItem],
+    expanded_ids: &std::collections::HashSet<String>,
+) -> Vec<usize> {
+    use std::collections::{HashMap, HashSet};
+
+    let child_to_parent: HashMap<&str, &str> = tasks
+        .iter()
+        .filter_map(|t| t.parent_id.as_ref().map(|p| (t.id.as_str(), p.as_str())))
+        .collect();
+
+    fn is_ancestor_expanded(
+        task: &TaskListItem,
+        child_to_parent: &HashMap<&str, &str>,
+        expanded_ids: &HashSet<String>,
+    ) -> bool {
+        let mut current_id = task.id.as_str();
+        loop {
+            match child_to_parent.get(current_id) {
+                None => return true,
+                Some(&parent_id) => {
+                    if !expanded_ids.contains(parent_id) {
+                        return false;
+                    }
+                    current_id = parent_id;
+                }
+            }
+        }
+    }
+
+    tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| {
+            if task.parent_id.is_none() {
+                true
+            } else {
+                is_ancestor_expanded(task, &child_to_parent, expanded_ids)
+            }
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Background task to poll Asana for task status updates.
 async fn poll_asana_tasks(
     asana_rx: watch::Receiver<Vec<(Uuid, String)>>,
@@ -3319,22 +4902,58 @@ async fn poll_asana_tasks(
                         .permalink_url
                         .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
                     let status = if task.completed {
-                        AsanaTaskStatus::Completed {
+                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
                             gid: task.gid,
                             name: task.name,
-                        }
+                        })
                     } else {
-                        // Preserve InProgress if already in progress
-                        AsanaTaskStatus::InProgress {
+                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
                             gid: task.gid,
                             name: task.name,
                             url,
-                        }
+                        })
                     };
-                    let _ = tx.send(Action::UpdateAsanaTaskStatus { id, status });
+                    let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
                 }
                 Err(e) => {
                     tracing::warn!("Failed to poll Asana task {}: {}", gid, e);
+                }
+            }
+        }
+    }
+}
+
+/// Background task to poll Notion for task status updates.
+async fn poll_notion_tasks(
+    notion_rx: watch::Receiver<Vec<(Uuid, String)>>,
+    notion_client: Arc<OptionalNotionClient>,
+    tx: mpsc::UnboundedSender<Action>,
+    refresh_secs: u64,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(refresh_secs)).await;
+
+        let tasks = notion_rx.borrow().clone();
+        for (id, page_id) in tasks {
+            match notion_client.get_page(&page_id).await {
+                Ok(page) => {
+                    let status = if page.is_completed {
+                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
+                            page_id: page.id,
+                            name: page.name,
+                        })
+                    } else {
+                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::InProgress {
+                            page_id: page.id,
+                            name: page.name,
+                            url: page.url,
+                            status_option_id: page.status_id.unwrap_or_default(),
+                        })
+                    };
+                    let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to poll Notion page {}: {}", page_id, e);
                 }
             }
         }

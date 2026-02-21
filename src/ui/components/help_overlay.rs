@@ -106,14 +106,17 @@ impl<'a> HelpOverlay<'a> {
                 "  {:8} Open MR/PR in browser",
                 kb.open_mr.display_short()
             )),
-            Line::from(format!(
-                "  {:8} Assign Asana task",
-                kb.asana_assign.display_short()
+            Line::from(""),
+            Line::from(Span::styled(
+                "Project Mgmt",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
-            Line::from(format!(
-                "  {:8} Open Asana task in browser",
-                kb.asana_open.display_short()
-            )),
+            Line::from("  a        Assign task by URL/ID"),
+            Line::from("  A        Open task in browser"),
+            Line::from("  t        Browse tasks from project"),
+            Line::from("  T        Select task status"),
             Line::from(""),
             Line::from(Span::styled(
                 "Other",
