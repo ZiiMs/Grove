@@ -202,6 +202,10 @@ impl WorktreeLocation {
     }
 }
 
+fn default_editor() -> String {
+    "code {path}".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalConfig {
     #[serde(default)]
@@ -210,6 +214,8 @@ pub struct GlobalConfig {
     pub log_level: LogLevel,
     #[serde(default)]
     pub worktree_location: WorktreeLocation,
+    #[serde(default = "default_editor")]
+    pub editor: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

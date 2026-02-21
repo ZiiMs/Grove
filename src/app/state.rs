@@ -85,6 +85,7 @@ impl SettingsTab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsField {
     AiAgent,
+    Editor,
     LogLevel,
     WorktreeLocation,
     ShowPreview,
@@ -164,6 +165,7 @@ impl SettingsField {
     pub fn tab(&self) -> SettingsTab {
         match self {
             SettingsField::AiAgent
+            | SettingsField::Editor
             | SettingsField::LogLevel
             | SettingsField::WorktreeLocation
             | SettingsField::ShowPreview
@@ -219,6 +221,7 @@ impl SettingsItem {
             SettingsTab::General => vec![
                 SettingsItem::Category(SettingsCategory::Agent),
                 SettingsItem::Field(SettingsField::AiAgent),
+                SettingsItem::Field(SettingsField::Editor),
                 SettingsItem::Field(SettingsField::LogLevel),
                 SettingsItem::Category(SettingsCategory::Storage),
                 SettingsItem::Field(SettingsField::WorktreeLocation),
@@ -343,6 +346,7 @@ pub struct SettingsState {
     pub text_buffer: String,
     pub prompt_scroll: usize,
     pub pending_ai_agent: AiAgent,
+    pub pending_editor: String,
     pub pending_log_level: ConfigLogLevel,
     pub pending_worktree_location: WorktreeLocation,
     pub pending_ui: UiConfig,
@@ -362,6 +366,7 @@ impl Default for SettingsState {
             text_buffer: String::new(),
             prompt_scroll: 0,
             pending_ai_agent: AiAgent::default(),
+            pending_editor: String::new(),
             pending_log_level: ConfigLogLevel::default(),
             pending_worktree_location: WorktreeLocation::default(),
             pending_ui: UiConfig::default(),

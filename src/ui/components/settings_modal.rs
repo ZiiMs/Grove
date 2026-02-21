@@ -295,6 +295,11 @@ impl<'a> SettingsModal<'a> {
                 self.ai_agent.display_name().to_string(),
                 false,
             ),
+            SettingsField::Editor => (
+                "Editor".to_string(),
+                self.state.pending_editor.clone(),
+                false,
+            ),
             SettingsField::LogLevel => (
                 "Log Level".to_string(),
                 self.log_level.display_name().to_string(),

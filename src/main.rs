@@ -431,6 +431,7 @@ async fn main() -> Result<()> {
     let mut last_tick = std::time::Instant::now();
     let mut pending_attach: Option<Uuid> = None;
     let mut pending_devserver_attach: Option<Uuid> = None;
+    let mut pending_editor: Option<Uuid> = None;
 
     loop {
         // Handle pending dev server attach (outside of async context)
@@ -515,6 +516,47 @@ async fn main() -> Result<()> {
             continue;
         }
 
+        // Handle pending editor open (outside of async context)
+        if let Some(id) = pending_editor.take() {
+            let agent_clone = state.agents.get(&id).cloned();
+            if let Some(agent) = agent_clone {
+                let editor_cmd = state
+                    .config
+                    .global
+                    .editor
+                    .replace("{path}", &agent.worktree_path);
+
+                state.log_info(format!("Opening editor for '{}'", agent.name));
+
+                // Leave TUI mode
+                disable_raw_mode()?;
+                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+
+                // Run editor (blocks until exit)
+                let editor_result = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&editor_cmd)
+                    .status();
+
+                // Restore TUI mode
+                enable_raw_mode()?;
+                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                terminal.clear()?;
+
+                // Drain any stale input events
+                while poll(Duration::from_millis(1))? {
+                    let _ = event::read();
+                }
+
+                state.log_info("Returned from editor");
+
+                if let Err(e) = editor_result {
+                    state.log_error(format!("Editor error: {}", e));
+                }
+            }
+            continue;
+        }
+
         // Render
         terminal.draw(|f| {
             let devserver_info = if let Some(agent) = state.selected_agent() {
@@ -554,6 +596,10 @@ async fn main() -> Result<()> {
                         }
                         Action::AttachToDevServer { agent_id } => {
                             pending_devserver_attach = Some(agent_id);
+                            continue;
+                        }
+                        Action::OpenInEditor { id } => {
+                            pending_editor = Some(id);
                             continue;
                         }
                         _ => action_tx.send(action)?,
@@ -865,6 +911,9 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                     .map(|id| Action::OpenCodebergPrInBrowser { id }),
             }
         }
+        KeyCode::Char('e') if !is_paused => state
+            .selected_agent_id()
+            .map(|id| Action::OpenInEditor { id }),
 
         KeyCode::Char('a') => Some(Action::EnterInputMode(InputMode::AssignProjectTask)),
         KeyCode::Char('A') => state
@@ -1684,6 +1733,9 @@ async fn process_action(
                     state.show_error("No MR available for this agent");
                 }
             }
+        }
+        Action::OpenInEditor { .. } => {
+            // Handled in main loop for terminal access
         }
 
         // GitHub operations
@@ -3217,6 +3269,7 @@ async fn process_action(
                 state.settings.dropdown = flock::app::DropdownState::Closed;
                 state.settings.editing_text = false;
                 state.settings.pending_ai_agent = state.config.global.ai_agent.clone();
+                state.settings.pending_editor = state.config.global.editor.clone();
                 state.settings.pending_log_level = state.config.global.log_level;
                 state.settings.pending_worktree_location = state.config.global.worktree_location;
                 state.settings.pending_ui = state.config.ui.clone();
@@ -3301,6 +3354,10 @@ async fn process_action(
                     state.settings.dropdown = flock::app::DropdownState::Open {
                         selected_index: idx,
                     };
+                }
+                flock::app::SettingsField::Editor => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state.settings.pending_editor.clone();
                 }
                 flock::app::SettingsField::GitProvider => {
                     let current = &state.settings.repo_config.git.provider;
@@ -3778,6 +3835,9 @@ async fn process_action(
                         state.settings.repo_config.project_mgmt.notion.done_option =
                             if val.is_empty() { None } else { Some(val) };
                     }
+                    flock::app::SettingsField::Editor => {
+                        state.settings.pending_editor = state.settings.text_buffer.clone();
+                    }
                     _ => {}
                 }
                 state.settings.editing_text = false;
@@ -3895,6 +3955,7 @@ async fn process_action(
 
         Action::SettingsSave => {
             state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
+            state.config.global.editor = state.settings.pending_editor.clone();
             state.config.global.log_level = state.settings.pending_log_level;
             state.config.global.worktree_location = state.settings.pending_worktree_location;
             state.config.ui = state.settings.pending_ui.clone();

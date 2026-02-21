@@ -66,6 +66,7 @@ impl HelpOverlay {
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from("  o        Open MR in browser"),
+            Line::from("  e        Open worktree in editor"),
             Line::from(""),
             Line::from(Span::styled(
                 "Project Mgmt",
