@@ -1587,7 +1587,7 @@ async fn process_action(
                                 &worktree_path,
                                 "commit",
                                 "-m",
-                                &format!("[grove] paused '{}'", name_clone),
+                                &format!("[GROVE] {}", name_clone),
                             ])
                             .output();
                     }
