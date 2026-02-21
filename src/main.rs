@@ -1406,6 +1406,7 @@ async fn process_action(
                                     gid: task_item.id.clone(),
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
+                                    is_subtask: task_item.is_subtask(),
                                 })
                             }
                             ProjectMgmtProvider::Notion => {
@@ -2065,16 +2066,19 @@ async fn process_action(
                         let url = task
                             .permalink_url
                             .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
+                        let is_subtask = task.parent.is_some();
                         let status = if task.completed {
                             AsanaTaskStatus::Completed {
                                 gid: task.gid,
                                 name: task.name,
+                                is_subtask,
                             }
                         } else {
                             AsanaTaskStatus::NotStarted {
                                 gid: task.gid,
                                 name: task.name,
                                 url,
+                                is_subtask,
                             }
                         };
                         let _ = tx.send(Action::UpdateAsanaTaskStatus { id, status });
@@ -2152,16 +2156,19 @@ async fn process_action(
                             let url = task.permalink_url.unwrap_or_else(|| {
                                 format!("https://app.asana.com/0/0/{}/f", task.gid)
                             });
+                            let is_subtask = task.parent.is_some();
                             let status = if task.completed {
                                 AsanaTaskStatus::Completed {
                                     gid: task.gid,
                                     name: task.name,
+                                    is_subtask,
                                 }
                             } else {
                                 AsanaTaskStatus::NotStarted {
                                     gid: task.gid,
                                     name: task.name,
                                     url,
+                                    is_subtask,
                                 }
                             };
                             let _ = tx.send(Action::UpdateProjectTaskStatus {
@@ -2284,10 +2291,16 @@ async fn process_action(
                 let current_status = agent.pm_task_status.clone();
                 match &current_status {
                     ProjectMgmtTaskStatus::Asana(asana_status) => match asana_status {
-                        AsanaTaskStatus::NotStarted { gid, name, url } => {
+                        AsanaTaskStatus::NotStarted {
+                            gid,
+                            name,
+                            url,
+                            is_subtask,
+                        } => {
                             let gid = gid.clone();
                             let name = name.clone();
                             let url = url.clone();
+                            let is_subtask = *is_subtask;
                             let agent_id = id;
                             if let Some(agent) = state.agents.get_mut(&id) {
                                 agent.pm_task_status =
@@ -2295,6 +2308,7 @@ async fn process_action(
                                         gid: gid.clone(),
                                         name: name.clone(),
                                         url: url.clone(),
+                                        is_subtask,
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -2327,15 +2341,22 @@ async fn process_action(
                             });
                             state.log_info(format!("Asana task '{}' → In Progress", name));
                         }
-                        AsanaTaskStatus::InProgress { gid, name, .. } => {
+                        AsanaTaskStatus::InProgress {
+                            gid,
+                            name,
+                            is_subtask,
+                            ..
+                        } => {
                             let gid = gid.clone();
                             let name = name.clone();
+                            let is_subtask = *is_subtask;
                             let agent_id = id;
                             if let Some(agent) = state.agents.get_mut(&id) {
                                 agent.pm_task_status =
                                     ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
                                         gid: gid.clone(),
                                         name: name.clone(),
+                                        is_subtask,
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -2364,12 +2385,15 @@ async fn process_action(
                             });
                             state.log_info(format!("Asana task '{}' → Done", name));
                         }
-                        AsanaTaskStatus::Completed { name, .. } => {
+                        AsanaTaskStatus::Completed {
+                            name, is_subtask, ..
+                        } => {
                             let gid = match asana_status.gid() {
                                 Some(g) => g.to_string(),
                                 None => return Ok(false),
                             };
                             let name = name.clone();
+                            let is_subtask = *is_subtask;
                             let agent_id = id;
                             if let Some(agent) = state.agents.get_mut(&id) {
                                 agent.pm_task_status =
@@ -2377,6 +2401,7 @@ async fn process_action(
                                         gid: gid.clone(),
                                         name: name.clone(),
                                         url: String::new(),
+                                        is_subtask,
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -2467,35 +2492,50 @@ async fn process_action(
                             state.show_error("No Asana task linked to this agent");
                             return Ok(false);
                         }
-                        let agent_id = id;
-                        let client = Arc::clone(asana_client);
-                        let tx = action_tx.clone();
-                        state.loading_message = Some("Loading sections...".to_string());
-                        tokio::spawn(async move {
-                            match client.get_sections().await {
-                                Ok(sections) => {
-                                    let options: Vec<StatusOption> = sections
-                                        .into_iter()
-                                        .map(|s| StatusOption {
-                                            id: s.gid,
-                                            name: s.name,
-                                        })
-                                        .collect();
-                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
-                                        id: agent_id,
-                                        options,
-                                    });
+
+                        if asana_status.is_subtask() {
+                            let gid = asana_status.gid().unwrap().to_string();
+                            let name = asana_status.name().unwrap_or("Task").to_string();
+                            let is_completed =
+                                matches!(asana_status, AsanaTaskStatus::Completed { .. });
+                            state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
+                                task_id: gid,
+                                task_name: name,
+                                current_completed: is_completed,
+                                selected_index: if is_completed { 1 } else { 0 },
+                            });
+                            state.input_mode = Some(InputMode::SelectSubtaskStatus);
+                        } else {
+                            let agent_id = id;
+                            let client = Arc::clone(asana_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Loading sections...".to_string());
+                            tokio::spawn(async move {
+                                match client.get_sections().await {
+                                    Ok(sections) => {
+                                        let options: Vec<StatusOption> = sections
+                                            .into_iter()
+                                            .map(|s| StatusOption {
+                                                id: s.gid,
+                                                name: s.name,
+                                            })
+                                            .collect();
+                                        let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                            id: agent_id,
+                                            options,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load Asana sections: {}", e);
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to load sections: {}",
+                                            e
+                                        )));
+                                    }
                                 }
-                                Err(e) => {
-                                    tracing::error!("Failed to load Asana sections: {}", e);
-                                    let _ = tx.send(Action::SetLoading(None));
-                                    let _ = tx.send(Action::ShowError(format!(
-                                        "Failed to load sections: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        });
+                            });
+                        }
                     }
                     ProjectMgmtTaskStatus::None => {}
                 }
@@ -2653,6 +2693,7 @@ async fn process_action(
                                 if let Some(gid_str) = asana_status.gid() {
                                     let task_gid = gid_str.to_string();
                                     let task_name = asana_status.format_short();
+                                    let is_subtask = asana_status.is_subtask();
                                     let client = Arc::clone(asana_client);
                                     let agent_id_clone = agent_id;
                                     let section_gid = option_id.clone();
@@ -2666,18 +2707,21 @@ async fn process_action(
                                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
                                             gid: task_gid.clone(),
                                             name: task_name.clone(),
+                                            is_subtask,
                                         })
                                     } else if is_in_progress {
                                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
                                             gid: task_gid.clone(),
                                             name: task_name.clone(),
                                             url: String::new(),
+                                            is_subtask,
                                         })
                                     } else {
                                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
                                             gid: task_gid.clone(),
                                             name: task_name.clone(),
                                             url: String::new(),
+                                            is_subtask,
                                         })
                                     };
 
@@ -3021,6 +3065,35 @@ async fn process_action(
                     "Not Started".to_string()
                 };
             }
+
+            for agent in state.agents.values_mut() {
+                if let Some(gid) = agent.pm_task_status.id() {
+                    if gid == task_id {
+                        let name = agent.pm_task_status.name().unwrap_or("").to_string();
+                        let url = agent.pm_task_status.url().unwrap_or("").to_string();
+                        let is_subtask = agent
+                            .pm_task_status
+                            .as_asana()
+                            .map(|s| s.is_subtask())
+                            .unwrap_or(false);
+                        agent.pm_task_status = if completed {
+                            ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
+                                gid: task_id.clone(),
+                                name,
+                                is_subtask,
+                            })
+                        } else {
+                            ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                gid: task_id.clone(),
+                                name,
+                                url,
+                                is_subtask,
+                            })
+                        };
+                        break;
+                    }
+                }
+            }
         }
 
         Action::CreateAgentFromSelectedTask => {
@@ -3049,6 +3122,7 @@ async fn process_action(
                                         gid: task.id.clone(),
                                         name: task.name.clone(),
                                         url: task.url.clone(),
+                                        is_subtask: task.is_subtask(),
                                     })
                                 }
                                 ProjectMgmtProvider::Notion => {
@@ -3425,16 +3499,19 @@ async fn process_action(
                                     let url = task.permalink_url.unwrap_or_else(|| {
                                         format!("https://app.asana.com/0/0/{}/f", task.gid)
                                     });
+                                    let is_subtask = task.parent.is_some();
                                     let status = if task.completed {
                                         grove::asana::AsanaTaskStatus::Completed {
                                             gid: task.gid,
                                             name: task.name,
+                                            is_subtask,
                                         }
                                     } else {
                                         grove::asana::AsanaTaskStatus::InProgress {
                                             gid: task.gid,
                                             name: task.name,
                                             url,
+                                            is_subtask,
                                         }
                                     };
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
@@ -5333,16 +5410,19 @@ async fn poll_asana_tasks(
                     let url = task
                         .permalink_url
                         .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
+                    let is_subtask = task.parent.is_some();
                     let status = if task.completed {
                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
                             gid: task.gid,
                             name: task.name,
+                            is_subtask,
                         })
                     } else {
                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
                             gid: task.gid,
                             name: task.name,
                             url,
+                            is_subtask,
                         })
                     };
                     let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });

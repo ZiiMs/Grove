@@ -9,15 +9,18 @@ pub enum AsanaTaskStatus {
         gid: String,
         name: String,
         url: String,
+        is_subtask: bool,
     },
     InProgress {
         gid: String,
         name: String,
         url: String,
+        is_subtask: bool,
     },
     Completed {
         gid: String,
         name: String,
+        is_subtask: bool,
     },
     Error {
         gid: String,
@@ -70,6 +73,16 @@ impl AsanaTaskStatus {
 
     pub fn is_linked(&self) -> bool {
         !matches!(self, AsanaTaskStatus::None)
+    }
+
+    pub fn is_subtask(&self) -> bool {
+        match self {
+            AsanaTaskStatus::None => false,
+            AsanaTaskStatus::NotStarted { is_subtask, .. }
+            | AsanaTaskStatus::InProgress { is_subtask, .. }
+            | AsanaTaskStatus::Completed { is_subtask, .. } => *is_subtask,
+            AsanaTaskStatus::Error { .. } => false,
+        }
     }
 }
 
