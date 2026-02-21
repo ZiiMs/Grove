@@ -682,7 +682,6 @@ async fn main() -> Result<()> {
                 &codeberg_client,
                 &asana_client,
                 &notion_client,
-                pm_provider,
                 &storage,
                 &action_tx,
                 &agent_watch_tx,
@@ -1340,7 +1339,6 @@ async fn process_action(
     codeberg_client: &Arc<OptionalCodebergClient>,
     asana_client: &Arc<OptionalAsanaClient>,
     notion_client: &Arc<OptionalNotionClient>,
-    pm_provider: ProjectMgmtProvider,
     _storage: &SessionStorage,
     action_tx: &mpsc::UnboundedSender<Action>,
     agent_watch_tx: &watch::Sender<HashSet<Uuid>>,
@@ -1405,7 +1403,7 @@ async fn process_action(
                     state.log_info(format!("Agent '{}' created successfully", agent.name));
 
                     if let Some(ref task_item) = task {
-                        let pm_status = match pm_provider {
+                        let pm_status = match state.settings.repo_config.project_mgmt.provider {
                             ProjectMgmtProvider::Asana => {
                                 ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
                                     gid: task_item.id.clone(),
@@ -2150,83 +2148,87 @@ async fn process_action(
             }
         }
 
-        Action::AssignProjectTask { id, url_or_id } => match pm_provider {
-            ProjectMgmtProvider::Asana => {
-                let gid = parse_asana_task_gid(&url_or_id);
-                let client = Arc::clone(asana_client);
-                let tx = action_tx.clone();
-                tokio::spawn(async move {
-                    match client.get_task(&gid).await {
-                        Ok(task) => {
-                            let url = task.permalink_url.unwrap_or_else(|| {
-                                format!("https://app.asana.com/0/0/{}/f", task.gid)
-                            });
-                            let is_subtask = task.parent.is_some();
-                            let status = if task.completed {
-                                AsanaTaskStatus::Completed {
-                                    gid: task.gid,
-                                    name: task.name,
-                                    is_subtask,
-                                }
-                            } else {
-                                AsanaTaskStatus::NotStarted {
-                                    gid: task.gid,
-                                    name: task.name,
-                                    url,
-                                    is_subtask,
-                                }
-                            };
-                            let _ = tx.send(Action::UpdateProjectTaskStatus {
-                                id,
-                                status: ProjectMgmtTaskStatus::Asana(status),
-                            });
+        Action::AssignProjectTask { id, url_or_id } => {
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            match provider {
+                ProjectMgmtProvider::Asana => {
+                    let gid = parse_asana_task_gid(&url_or_id);
+                    let client = Arc::clone(asana_client);
+                    let tx = action_tx.clone();
+                    tokio::spawn(async move {
+                        match client.get_task(&gid).await {
+                            Ok(task) => {
+                                let url = task.permalink_url.unwrap_or_else(|| {
+                                    format!("https://app.asana.com/0/0/{}/f", task.gid)
+                                });
+                                let is_subtask = task.parent.is_some();
+                                let status = if task.completed {
+                                    AsanaTaskStatus::Completed {
+                                        gid: task.gid,
+                                        name: task.name,
+                                        is_subtask,
+                                    }
+                                } else {
+                                    AsanaTaskStatus::NotStarted {
+                                        gid: task.gid,
+                                        name: task.name,
+                                        url,
+                                        is_subtask,
+                                    }
+                                };
+                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                    id,
+                                    status: ProjectMgmtTaskStatus::Asana(status),
+                                });
+                            }
+                            Err(e) => {
+                                let status = ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Error {
+                                    gid,
+                                    message: e.to_string(),
+                                });
+                                let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                            }
                         }
-                        Err(e) => {
-                            let status = ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Error {
-                                gid,
-                                message: e.to_string(),
-                            });
-                            let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                    });
+                }
+                ProjectMgmtProvider::Notion => {
+                    let page_id = parse_notion_page_id(&url_or_id);
+                    let client = Arc::clone(notion_client);
+                    let tx = action_tx.clone();
+                    tokio::spawn(async move {
+                        match client.get_page(&page_id).await {
+                            Ok(page) => {
+                                let status = if page.is_completed {
+                                    NotionTaskStatus::Completed {
+                                        page_id: page.id,
+                                        name: page.name,
+                                    }
+                                } else {
+                                    NotionTaskStatus::NotStarted {
+                                        page_id: page.id,
+                                        name: page.name,
+                                        url: page.url,
+                                        status_option_id: page.status_id.unwrap_or_default(),
+                                    }
+                                };
+                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                    id,
+                                    status: ProjectMgmtTaskStatus::Notion(status),
+                                });
+                            }
+                            Err(e) => {
+                                let status =
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Error {
+                                        page_id,
+                                        message: e.to_string(),
+                                    });
+                                let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
-            ProjectMgmtProvider::Notion => {
-                let page_id = parse_notion_page_id(&url_or_id);
-                let client = Arc::clone(notion_client);
-                let tx = action_tx.clone();
-                tokio::spawn(async move {
-                    match client.get_page(&page_id).await {
-                        Ok(page) => {
-                            let status = if page.is_completed {
-                                NotionTaskStatus::Completed {
-                                    page_id: page.id,
-                                    name: page.name,
-                                }
-                            } else {
-                                NotionTaskStatus::NotStarted {
-                                    page_id: page.id,
-                                    name: page.name,
-                                    url: page.url,
-                                    status_option_id: page.status_id.unwrap_or_default(),
-                                }
-                            };
-                            let _ = tx.send(Action::UpdateProjectTaskStatus {
-                                id,
-                                status: ProjectMgmtTaskStatus::Notion(status),
-                            });
-                        }
-                        Err(e) => {
-                            let status = ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Error {
-                                page_id,
-                                message: e.to_string(),
-                            });
-                            let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
-                        }
-                    }
-                });
-            }
-        },
+        }
 
         Action::UpdateProjectTaskStatus { id, status } => {
             let log_msg = match &status {
@@ -2828,7 +2830,8 @@ async fn process_action(
         }
 
         Action::RefreshTaskList => {
-            match pm_provider {
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            match provider {
                 ProjectMgmtProvider::Asana => asana_client.invalidate_cache().await,
                 ProjectMgmtProvider::Notion => notion_client.invalidate_cache().await,
             }
@@ -2837,7 +2840,7 @@ async fn process_action(
         }
 
         Action::FetchTaskList => {
-            let provider = pm_provider;
+            let provider = state.settings.repo_config.project_mgmt.provider;
             let asana_client = Arc::clone(asana_client);
             let notion_client = Arc::clone(notion_client);
             let tx = action_tx.clone();
@@ -3130,7 +3133,7 @@ async fn process_action(
                         Ok(mut agent) => {
                             state.log_info(format!("Agent '{}' created successfully", agent.name));
 
-                            let pm_status = match pm_provider {
+                            let pm_status = match state.settings.repo_config.project_mgmt.provider {
                                 ProjectMgmtProvider::Asana => {
                                     ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
                                         gid: task.id.clone(),
@@ -4365,6 +4368,8 @@ async fn process_action(
         }
 
         Action::SettingsSave => {
+            let old_provider = state.settings.repo_config.project_mgmt.provider;
+
             state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
             state.config.global.editor = state.settings.pending_editor.clone();
             state.config.global.log_level = state.settings.pending_log_level;
@@ -4378,6 +4383,13 @@ async fn process_action(
 
             if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
                 state.log_error(format!("Failed to save repo config: {}", e));
+            }
+
+            let new_provider = state.settings.repo_config.project_mgmt.provider;
+            if old_provider != new_provider {
+                state.task_list.clear();
+                state.task_list_loading = true;
+                let _ = action_tx.send(Action::FetchTaskList);
             }
 
             state.show_logs = state.config.ui.show_logs;
