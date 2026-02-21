@@ -484,7 +484,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "flock"
+name = "flock-tui"
 version = "0.1.0"
 dependencies = [
  "ansi-to-tui",
