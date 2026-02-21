@@ -2181,8 +2181,9 @@ async fn process_action(
 
         Action::TaskStatusDropdownSelect => {
             tracing::info!("TaskStatusDropdownSelect triggered");
+            let dropdown = state.task_status_dropdown.take();
             state.exit_input_mode();
-            if let Some(dropdown) = state.task_status_dropdown.take() {
+            if let Some(dropdown) = dropdown {
                 let agent_id = dropdown.agent_id;
                 if let Some(selected_option) = dropdown.status_options.get(dropdown.selected_index)
                 {
