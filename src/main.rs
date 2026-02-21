@@ -2447,26 +2447,35 @@ async fn process_action(
                             state.show_error("No Asana task linked to this agent");
                             return Ok(false);
                         }
-                        let options = vec![
-                            StatusOption {
-                                id: "not_started".to_string(),
-                                name: "Not Started".to_string(),
-                            },
-                            StatusOption {
-                                id: "in_progress".to_string(),
-                                name: "In Progress".to_string(),
-                            },
-                            StatusOption {
-                                id: "done".to_string(),
-                                name: "Done".to_string(),
-                            },
-                        ];
-                        state.task_status_dropdown = Some(TaskStatusDropdownState {
-                            agent_id: id,
-                            status_options: options,
-                            selected_index: 0,
+                        let agent_id = id;
+                        let client = Arc::clone(asana_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading sections...".to_string());
+                        tokio::spawn(async move {
+                            match client.get_sections().await {
+                                Ok(sections) => {
+                                    let options: Vec<StatusOption> = sections
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.gid,
+                                            name: s.name,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                        id: agent_id,
+                                        options,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load Asana sections: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load sections: {}",
+                                        e
+                                    )));
+                                }
+                            }
                         });
-                        state.input_mode = Some(InputMode::SelectTaskStatus);
                     }
                     ProjectMgmtTaskStatus::None => {}
                 }
@@ -2606,75 +2615,46 @@ async fn process_action(
                             }
                             ProjectMgmtTaskStatus::Asana(asana_status) => {
                                 if let Some(gid_str) = asana_status.gid() {
-                                    let gid = gid_str.to_string();
-                                    let name = asana_status.format_short();
+                                    let task_gid = gid_str.to_string();
+                                    let task_name = asana_status.format_short();
                                     let client = Arc::clone(asana_client);
-                                    let in_progress_gid = state
-                                        .settings
-                                        .repo_config
-                                        .project_mgmt
-                                        .asana
-                                        .in_progress_section_gid
-                                        .clone();
-                                    let done_gid = state
-                                        .settings
-                                        .repo_config
-                                        .project_mgmt
-                                        .asana
-                                        .done_section_gid
-                                        .clone();
                                     let agent_id_clone = agent_id;
+                                    let section_gid = option_id.clone();
+                                    let section_name_lower = option_name.to_lowercase();
 
-                                    let new_status = match option_id.as_str() {
-                                        "not_started" => {
-                                            let status = ProjectMgmtTaskStatus::Asana(
-                                                AsanaTaskStatus::NotStarted {
-                                                    gid: gid.clone(),
-                                                    name: name.clone(),
-                                                    url: String::new(),
-                                                },
-                                            );
-                                            tokio::spawn(async move {
-                                                let _ = client.uncomplete_task(&gid).await;
-                                            });
-                                            status
-                                        }
-                                        "in_progress" => {
-                                            let status = ProjectMgmtTaskStatus::Asana(
-                                                AsanaTaskStatus::InProgress {
-                                                    gid: gid.clone(),
-                                                    name: name.clone(),
-                                                    url: String::new(),
-                                                },
-                                            );
-                                            let client = Arc::clone(&client);
-                                            tokio::spawn(async move {
-                                                let _ = client
-                                                    .move_to_in_progress(
-                                                        &gid,
-                                                        in_progress_gid.as_deref(),
-                                                    )
-                                                    .await;
-                                            });
-                                            status
-                                        }
-                                        "done" => {
-                                            let status = ProjectMgmtTaskStatus::Asana(
-                                                AsanaTaskStatus::Completed {
-                                                    gid: gid.clone(),
-                                                    name: name.clone(),
-                                                },
-                                            );
-                                            tokio::spawn(async move {
-                                                let _ = client.complete_task(&gid).await;
-                                                let _ = client
-                                                    .move_to_done(&gid, done_gid.as_deref())
-                                                    .await;
-                                            });
-                                            status
-                                        }
-                                        _ => return Ok(false),
+                                    let is_done = section_name_lower.contains("done")
+                                        || section_name_lower.contains("complete");
+                                    let is_in_progress = section_name_lower.contains("progress");
+
+                                    let new_status = if is_done {
+                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
+                                            gid: task_gid.clone(),
+                                            name: task_name.clone(),
+                                        })
+                                    } else if is_in_progress {
+                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
+                                            gid: task_gid.clone(),
+                                            name: task_name.clone(),
+                                            url: String::new(),
+                                        })
+                                    } else {
+                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                            gid: task_gid.clone(),
+                                            name: task_name.clone(),
+                                            url: String::new(),
+                                        })
                                     };
+
+                                    tokio::spawn(async move {
+                                        if is_done {
+                                            let _ = client.complete_task(&task_gid).await;
+                                        } else {
+                                            let _ = client.uncomplete_task(&task_gid).await;
+                                        }
+                                        let _ = client
+                                            .move_task_to_section(&task_gid, &section_gid)
+                                            .await;
+                                    });
 
                                     if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
                                         agent.pm_task_status = new_status;

@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 
 use super::types::{
     AsanaSectionsResponse, AsanaTaskData, AsanaTaskListResponse, AsanaTaskResponse,
-    AsanaTaskSummary,
+    AsanaTaskSummary, SectionOption,
 };
 
 /// Asana API client.
@@ -342,6 +342,40 @@ impl AsanaClient {
         }
     }
 
+    /// Get all sections for the configured project.
+    /// Returns a list of section options for use in status dropdown.
+    pub async fn get_sections(&self) -> Result<Vec<SectionOption>> {
+        let project_gid = match &self.project_gid {
+            Some(gid) => gid,
+            None => anyhow::bail!("No Asana project GID configured"),
+        };
+
+        let url = format!(
+            "https://app.asana.com/api/1.0/projects/{}/sections",
+            project_gid
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch Asana sections")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Asana API error fetching sections: {} - {}", status, body);
+        }
+
+        let sections: AsanaSectionsResponse = response
+            .json()
+            .await
+            .context("Failed to parse Asana sections response")?;
+
+        Ok(sections.data.into_iter().map(SectionOption::from).collect())
+    }
+
     /// Move a task to "In Progress" section.
     /// Uses `override_gid` if provided, otherwise auto-detects by section name.
     pub async fn move_to_in_progress(
@@ -503,6 +537,20 @@ impl OptionalAsanaClient {
     pub async fn uncomplete_task(&self, gid: &str) -> Result<()> {
         match &self.client {
             Some(c) => c.uncomplete_task(gid).await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
+    pub async fn get_sections(&self) -> Result<Vec<SectionOption>> {
+        match &self.client {
+            Some(c) => c.get_sections().await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
+    pub async fn move_task_to_section(&self, task_gid: &str, section_gid: &str) -> Result<()> {
+        match &self.client {
+            Some(c) => c.move_task_to_section(task_gid, section_gid).await,
             None => anyhow::bail!("Asana not configured"),
         }
     }

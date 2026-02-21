@@ -115,6 +115,21 @@ pub struct AsanaSectionData {
     pub name: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SectionOption {
+    pub gid: String,
+    pub name: String,
+}
+
+impl From<AsanaSectionData> for SectionOption {
+    fn from(data: AsanaSectionData) -> Self {
+        Self {
+            gid: data.gid,
+            name: data.name,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AsanaTaskListResponse {
     pub data: Vec<AsanaTaskData>,
