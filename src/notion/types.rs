@@ -78,13 +78,29 @@ pub struct NotionPageData {
     pub status_id: Option<String>,
     pub status_name: Option<String>,
     pub is_completed: bool,
+    pub parent_page_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct NotionPageResponse {
     pub id: String,
     pub url: String,
+    pub parent: Option<NotionParent>,
     pub properties: NotionProperties,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NotionParent {
+    #[serde(rename = "type")]
+    pub parent_type: Option<String>,
+    pub page_id: Option<String>,
+    pub database_id: Option<String>,
+}
+
+impl NotionParent {
+    pub fn get_page_id(&self) -> Option<&str> {
+        self.page_id.as_deref()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -285,6 +301,7 @@ impl From<NotionPageResponse> for NotionPageData {
             status_id,
             status_name,
             is_completed,
+            parent_page_id: page.parent.as_ref().and_then(|p| p.page_id.clone()),
         }
     }
 }

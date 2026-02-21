@@ -2440,55 +2440,65 @@ async fn process_action(
             let tx = action_tx.clone();
             tokio::spawn(async move {
                 let result = match provider {
-                    ProjectMgmtProvider::Asana => match asana_client.get_project_tasks().await {
-                        Ok(tasks) => {
-                            let items: Vec<TaskListItem> = tasks
-                                .into_iter()
-                                .filter(|t| !t.completed)
-                                .map(|t| TaskListItem {
-                                    id: t.gid,
-                                    name: t.name,
-                                    status: TaskItemStatus::NotStarted,
-                                    status_name: "Not Started".to_string(),
-                                    url: t.permalink_url.unwrap_or_default(),
-                                    parent_id: t.parent_gid,
-                                    has_children: t.num_subtasks > 0,
-                                })
-                                .collect();
-                            Ok(items)
+                    ProjectMgmtProvider::Asana => {
+                        match asana_client.get_project_tasks_with_subtasks().await {
+                            Ok(tasks) => {
+                                let items: Vec<TaskListItem> = tasks
+                                    .into_iter()
+                                    .filter(|t| !t.completed)
+                                    .map(|t| TaskListItem {
+                                        id: t.gid,
+                                        name: t.name,
+                                        status: TaskItemStatus::NotStarted,
+                                        status_name: "Not Started".to_string(),
+                                        url: t.permalink_url.unwrap_or_default(),
+                                        parent_id: t.parent_gid,
+                                        has_children: t.num_subtasks > 0,
+                                    })
+                                    .collect();
+                                Ok(items)
+                            }
+                            Err(e) => Err(e.to_string()),
                         }
-                        Err(e) => Err(e.to_string()),
-                    },
-                    ProjectMgmtProvider::Notion => match notion_client.query_database(true).await {
-                        Ok(pages) => {
-                            let items: Vec<TaskListItem> = pages
-                                .into_iter()
-                                .map(|p| {
-                                    let status_name = p
-                                        .status_name
-                                        .clone()
-                                        .unwrap_or_else(|| "Unknown".to_string());
-                                    let status = if status_name.to_lowercase().contains("progress")
-                                    {
-                                        TaskItemStatus::InProgress
-                                    } else {
-                                        TaskItemStatus::NotStarted
-                                    };
-                                    TaskListItem {
-                                        id: p.id,
-                                        name: p.name,
-                                        status,
-                                        status_name,
-                                        url: p.url,
-                                        parent_id: None,
-                                        has_children: false,
-                                    }
-                                })
-                                .collect();
-                            Ok(items)
+                    }
+                    ProjectMgmtProvider::Notion => {
+                        match notion_client.query_database_with_children(true).await {
+                            Ok(pages) => {
+                                let parent_ids: std::collections::HashSet<String> = pages
+                                    .iter()
+                                    .filter_map(|p| p.parent_page_id.as_ref())
+                                    .cloned()
+                                    .collect();
+                                let items: Vec<TaskListItem> = pages
+                                    .into_iter()
+                                    .map(|p| {
+                                        let status_name = p
+                                            .status_name
+                                            .clone()
+                                            .unwrap_or_else(|| "Unknown".to_string());
+                                        let status =
+                                            if status_name.to_lowercase().contains("progress") {
+                                                TaskItemStatus::InProgress
+                                            } else {
+                                                TaskItemStatus::NotStarted
+                                            };
+                                        let has_children = parent_ids.contains(&p.id);
+                                        TaskListItem {
+                                            id: p.id,
+                                            name: p.name,
+                                            status,
+                                            status_name,
+                                            url: p.url,
+                                            parent_id: p.parent_page_id,
+                                            has_children,
+                                        }
+                                    })
+                                    .collect();
+                                Ok(items)
+                            }
+                            Err(e) => Err(e.to_string()),
                         }
-                        Err(e) => Err(e.to_string()),
-                    },
+                    }
                 };
                 match result {
                     Ok(tasks) => {

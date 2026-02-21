@@ -73,7 +73,73 @@ impl AsanaClient {
         Ok(task_resp.data)
     }
 
-    /// Fetch all tasks from the configured project.
+    /// Fetch subtasks of a parent task.
+    pub async fn get_subtasks(&self, parent_gid: &str) -> Result<Vec<AsanaTaskSummary>> {
+        let url = format!(
+            "https://app.asana.com/api/1.0/tasks/{}/subtasks",
+            parent_gid
+        );
+
+        tracing::debug!("Asana get_subtasks: url={}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&[(
+                "opt_fields",
+                "gid,name,completed,permalink_url,parent,num_subtasks",
+            )])
+            .send()
+            .await
+            .context("Failed to fetch Asana subtasks")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Asana get_subtasks response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            tracing::error!("Asana API error: {} - {}", status, response_text);
+            anyhow::bail!("Asana API error: {} - {}", status, response_text);
+        }
+
+        let task_list: AsanaTaskListResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse Asana subtasks response")?;
+
+        Ok(task_list
+            .data
+            .into_iter()
+            .map(AsanaTaskSummary::from)
+            .collect())
+    }
+
+    /// Fetch all tasks from the configured project, including subtasks.
+    pub async fn get_project_tasks_with_subtasks(&self) -> Result<Vec<AsanaTaskSummary>> {
+        let mut all_tasks = self.get_project_tasks().await?;
+
+        let parent_gids: Vec<String> = all_tasks
+            .iter()
+            .filter(|t| t.num_subtasks > 0)
+            .map(|t| t.gid.clone())
+            .collect();
+
+        for parent_gid in parent_gids {
+            match self.get_subtasks(&parent_gid).await {
+                Ok(subtasks) => {
+                    all_tasks.extend(subtasks);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch subtasks for task {}: {}", parent_gid, e);
+                }
+            }
+        }
+
+        Ok(all_tasks)
+    }
     pub async fn get_project_tasks(&self) -> Result<Vec<AsanaTaskSummary>> {
         let project_gid = match &self.project_gid {
             Some(gid) => gid,
@@ -387,6 +453,13 @@ impl OptionalAsanaClient {
     pub async fn get_project_tasks(&self) -> Result<Vec<AsanaTaskSummary>> {
         match &self.client {
             Some(c) => c.get_project_tasks().await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
+    pub async fn get_project_tasks_with_subtasks(&self) -> Result<Vec<AsanaTaskSummary>> {
+        match &self.client {
+            Some(c) => c.get_project_tasks_with_subtasks().await,
             None => anyhow::bail!("Asana not configured"),
         }
     }

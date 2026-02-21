@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use super::types::{
@@ -155,6 +156,99 @@ impl NotionClient {
             .into_iter()
             .map(NotionPageData::from)
             .collect())
+    }
+
+    /// Get child pages of a specific page by querying its block children.
+    pub async fn get_child_pages(&self, parent_page_id: &str) -> Result<Vec<NotionPageData>> {
+        let url = format!(
+            "{}/blocks/{}/children?page_size=100",
+            Self::BASE_URL,
+            clean_page_id(parent_page_id)
+        );
+
+        tracing::debug!("Notion get_child_pages: url={}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch Notion block children")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Notion get_child_pages response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            tracing::error!("Notion API error: {} - {}", status, response_text);
+            bail!("Notion API error: {} - {}", status, response_text);
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct NotionBlockChildrenResponse {
+            results: Vec<serde_json::Value>,
+        }
+
+        let children_response: NotionBlockChildrenResponse =
+            serde_json::from_str(&response_text)
+                .context("Failed to parse Notion block children response")?;
+
+        let mut child_pages = Vec::new();
+        for block in children_response.results {
+            if let Some(obj) = block.as_object() {
+                if obj.get("type").and_then(|v| v.as_str()) == Some("child_page") {
+                    if let Some(child_page) = obj.get("child_page") {
+                        if let Some(child_id) = child_page.get("id").and_then(|v| v.as_str()) {
+                            match self.get_page(child_id).await {
+                                Ok(page_data) => child_pages.push(page_data),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to fetch child page {}: {}",
+                                        child_id,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tracing::debug!(
+            "Notion get_child_pages: found {} child pages",
+            child_pages.len()
+        );
+
+        Ok(child_pages)
+    }
+
+    /// Query database and fetch all pages including child pages.
+    pub async fn query_database_with_children(
+        &self,
+        exclude_done: bool,
+    ) -> Result<Vec<NotionPageData>> {
+        let mut all_pages = self.query_database(exclude_done).await?;
+
+        let page_ids: Vec<String> = all_pages.iter().map(|p| p.id.clone()).collect();
+
+        for page_id in page_ids {
+            match self.get_child_pages(&page_id).await {
+                Ok(children) => {
+                    all_pages.extend(children);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch child pages for page {}: {}", page_id, e);
+                }
+            }
+        }
+
+        Ok(all_pages)
     }
 
     pub async fn get_status_options(&self) -> Result<StatusOptions> {
@@ -368,6 +462,16 @@ impl OptionalNotionClient {
     pub async fn query_database(&self, exclude_done: bool) -> Result<Vec<NotionPageData>> {
         match &self.client {
             Some(c) => c.query_database(exclude_done).await,
+            None => bail!("Notion not configured"),
+        }
+    }
+
+    pub async fn query_database_with_children(
+        &self,
+        exclude_done: bool,
+    ) -> Result<Vec<NotionPageData>> {
+        match &self.client {
+            Some(c) => c.query_database_with_children(exclude_done).await,
             None => bail!("Notion not configured"),
         }
     }
