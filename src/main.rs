@@ -1192,7 +1192,12 @@ async fn process_action(
         Action::CreateAgent { name, branch, task } => {
             state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
             let ai_agent = state.config.global.ai_agent.clone();
-            let worktree_symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
+            let worktree_symlinks = state
+                .settings
+                .repo_config
+                .dev_server
+                .worktree_symlinks
+                .clone();
             match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks) {
                 Ok(mut agent) => {
                     state.log_info(format!("Agent '{}' created successfully", agent.name));
@@ -1466,7 +1471,12 @@ async fn process_action(
                 let name_clone = name.clone();
                 let ai_agent = state.config.global.ai_agent.clone();
                 let repo_path = state.repo_path.clone();
-                let worktree_symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
+                let worktree_symlinks = state
+                    .settings
+                    .repo_config
+                    .dev_server
+                    .worktree_symlinks
+                    .clone();
                 let worktree_base = state.worktree_base.clone();
                 tokio::spawn(async move {
                     // Check if worktree already exists
@@ -2722,8 +2732,12 @@ async fn process_action(
                     let name = task.name.clone();
                     state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
                     let ai_agent = state.config.global.ai_agent.clone();
-                    let worktree_symlinks =
-                        state.settings.repo_config.git.worktree_symlinks.clone();
+                    let worktree_symlinks = state
+                        .settings
+                        .repo_config
+                        .dev_server
+                        .worktree_symlinks
+                        .clone();
                     match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks)
                     {
                         Ok(mut agent) => {
@@ -3693,7 +3707,7 @@ async fn process_action(
                             state.settings.text_buffer.clone();
                     }
                     flock::app::SettingsField::WorktreeSymlinks => {
-                        state.settings.repo_config.git.worktree_symlinks = state
+                        state.settings.repo_config.dev_server.worktree_symlinks = state
                             .settings
                             .text_buffer
                             .split(',')
@@ -3989,13 +4003,18 @@ async fn process_action(
                 })
                 .collect();
 
-            state.settings.repo_config.git.worktree_symlinks = selected;
+            state.settings.repo_config.dev_server.worktree_symlinks = selected;
 
             if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
                 state.log_error(format!("Failed to save repo config: {}", e));
             }
 
-            let symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
+            let symlinks = state
+                .settings
+                .repo_config
+                .dev_server
+                .worktree_symlinks
+                .clone();
             let worktree = Worktree::new(&state.repo_path, state.worktree_base.clone());
 
             let agent_worktrees: Vec<(String, String)> = state
