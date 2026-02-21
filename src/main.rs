@@ -1037,8 +1037,10 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     }
 
     // Task browsing
+    if matches_keybind(key, &kb.show_tasks) {
+        return Some(Action::EnterInputMode(InputMode::BrowseTasks));
+    }
     match key.code {
-        KeyCode::Char('t') => Some(Action::EnterInputMode(InputMode::BrowseTasks)),
         KeyCode::Char('T') => {
             let selected_id = state.selected_agent_id();
             selected_id
