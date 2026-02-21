@@ -234,3 +234,61 @@ API tokens are read from environment variables (never stored in config files):
 2. Repo config overrides project-specific fields
 3. Environment variables provide secrets
 
+## Adding New Keybinds
+
+Keybinds are user-customizable and stored in `~/.flock/config.toml`. When adding a new keybind, you MUST update all of the following:
+
+### 1. Add to `Keybinds` struct (`src/app/config.rs`)
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Keybinds {
+    // ... existing keybinds ...
+    #[serde(default = "default_my_new_action")]
+    pub my_new_action: Keybind,
+}
+
+fn default_my_new_action() -> Keybind {
+    Keybind::new("x")  // or Keybind::with_modifiers("x", vec!["Shift".to_string()])
+}
+```
+
+### 2. Add to `SettingsField` enum (`src/app/state.rs`)
+
+```rust
+pub enum SettingsField {
+    // ... existing fields ...
+    KbMyNewAction,
+}
+```
+
+### 3. Add to `SettingsCategory` enum if needed (`src/app/state.rs`)
+
+Choose an appropriate category or create a new one.
+
+### 4. Update `SettingsField::tab()` to return `SettingsTab::Keybinds`
+
+### 5. Update `SettingsField::is_keybind_field()` to include the new field
+
+### 6. Update `SettingsField::keybind_name()` to return display name
+
+### 7. Add to `SettingsState::get_keybind()` and `set_keybind()`
+
+### 8. Add to `SettingsItem::all_for_tab()` under `SettingsTab::Keybinds`
+
+### 9. Update key handler in `src/main.rs`
+
+Use `matches_keybind()` function instead of hardcoding key codes:
+
+```rust
+if matches_keybind(key, &kb.my_new_action) {
+    return Some(Action::MyNewAction);
+}
+```
+
+### 10. Update visual displays
+
+- `src/ui/components/help_overlay.rs` - Add to help text using `kb.my_new_action.display_short()`
+- `src/ui/components/status_bar.rs` - Add to status bar shortcuts if applicable
+
+
