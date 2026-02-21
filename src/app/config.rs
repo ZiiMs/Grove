@@ -258,16 +258,23 @@ impl Default for AsanaConfig {
 pub struct NotionConfig {
     #[serde(default = "default_notion_refresh")]
     pub refresh_secs: u64,
+    #[serde(default = "default_notion_cache_ttl")]
+    pub cache_ttl_secs: u64,
 }
 
 fn default_notion_refresh() -> u64 {
     120
 }
 
+fn default_notion_cache_ttl() -> u64 {
+    60
+}
+
 impl Default for NotionConfig {
     fn default() -> Self {
         Self {
             refresh_secs: default_notion_refresh(),
+            cache_ttl_secs: default_notion_cache_ttl(),
         }
     }
 }

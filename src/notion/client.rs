@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use futures::future::join_all;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 use super::types::{
@@ -415,6 +416,14 @@ fn clean_page_id(id: &str) -> String {
 
 pub struct OptionalNotionClient {
     client: Option<NotionClient>,
+    cached_tasks: Mutex<Option<CachedTasks>>,
+    cache_ttl_secs: u64,
+}
+
+struct CachedTasks {
+    fetched_at: Instant,
+    pages: Vec<NotionPageData>,
+    exclude_done: bool,
 }
 
 impl OptionalNotionClient {
@@ -422,11 +431,16 @@ impl OptionalNotionClient {
         token: Option<&str>,
         database_id: Option<String>,
         status_property_name: Option<String>,
+        cache_ttl_secs: u64,
     ) -> Self {
         let client = token.and_then(|tok| {
             database_id.and_then(|db_id| NotionClient::new(tok, db_id, status_property_name).ok())
         });
-        Self { client }
+        Self {
+            client,
+            cached_tasks: Mutex::new(None),
+            cache_ttl_secs,
+        }
     }
 
     pub fn is_configured(&self) -> bool {
@@ -451,10 +465,36 @@ impl OptionalNotionClient {
         &self,
         exclude_done: bool,
     ) -> Result<Vec<NotionPageData>> {
-        match &self.client {
-            Some(c) => c.query_database_with_children(exclude_done).await,
-            None => bail!("Notion not configured"),
+        {
+            let cache = self.cached_tasks.lock().await;
+            if let Some(ref cached) = *cache {
+                if cached.exclude_done == exclude_done
+                    && cached.fetched_at.elapsed().as_secs() < self.cache_ttl_secs
+                {
+                    tracing::debug!(
+                        "Notion cache hit: returning {} cached pages",
+                        cached.pages.len()
+                    );
+                    return Ok(cached.pages.clone());
+                }
+            }
         }
+
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Notion not configured"))?;
+        let pages = client.query_database_with_children(exclude_done).await?;
+
+        tracing::debug!("Notion cache miss: fetched {} pages", pages.len());
+        let mut cache = self.cached_tasks.lock().await;
+        *cache = Some(CachedTasks {
+            fetched_at: Instant::now(),
+            pages: pages.clone(),
+            exclude_done,
+        });
+
+        Ok(pages)
     }
 
     pub async fn get_status_options(&self) -> Result<StatusOptions> {
@@ -470,13 +510,21 @@ impl OptionalNotionClient {
         status_property_name: &str,
         option_id: &str,
     ) -> Result<()> {
-        match &self.client {
+        let result = match &self.client {
             Some(c) => {
                 c.update_page_status(page_id, status_property_name, option_id)
                     .await
             }
             None => bail!("Notion not configured"),
+        };
+
+        if result.is_ok() {
+            let mut cache = self.cached_tasks.lock().await;
+            *cache = None;
+            tracing::debug!("Notion cache invalidated after status update");
         }
+
+        result
     }
 
     pub async fn append_blocks(&self, page_id: &str, blocks: Vec<NotionBlock>) -> Result<()> {
@@ -484,6 +532,12 @@ impl OptionalNotionClient {
             Some(c) => c.append_blocks(page_id, blocks).await,
             None => bail!("Notion not configured"),
         }
+    }
+
+    pub async fn invalidate_cache(&self) {
+        let mut cache = self.cached_tasks.lock().await;
+        *cache = None;
+        tracing::debug!("Notion cache manually invalidated");
     }
 }
 
