@@ -6,39 +6,42 @@ use ratatui::{
     Frame,
 };
 
+use crate::app::config::Keybinds;
+
 pub struct StatusBarWidget<'a> {
     message: Option<&'a str>,
     is_error: bool,
+    keybinds: &'a Keybinds,
 }
 
 impl<'a> StatusBarWidget<'a> {
-    pub fn new(message: Option<&'a str>, is_error: bool) -> Self {
-        Self { message, is_error }
+    pub fn new(message: Option<&'a str>, is_error: bool, keybinds: &'a Keybinds) -> Self {
+        Self {
+            message,
+            is_error,
+            keybinds,
+        }
     }
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
-        let shortcuts = vec![
-            ("n", "new"),
-            ("d", "del"),
-            ("Enter", "attach"),
-            ("s", "summary"),
-            ("m", "merge"),
-            ("p", "push"),
-            ("a", "asana"),
-            ("N", "note"),
-            ("R", "refresh"),
-            ("?", "help"),
-            ("q", "quit"),
+        let shortcuts = [
+            (&self.keybinds.new_agent, "new"),
+            (&self.keybinds.attach, "attach"),
+            (&self.keybinds.delete_agent, "delete"),
+            (&self.keybinds.refresh_all, "refresh"),
+            (&self.keybinds.toggle_settings, "settings"),
+            (&self.keybinds.toggle_help, "help"),
+            (&self.keybinds.quit, "quit"),
         ];
 
         let mut spans: Vec<Span> = Vec::new();
 
-        for (i, (key, action)) in shortcuts.iter().enumerate() {
+        for (i, (keybind, action)) in shortcuts.iter().enumerate() {
             if i > 0 {
                 spans.push(Span::raw(" "));
             }
             spans.push(Span::styled(
-                format!("[{}]", key),
+                format!("[{}]", keybind.display_short()),
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -49,7 +52,6 @@ impl<'a> StatusBarWidget<'a> {
             ));
         }
 
-        // If there's a message, show it instead of shortcuts
         let line = if let Some(msg) = self.message {
             let style = if self.is_error {
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)

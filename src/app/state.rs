@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use super::action::InputMode;
 use super::config::{
-    AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, RepoConfig, UiConfig,
-    WorktreeLocation,
+    AiAgent, Config, GitProvider, Keybind, Keybinds, LogLevel as ConfigLogLevel, RepoConfig,
+    UiConfig, WorktreeLocation,
 };
 use crate::agent::Agent;
 
@@ -16,6 +16,7 @@ pub enum SettingsTab {
     General,
     Git,
     ProjectMgmt,
+    Keybinds,
 }
 
 impl SettingsTab {
@@ -24,6 +25,7 @@ impl SettingsTab {
             SettingsTab::General,
             SettingsTab::Git,
             SettingsTab::ProjectMgmt,
+            SettingsTab::Keybinds,
         ]
     }
 
@@ -32,6 +34,7 @@ impl SettingsTab {
             SettingsTab::General => "General",
             SettingsTab::Git => "Git",
             SettingsTab::ProjectMgmt => "Project Mgmt",
+            SettingsTab::Keybinds => "Keybinds",
         }
     }
 
@@ -39,15 +42,17 @@ impl SettingsTab {
         match self {
             SettingsTab::General => SettingsTab::Git,
             SettingsTab::Git => SettingsTab::ProjectMgmt,
-            SettingsTab::ProjectMgmt => SettingsTab::General,
+            SettingsTab::ProjectMgmt => SettingsTab::Keybinds,
+            SettingsTab::Keybinds => SettingsTab::General,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            SettingsTab::General => SettingsTab::ProjectMgmt,
+            SettingsTab::General => SettingsTab::Keybinds,
             SettingsTab::Git => SettingsTab::General,
             SettingsTab::ProjectMgmt => SettingsTab::Git,
+            SettingsTab::Keybinds => SettingsTab::ProjectMgmt,
         }
     }
 }
@@ -79,6 +84,30 @@ pub enum SettingsField {
     SummaryPrompt,
     MergePrompt,
     PushPrompt,
+    KbNavDown,
+    KbNavUp,
+    KbNavFirst,
+    KbNavLast,
+    KbNewAgent,
+    KbDeleteAgent,
+    KbAttach,
+    KbSetNote,
+    KbYank,
+    KbPause,
+    KbResume,
+    KbMerge,
+    KbPush,
+    KbFetch,
+    KbSummary,
+    KbToggleDiff,
+    KbToggleLogs,
+    KbOpenMr,
+    KbAsanaAssign,
+    KbAsanaOpen,
+    KbRefreshAll,
+    KbToggleHelp,
+    KbToggleSettings,
+    KbQuit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +120,11 @@ pub enum SettingsCategory {
     Ci,
     Asana,
     Prompts,
+    KeybindNav,
+    KeybindAgent,
+    KeybindGit,
+    KeybindExternal,
+    KeybindOther,
 }
 
 impl SettingsCategory {
@@ -104,6 +138,11 @@ impl SettingsCategory {
             SettingsCategory::Ci => "CI/CD",
             SettingsCategory::Asana => "Asana",
             SettingsCategory::Prompts => "Prompts",
+            SettingsCategory::KeybindNav => "Navigation",
+            SettingsCategory::KeybindAgent => "Agent Management",
+            SettingsCategory::KeybindGit => "Git Operations",
+            SettingsCategory::KeybindExternal => "External Services",
+            SettingsCategory::KeybindOther => "Other",
         }
     }
 }
@@ -142,6 +181,30 @@ impl SettingsField {
             SettingsField::AsanaProjectGid
             | SettingsField::AsanaInProgressGid
             | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
+            SettingsField::KbNavDown
+            | SettingsField::KbNavUp
+            | SettingsField::KbNavFirst
+            | SettingsField::KbNavLast
+            | SettingsField::KbNewAgent
+            | SettingsField::KbDeleteAgent
+            | SettingsField::KbAttach
+            | SettingsField::KbSetNote
+            | SettingsField::KbYank
+            | SettingsField::KbPause
+            | SettingsField::KbResume
+            | SettingsField::KbMerge
+            | SettingsField::KbPush
+            | SettingsField::KbFetch
+            | SettingsField::KbSummary
+            | SettingsField::KbToggleDiff
+            | SettingsField::KbToggleLogs
+            | SettingsField::KbOpenMr
+            | SettingsField::KbAsanaAssign
+            | SettingsField::KbAsanaOpen
+            | SettingsField::KbRefreshAll
+            | SettingsField::KbToggleHelp
+            | SettingsField::KbToggleSettings
+            | SettingsField::KbQuit => SettingsTab::Keybinds,
         }
     }
 
@@ -150,6 +213,66 @@ impl SettingsField {
             self,
             SettingsField::SummaryPrompt | SettingsField::MergePrompt | SettingsField::PushPrompt
         )
+    }
+
+    pub fn is_keybind_field(&self) -> bool {
+        matches!(
+            self,
+            SettingsField::KbNavDown
+                | SettingsField::KbNavUp
+                | SettingsField::KbNavFirst
+                | SettingsField::KbNavLast
+                | SettingsField::KbNewAgent
+                | SettingsField::KbDeleteAgent
+                | SettingsField::KbAttach
+                | SettingsField::KbSetNote
+                | SettingsField::KbYank
+                | SettingsField::KbPause
+                | SettingsField::KbResume
+                | SettingsField::KbMerge
+                | SettingsField::KbPush
+                | SettingsField::KbFetch
+                | SettingsField::KbSummary
+                | SettingsField::KbToggleDiff
+                | SettingsField::KbToggleLogs
+                | SettingsField::KbOpenMr
+                | SettingsField::KbAsanaAssign
+                | SettingsField::KbAsanaOpen
+                | SettingsField::KbRefreshAll
+                | SettingsField::KbToggleHelp
+                | SettingsField::KbToggleSettings
+                | SettingsField::KbQuit
+        )
+    }
+
+    pub fn keybind_name(&self) -> Option<&'static str> {
+        match self {
+            SettingsField::KbNavDown => Some("Move Down"),
+            SettingsField::KbNavUp => Some("Move Up"),
+            SettingsField::KbNavFirst => Some("Go to First"),
+            SettingsField::KbNavLast => Some("Go to Last"),
+            SettingsField::KbNewAgent => Some("New Agent"),
+            SettingsField::KbDeleteAgent => Some("Delete Agent"),
+            SettingsField::KbAttach => Some("Attach to Agent"),
+            SettingsField::KbSetNote => Some("Set Note"),
+            SettingsField::KbYank => Some("Copy Name"),
+            SettingsField::KbPause => Some("Pause Agent"),
+            SettingsField::KbResume => Some("Resume/Refresh"),
+            SettingsField::KbMerge => Some("Merge Main"),
+            SettingsField::KbPush => Some("Push Changes"),
+            SettingsField::KbFetch => Some("Fetch Remote"),
+            SettingsField::KbSummary => Some("Request Summary"),
+            SettingsField::KbToggleDiff => Some("Toggle Diff"),
+            SettingsField::KbToggleLogs => Some("Toggle Logs"),
+            SettingsField::KbOpenMr => Some("Open MR/PR"),
+            SettingsField::KbAsanaAssign => Some("Assign Asana"),
+            SettingsField::KbAsanaOpen => Some("Open in Asana"),
+            SettingsField::KbRefreshAll => Some("Refresh All"),
+            SettingsField::KbToggleHelp => Some("Toggle Help"),
+            SettingsField::KbToggleSettings => Some("Toggle Settings"),
+            SettingsField::KbQuit => Some("Quit"),
+            _ => None,
+        }
     }
 }
 
@@ -206,6 +329,37 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::AsanaInProgressGid),
                 SettingsItem::Field(SettingsField::AsanaDoneGid),
             ],
+            SettingsTab::Keybinds => vec![
+                SettingsItem::Category(SettingsCategory::KeybindNav),
+                SettingsItem::Field(SettingsField::KbNavDown),
+                SettingsItem::Field(SettingsField::KbNavUp),
+                SettingsItem::Field(SettingsField::KbNavFirst),
+                SettingsItem::Field(SettingsField::KbNavLast),
+                SettingsItem::Category(SettingsCategory::KeybindAgent),
+                SettingsItem::Field(SettingsField::KbNewAgent),
+                SettingsItem::Field(SettingsField::KbDeleteAgent),
+                SettingsItem::Field(SettingsField::KbAttach),
+                SettingsItem::Field(SettingsField::KbSetNote),
+                SettingsItem::Field(SettingsField::KbYank),
+                SettingsItem::Category(SettingsCategory::KeybindGit),
+                SettingsItem::Field(SettingsField::KbPause),
+                SettingsItem::Field(SettingsField::KbResume),
+                SettingsItem::Field(SettingsField::KbMerge),
+                SettingsItem::Field(SettingsField::KbPush),
+                SettingsItem::Field(SettingsField::KbFetch),
+                SettingsItem::Field(SettingsField::KbSummary),
+                SettingsItem::Field(SettingsField::KbToggleDiff),
+                SettingsItem::Field(SettingsField::KbToggleLogs),
+                SettingsItem::Category(SettingsCategory::KeybindExternal),
+                SettingsItem::Field(SettingsField::KbOpenMr),
+                SettingsItem::Field(SettingsField::KbAsanaAssign),
+                SettingsItem::Field(SettingsField::KbAsanaOpen),
+                SettingsItem::Category(SettingsCategory::KeybindOther),
+                SettingsItem::Field(SettingsField::KbRefreshAll),
+                SettingsItem::Field(SettingsField::KbToggleHelp),
+                SettingsItem::Field(SettingsField::KbToggleSettings),
+                SettingsItem::Field(SettingsField::KbQuit),
+            ],
         }
     }
 
@@ -242,6 +396,9 @@ pub struct SettingsState {
     pub pending_worktree_location: WorktreeLocation,
     pub pending_ui: UiConfig,
     pub repo_config: RepoConfig,
+    pub pending_keybinds: Keybinds,
+    pub capturing_keybind: Option<SettingsField>,
+    pub keybind_conflicts: Vec<(String, String)>,
 }
 
 impl Default for SettingsState {
@@ -260,6 +417,9 @@ impl Default for SettingsState {
             pending_worktree_location: WorktreeLocation::default(),
             pending_ui: UiConfig::default(),
             repo_config: RepoConfig::default(),
+            pending_keybinds: Keybinds::default(),
+            capturing_keybind: None,
+            keybind_conflicts: Vec::new(),
         }
     }
 }
@@ -295,6 +455,71 @@ impl SettingsState {
 
     pub fn prev_tab(&self) -> SettingsTab {
         self.tab.prev()
+    }
+
+    pub fn get_keybind(&self, field: SettingsField) -> Option<&Keybind> {
+        match field {
+            SettingsField::KbNavDown => Some(&self.pending_keybinds.nav_down),
+            SettingsField::KbNavUp => Some(&self.pending_keybinds.nav_up),
+            SettingsField::KbNavFirst => Some(&self.pending_keybinds.nav_first),
+            SettingsField::KbNavLast => Some(&self.pending_keybinds.nav_last),
+            SettingsField::KbNewAgent => Some(&self.pending_keybinds.new_agent),
+            SettingsField::KbDeleteAgent => Some(&self.pending_keybinds.delete_agent),
+            SettingsField::KbAttach => Some(&self.pending_keybinds.attach),
+            SettingsField::KbSetNote => Some(&self.pending_keybinds.set_note),
+            SettingsField::KbYank => Some(&self.pending_keybinds.yank),
+            SettingsField::KbPause => Some(&self.pending_keybinds.pause),
+            SettingsField::KbResume => Some(&self.pending_keybinds.resume),
+            SettingsField::KbMerge => Some(&self.pending_keybinds.merge),
+            SettingsField::KbPush => Some(&self.pending_keybinds.push),
+            SettingsField::KbFetch => Some(&self.pending_keybinds.fetch),
+            SettingsField::KbSummary => Some(&self.pending_keybinds.summary),
+            SettingsField::KbToggleDiff => Some(&self.pending_keybinds.toggle_diff),
+            SettingsField::KbToggleLogs => Some(&self.pending_keybinds.toggle_logs),
+            SettingsField::KbOpenMr => Some(&self.pending_keybinds.open_mr),
+            SettingsField::KbAsanaAssign => Some(&self.pending_keybinds.asana_assign),
+            SettingsField::KbAsanaOpen => Some(&self.pending_keybinds.asana_open),
+            SettingsField::KbRefreshAll => Some(&self.pending_keybinds.refresh_all),
+            SettingsField::KbToggleHelp => Some(&self.pending_keybinds.toggle_help),
+            SettingsField::KbToggleSettings => Some(&self.pending_keybinds.toggle_settings),
+            SettingsField::KbQuit => Some(&self.pending_keybinds.quit),
+            _ => None,
+        }
+    }
+
+    pub fn set_keybind(&mut self, field: SettingsField, keybind: Keybind) {
+        match field {
+            SettingsField::KbNavDown => self.pending_keybinds.nav_down = keybind,
+            SettingsField::KbNavUp => self.pending_keybinds.nav_up = keybind,
+            SettingsField::KbNavFirst => self.pending_keybinds.nav_first = keybind,
+            SettingsField::KbNavLast => self.pending_keybinds.nav_last = keybind,
+            SettingsField::KbNewAgent => self.pending_keybinds.new_agent = keybind,
+            SettingsField::KbDeleteAgent => self.pending_keybinds.delete_agent = keybind,
+            SettingsField::KbAttach => self.pending_keybinds.attach = keybind,
+            SettingsField::KbSetNote => self.pending_keybinds.set_note = keybind,
+            SettingsField::KbYank => self.pending_keybinds.yank = keybind,
+            SettingsField::KbPause => self.pending_keybinds.pause = keybind,
+            SettingsField::KbResume => self.pending_keybinds.resume = keybind,
+            SettingsField::KbMerge => self.pending_keybinds.merge = keybind,
+            SettingsField::KbPush => self.pending_keybinds.push = keybind,
+            SettingsField::KbFetch => self.pending_keybinds.fetch = keybind,
+            SettingsField::KbSummary => self.pending_keybinds.summary = keybind,
+            SettingsField::KbToggleDiff => self.pending_keybinds.toggle_diff = keybind,
+            SettingsField::KbToggleLogs => self.pending_keybinds.toggle_logs = keybind,
+            SettingsField::KbOpenMr => self.pending_keybinds.open_mr = keybind,
+            SettingsField::KbAsanaAssign => self.pending_keybinds.asana_assign = keybind,
+            SettingsField::KbAsanaOpen => self.pending_keybinds.asana_open = keybind,
+            SettingsField::KbRefreshAll => self.pending_keybinds.refresh_all = keybind,
+            SettingsField::KbToggleHelp => self.pending_keybinds.toggle_help = keybind,
+            SettingsField::KbToggleSettings => self.pending_keybinds.toggle_settings = keybind,
+            SettingsField::KbQuit => self.pending_keybinds.quit = keybind,
+            _ => {}
+        }
+        self.keybind_conflicts = self.pending_keybinds.find_conflicts();
+    }
+
+    pub fn has_keybind_conflicts(&self) -> bool {
+        !self.keybind_conflicts.is_empty()
     }
 }
 
@@ -378,6 +603,7 @@ impl AppState {
     pub fn new(config: Config, repo_path: String) -> Self {
         let repo_config = RepoConfig::load(&repo_path).unwrap_or_default();
         let show_logs = config.ui.show_logs;
+        let pending_keybinds = config.keybinds.clone();
 
         let worktree_base = config.worktree_base_path(&repo_path);
 
@@ -407,6 +633,7 @@ impl AppState {
                 pending_ai_agent: AiAgent::default(),
                 pending_log_level: ConfigLogLevel::default(),
                 pending_worktree_location: WorktreeLocation::default(),
+                pending_keybinds,
                 repo_config,
                 ..Default::default()
             },

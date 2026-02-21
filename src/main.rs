@@ -31,6 +31,60 @@ use flock::storage::{save_session, SessionStorage};
 use flock::tmux::is_tmux_available;
 use flock::ui::AppWidget;
 
+fn matches_keybind(key: crossterm::event::KeyEvent, keybind: &flock::app::config::Keybind) -> bool {
+    let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let has_alt = key.modifiers.contains(KeyModifiers::ALT);
+
+    let expected_ctrl = keybind.modifiers.iter().any(|m| m == "Control");
+    let expected_shift = keybind.modifiers.iter().any(|m| m == "Shift");
+    let expected_alt = keybind.modifiers.iter().any(|m| m == "Alt");
+
+    if has_ctrl != expected_ctrl || has_alt != expected_alt {
+        return false;
+    }
+
+    let key_matches = match &keybind.key[..] {
+        "Up" => key.code == KeyCode::Up,
+        "Down" => key.code == KeyCode::Down,
+        "Left" => key.code == KeyCode::Left,
+        "Right" => key.code == KeyCode::Right,
+        "Enter" => key.code == KeyCode::Enter,
+        "Backspace" => key.code == KeyCode::Backspace,
+        "Tab" => key.code == KeyCode::Tab,
+        "Esc" => key.code == KeyCode::Esc,
+        "Delete" => key.code == KeyCode::Delete,
+        "Home" => key.code == KeyCode::Home,
+        "End" => key.code == KeyCode::End,
+        "PageUp" => key.code == KeyCode::PageUp,
+        "PageDown" => key.code == KeyCode::PageDown,
+        c => {
+            if let Some(ch) = c.chars().next() {
+                match key.code {
+                    KeyCode::Char(input_ch) => {
+                        if ch.is_ascii_alphabetic() {
+                            let expected_ch = ch.to_ascii_lowercase();
+                            let actual_ch = input_ch.to_ascii_lowercase();
+                            if expected_shift {
+                                expected_ch == actual_ch && has_shift
+                            } else {
+                                expected_ch == actual_ch && !has_shift
+                            }
+                        } else {
+                            ch == input_ch
+                        }
+                    }
+                    _ => false,
+                }
+            } else {
+                false
+            }
+        }
+    };
+
+    key_matches
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let log_file = std::fs::OpenOptions::new()
@@ -599,114 +653,169 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         .map(|a| matches!(a.status, flock::agent::AgentStatus::Paused))
         .unwrap_or(false);
 
-    // Normal mode key handling
-    match key.code {
-        // Quit
-        KeyCode::Char('q') => Some(Action::Quit),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+    let kb = &state.config.keybinds;
 
-        // Navigation (always allowed)
-        KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectNext),
-        KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectPrevious),
-        KeyCode::Char('g') => Some(Action::SelectFirst),
-        KeyCode::Char('G') => Some(Action::SelectLast),
-
-        // Resume (only when paused)
-        KeyCode::Char('r') if is_paused => state
-            .selected_agent_id()
-            .map(|id| Action::ResumeAgent { id }),
-
-        // Refresh selected agent status (only when not paused)
-        KeyCode::Char('r') if !is_paused => {
-            if state.selected_agent_id().is_some() {
-                Some(Action::RefreshSelected)
-            } else {
-                None
-            }
-        }
-
-        // Yank (copy) agent name to clipboard
-        KeyCode::Char('y') => state
-            .selected_agent_id()
-            .map(|id| Action::CopyAgentName { id }),
-
-        // Notes (always allowed)
-        KeyCode::Char('N') => Some(Action::EnterInputMode(InputMode::SetNote)),
-
-        // These actions work regardless of pause state
-        KeyCode::Char('n') => Some(Action::EnterInputMode(InputMode::NewAgent)),
-        KeyCode::Char('d') => {
-            let has_asana = state
-                .selected_agent()
-                .map(|a| a.asana_task_status.is_linked())
-                .unwrap_or(false);
-            if has_asana {
-                Some(Action::EnterInputMode(InputMode::ConfirmDeleteAsana))
-            } else {
-                Some(Action::EnterInputMode(InputMode::ConfirmDelete))
-            }
-        }
-        KeyCode::Enter => state
-            .selected_agent_id()
-            .map(|id| Action::AttachToAgent { id }),
-
-        // Pause/checkout (only when not paused)
-        KeyCode::Char('c') if !is_paused => state
-            .selected_agent_id()
-            .map(|id| Action::PauseAgent { id }),
-        KeyCode::Char('m') if !is_paused => {
-            if state.selected_agent_id().is_some() {
-                Some(Action::EnterInputMode(InputMode::ConfirmMerge))
-            } else {
-                None
-            }
-        }
-        KeyCode::Char('p') if !is_paused => {
-            if state.selected_agent_id().is_some() {
-                Some(Action::EnterInputMode(InputMode::ConfirmPush))
-            } else {
-                None
-            }
-        }
-        KeyCode::Char('f') if !is_paused => state
-            .selected_agent_id()
-            .map(|id| Action::FetchRemote { id }),
-        KeyCode::Char('s') if !is_paused => state
-            .selected_agent_id()
-            .map(|id| Action::RequestSummary { id }),
-        KeyCode::Char('/') => Some(Action::ToggleDiffView),
-        KeyCode::Char('L') => Some(Action::ToggleLogs),
-        KeyCode::Char('S') => Some(Action::ToggleSettings),
-
-        // Git provider operations
-        KeyCode::Char('o') => {
-            let provider = state.settings.repo_config.git.provider;
-            match provider {
-                flock::app::GitProvider::GitLab => state
-                    .selected_agent_id()
-                    .map(|id| Action::OpenMrInBrowser { id }),
-                flock::app::GitProvider::GitHub => state
-                    .selected_agent_id()
-                    .map(|id| Action::OpenPrInBrowser { id }),
-                flock::app::GitProvider::Codeberg => state
-                    .selected_agent_id()
-                    .map(|id| Action::OpenCodebergPrInBrowser { id }),
-            }
-        }
-
-        // Asana operations
-        KeyCode::Char('a') => Some(Action::EnterInputMode(InputMode::AssignAsana)),
-        KeyCode::Char('A') => state
-            .selected_agent_id()
-            .map(|id| Action::OpenAsanaInBrowser { id }),
-
-        // Other
-        KeyCode::Char('R') => Some(Action::RefreshAll),
-        KeyCode::Char('?') => Some(Action::ToggleHelp),
-        KeyCode::Esc => Some(Action::ClearError),
-
-        _ => None,
+    // Quit (Ctrl+C always works)
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Some(Action::Quit);
     }
+    if matches_keybind(key, &kb.quit) {
+        return Some(Action::Quit);
+    }
+
+    // Navigation
+    if matches_keybind(key, &kb.nav_down) {
+        return Some(Action::SelectNext);
+    }
+    if matches_keybind(key, &kb.nav_up) {
+        return Some(Action::SelectPrevious);
+    }
+    if matches_keybind(key, &kb.nav_first) {
+        return Some(Action::SelectFirst);
+    }
+    if matches_keybind(key, &kb.nav_last) {
+        return Some(Action::SelectLast);
+    }
+
+    // Resume (only when paused)
+    if is_paused && matches_keybind(key, &kb.resume) {
+        return state
+            .selected_agent_id()
+            .map(|id| Action::ResumeAgent { id });
+    }
+
+    // Refresh selected agent status (only when not paused)
+    if !is_paused && matches_keybind(key, &kb.resume) && state.selected_agent_id().is_some() {
+        return Some(Action::RefreshSelected);
+    }
+
+    // Yank (copy) agent name to clipboard
+    if matches_keybind(key, &kb.yank) {
+        return state
+            .selected_agent_id()
+            .map(|id| Action::CopyAgentName { id });
+    }
+
+    // Notes
+    if matches_keybind(key, &kb.set_note) {
+        return Some(Action::EnterInputMode(InputMode::SetNote));
+    }
+
+    // New agent
+    if matches_keybind(key, &kb.new_agent) {
+        return Some(Action::EnterInputMode(InputMode::NewAgent));
+    }
+
+    // Delete agent
+    if matches_keybind(key, &kb.delete_agent) {
+        let has_asana = state
+            .selected_agent()
+            .map(|a| a.asana_task_status.is_linked())
+            .unwrap_or(false);
+        return Some(if has_asana {
+            Action::EnterInputMode(InputMode::ConfirmDeleteAsana)
+        } else {
+            Action::EnterInputMode(InputMode::ConfirmDelete)
+        });
+    }
+
+    // Attach to agent
+    if matches_keybind(key, &kb.attach) {
+        return state
+            .selected_agent_id()
+            .map(|id| Action::AttachToAgent { id });
+    }
+
+    // Pause (only when not paused)
+    if !is_paused && matches_keybind(key, &kb.pause) {
+        return state
+            .selected_agent_id()
+            .map(|id| Action::PauseAgent { id });
+    }
+
+    // Merge (only when not paused)
+    if !is_paused && matches_keybind(key, &kb.merge) && state.selected_agent_id().is_some() {
+        return Some(Action::EnterInputMode(InputMode::ConfirmMerge));
+    }
+
+    // Push (only when not paused)
+    if !is_paused && matches_keybind(key, &kb.push) && state.selected_agent_id().is_some() {
+        return Some(Action::EnterInputMode(InputMode::ConfirmPush));
+    }
+
+    // Fetch (only when not paused)
+    if !is_paused && matches_keybind(key, &kb.fetch) {
+        return state
+            .selected_agent_id()
+            .map(|id| Action::FetchRemote { id });
+    }
+
+    // Summary (only when not paused)
+    if !is_paused && matches_keybind(key, &kb.summary) {
+        return state
+            .selected_agent_id()
+            .map(|id| Action::RequestSummary { id });
+    }
+
+    // Toggle diff
+    if matches_keybind(key, &kb.toggle_diff) {
+        return Some(Action::ToggleDiffView);
+    }
+
+    // Toggle logs
+    if matches_keybind(key, &kb.toggle_logs) {
+        return Some(Action::ToggleLogs);
+    }
+
+    // Toggle settings
+    if matches_keybind(key, &kb.toggle_settings) {
+        return Some(Action::ToggleSettings);
+    }
+
+    // Open MR/PR
+    if matches_keybind(key, &kb.open_mr) {
+        let provider = state.settings.repo_config.git.provider;
+        return match provider {
+            flock::app::GitProvider::GitLab => state
+                .selected_agent_id()
+                .map(|id| Action::OpenMrInBrowser { id }),
+            flock::app::GitProvider::GitHub => state
+                .selected_agent_id()
+                .map(|id| Action::OpenPrInBrowser { id }),
+            flock::app::GitProvider::Codeberg => state
+                .selected_agent_id()
+                .map(|id| Action::OpenCodebergPrInBrowser { id }),
+        };
+    }
+
+    // Asana assign
+    if matches_keybind(key, &kb.asana_assign) {
+        return Some(Action::EnterInputMode(InputMode::AssignAsana));
+    }
+
+    // Asana open
+    if matches_keybind(key, &kb.asana_open) {
+        return state
+            .selected_agent_id()
+            .map(|id| Action::OpenAsanaInBrowser { id });
+    }
+
+    // Refresh all
+    if matches_keybind(key, &kb.refresh_all) {
+        return Some(Action::RefreshAll);
+    }
+
+    // Toggle help
+    if matches_keybind(key, &kb.toggle_help) {
+        return Some(Action::ToggleHelp);
+    }
+
+    // Clear error with Esc
+    if key.code == KeyCode::Esc {
+        return Some(Action::ClearError);
+    }
+
+    None
 }
 
 /// Handle key events in input mode.
@@ -764,6 +873,71 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
 fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
     use flock::app::DropdownState;
 
+    // Handle keybind capture mode
+    if state.settings.capturing_keybind.is_some() {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCancelKeybindCapture),
+            KeyCode::Char(c) => {
+                let mut modifiers = Vec::new();
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    modifiers.push("Control".to_string());
+                }
+                if key.modifiers.contains(KeyModifiers::ALT) {
+                    modifiers.push("Alt".to_string());
+                }
+                let key_char =
+                    if c.is_ascii_alphabetic() && key.modifiers.contains(KeyModifiers::SHIFT) {
+                        modifiers.push("Shift".to_string());
+                        c.to_ascii_lowercase().to_string()
+                    } else {
+                        c.to_string()
+                    };
+                Some(Action::SettingsCaptureKeybind {
+                    key: key_char,
+                    modifiers,
+                })
+            }
+            _ => {
+                let key_name = match key.code {
+                    KeyCode::Enter => "Enter",
+                    KeyCode::Backspace => "Backspace",
+                    KeyCode::Tab => "Tab",
+                    KeyCode::Delete => "Delete",
+                    KeyCode::Home => "Home",
+                    KeyCode::End => "End",
+                    KeyCode::PageUp => "PageUp",
+                    KeyCode::PageDown => "PageDown",
+                    KeyCode::Up => "Up",
+                    KeyCode::Down => "Down",
+                    KeyCode::Left => "Left",
+                    KeyCode::Right => "Right",
+                    KeyCode::Esc => "Esc",
+                    KeyCode::F(n) => {
+                        return Some(Action::SettingsCaptureKeybind {
+                            key: format!("F{}", n),
+                            modifiers: vec![],
+                        })
+                    }
+                    _ => return None,
+                };
+                let mut modifiers = Vec::new();
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    modifiers.push("Control".to_string());
+                }
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    modifiers.push("Shift".to_string());
+                }
+                if key.modifiers.contains(KeyModifiers::ALT) {
+                    modifiers.push("Alt".to_string());
+                }
+                Some(Action::SettingsCaptureKeybind {
+                    key: key_name.to_string(),
+                    modifiers,
+                })
+            }
+        };
+    }
+
     // Handle prompt editing mode (multi-line text editor)
     if state.settings.editing_prompt {
         return match key.code {
@@ -814,7 +988,14 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::BackTab => Some(Action::SettingsSwitchSectionBack),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
-        KeyCode::Enter => Some(Action::SettingsSelectField),
+        KeyCode::Enter => {
+            let field = state.settings.current_field();
+            if field.is_keybind_field() {
+                Some(Action::SettingsStartKeybindCapture)
+            } else {
+                Some(Action::SettingsSelectField)
+            }
+        }
         _ => None,
     }
 }
@@ -2247,6 +2428,9 @@ async fn process_action(
                     state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
                     state.config.ui.show_banner = state.settings.pending_ui.show_banner;
                 }
+                _ => {
+                    // Keybind fields and other non-editable fields are handled elsewhere
+                }
             }
         }
 
@@ -2459,6 +2643,7 @@ async fn process_action(
             state.config.global.log_level = state.settings.pending_log_level;
             state.config.global.worktree_location = state.settings.pending_worktree_location;
             state.config.ui = state.settings.pending_ui.clone();
+            state.config.keybinds = state.settings.pending_keybinds.clone();
 
             if let Err(e) = state.config.save() {
                 state.log_error(format!("Failed to save config: {}", e));
@@ -2472,6 +2657,26 @@ async fn process_action(
             state.worktree_base = state.config.worktree_base_path(&state.repo_path);
             state.settings.active = false;
             state.log_info("Settings saved".to_string());
+        }
+
+        Action::SettingsStartKeybindCapture => {
+            let field = state.settings.current_field();
+            if field.is_keybind_field() {
+                state.settings.capturing_keybind = Some(field);
+            }
+        }
+
+        Action::SettingsCaptureKeybind { key, modifiers } => {
+            if let Some(field) = state.settings.capturing_keybind {
+                use flock::app::config::Keybind;
+                let keybind = Keybind::with_modifiers(key, modifiers);
+                state.settings.set_keybind(field, keybind);
+                state.settings.capturing_keybind = None;
+            }
+        }
+
+        Action::SettingsCancelKeybindCapture => {
+            state.settings.capturing_keybind = None;
         }
 
         // Global Setup Wizard Actions

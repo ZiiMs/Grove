@@ -6,16 +6,23 @@ use ratatui::{
     Frame,
 };
 
-pub struct HelpOverlay;
+use crate::app::config::Keybinds;
 
-impl HelpOverlay {
-    pub fn render(frame: &mut Frame, area: Rect) {
-        // Create a centered popup
+pub struct HelpOverlay<'a> {
+    keybinds: &'a Keybinds,
+}
+
+impl<'a> HelpOverlay<'a> {
+    pub fn new(keybinds: &'a Keybinds) -> Self {
+        Self { keybinds }
+    }
+
+    pub fn render(self, frame: &mut Frame, area: Rect) {
         let popup_area = centered_rect(60, 70, area);
 
-        // Clear the background
         frame.render_widget(Clear, popup_area);
 
+        let kb = self.keybinds;
         let help_text = vec![
             Line::from(Span::styled(
                 "Flock - AI Agent Manager",
@@ -30,10 +37,16 @@ impl HelpOverlay {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from("  j/↓      Move down"),
-            Line::from("  k/↑      Move up"),
-            Line::from("  g        Go to first agent"),
-            Line::from("  G        Go to last agent"),
+            Line::from(format!("  {:8} Move down", kb.nav_down.display_short())),
+            Line::from(format!("  {:8} Move up", kb.nav_up.display_short())),
+            Line::from(format!(
+                "  {:8} Go to first agent",
+                kb.nav_first.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Go to last agent",
+                kb.nav_last.display_short()
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "Agent Management",
@@ -41,11 +54,26 @@ impl HelpOverlay {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from("  n        Create new agent"),
-            Line::from("  d        Delete selected agent"),
-            Line::from("  Enter    Attach to agent's tmux session"),
-            Line::from("  N        Set/edit custom note"),
-            Line::from("  s        Request work summary for Slack"),
+            Line::from(format!(
+                "  {:8} Create new agent",
+                kb.new_agent.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Delete selected agent",
+                kb.delete_agent.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Attach to agent's tmux session",
+                kb.attach.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Set/edit custom note",
+                kb.set_note.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Request work summary for Slack",
+                kb.summary.display_short()
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "Git Operations",
@@ -53,28 +81,39 @@ impl HelpOverlay {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from("  c        Pause & copy checkout command"),
-            Line::from("  r        Resume paused agent"),
-            Line::from("  m        Merge main into branch"),
-            Line::from("  p        Push changes"),
-            Line::from("  f        Fetch remote"),
+            Line::from(format!(
+                "  {:8} Pause & copy checkout command",
+                kb.pause.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Resume paused agent",
+                kb.resume.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Merge main into branch",
+                kb.merge.display_short()
+            )),
+            Line::from(format!("  {:8} Push changes", kb.push.display_short())),
+            Line::from(format!("  {:8} Fetch remote", kb.fetch.display_short())),
             Line::from(""),
             Line::from(Span::styled(
-                "GitLab",
+                "External Services",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from("  o        Open MR in browser"),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Asana",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+            Line::from(format!(
+                "  {:8} Open MR/PR in browser",
+                kb.open_mr.display_short()
             )),
-            Line::from("  a        Assign Asana task"),
-            Line::from("  A        Open Asana task in browser"),
+            Line::from(format!(
+                "  {:8} Assign Asana task",
+                kb.asana_assign.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Open Asana task in browser",
+                kb.asana_open.display_short()
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "Other",
@@ -82,9 +121,15 @@ impl HelpOverlay {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from("  R        Refresh all status"),
-            Line::from("  ?        Toggle this help"),
-            Line::from("  q        Quit"),
+            Line::from(format!(
+                "  {:8} Refresh all status",
+                kb.refresh_all.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Toggle this help",
+                kb.toggle_help.display_short()
+            )),
+            Line::from(format!("  {:8} Quit", kb.quit.display_short())),
             Line::from("  Esc      Cancel/close"),
             Line::from(""),
             Line::from(Span::styled(

@@ -68,6 +68,10 @@ impl<'a> SettingsModal<'a> {
         if self.state.editing_prompt {
             self.render_prompt_editor(frame);
         }
+
+        if self.state.capturing_keybind.is_some() {
+            self.render_keybind_capture(frame);
+        }
     }
 
     fn render_tabs(&self, frame: &mut Frame, area: Rect) {
@@ -486,11 +490,23 @@ impl<'a> SettingsModal<'a> {
                     });
                 ("Push".to_string(), value, false)
             }
+            field if field.is_keybind_field() => {
+                let label = field.keybind_name().unwrap_or("Keybind").to_string();
+                let value = self
+                    .state
+                    .get_keybind(*field)
+                    .map(|kb| kb.display_short())
+                    .unwrap_or_else(|| "?".to_string());
+                (label, value, false)
+            }
+            _ => ("Unknown".to_string(), "".to_string(), false),
         }
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let hint = if self.state.editing_prompt {
+        let hint = if self.state.capturing_keybind.is_some() {
+            "Press any key to set keybind  [Esc] Cancel"
+        } else if self.state.editing_prompt {
             "[Enter] Save  [Shift+Enter] New line  [Ctrl+S] Save & Close  [Esc] Close"
         } else if self.state.editing_text {
             "[Enter] Save  [Esc] Cancel"
@@ -505,18 +521,29 @@ impl<'a> SettingsModal<'a> {
                     | SettingsField::ShowLogs
                     | SettingsField::ShowBanner
             );
-            if is_toggle {
+            let is_keybind = field.is_keybind_field();
+            if is_keybind {
+                "[Tab] Switch tab  [Enter] Edit keybind  [↑/↓] Navigate  [Esc] Close  [q] Save"
+            } else if is_toggle {
                 "[Tab] Switch tab  [Enter] Toggle  [↑/↓] Navigate  [Esc] Close"
             } else {
                 "[Tab] Switch tab  [Enter] Edit  [↑/↓] Navigate  [Esc] Close  [q] Save"
             }
         };
 
-        let paragraph = Paragraph::new(Line::from(Span::styled(
-            hint,
-            Style::default().fg(Color::DarkGray),
-        )))
-        .alignment(Alignment::Center);
+        let mut spans = vec![Span::styled(hint, Style::default().fg(Color::DarkGray))];
+
+        if self.state.has_keybind_conflicts() && self.state.capturing_keybind.is_none() {
+            spans.push(Span::styled(
+                format!(
+                    "   ⚠ {} keybind conflict(s)",
+                    self.state.keybind_conflicts.len()
+                ),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+
+        let paragraph = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         frame.render_widget(paragraph, area);
     }
 
@@ -633,6 +660,52 @@ impl<'a> SettingsModal<'a> {
         )))
         .alignment(Alignment::Center);
         frame.render_widget(footer, chunks[1]);
+    }
+
+    fn render_keybind_capture(&self, frame: &mut Frame) {
+        let area = centered_rect(50, 25, frame.area());
+        frame.render_widget(Clear, area);
+
+        let field = self
+            .state
+            .capturing_keybind
+            .unwrap_or(SettingsField::KbQuit);
+        let keybind_name = field.keybind_name().unwrap_or("Keybind");
+
+        let block = Block::default()
+            .title(format!(" Set Keybind: {} ", keybind_name))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let current = self
+            .state
+            .get_keybind(field)
+            .map(|kb| kb.display())
+            .unwrap_or_else(|| "none".to_string());
+
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Press any key to assign...",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Current: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&current, Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  [Esc] Cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+
+        let paragraph = Paragraph::new(lines).alignment(Alignment::Left);
+        frame.render_widget(paragraph, inner);
     }
 }
 

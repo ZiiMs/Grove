@@ -187,6 +187,12 @@ pub enum Action {
     SettingsClose,
     SettingsSave,
     SettingsPromptSave,
+    SettingsStartKeybindCapture,
+    SettingsCaptureKeybind {
+        key: String,
+        modifiers: Vec<String>,
+    },
+    SettingsCancelKeybindCapture,
 
     // Global Setup Wizard
     GlobalSetupNextStep,
