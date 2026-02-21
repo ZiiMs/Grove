@@ -258,16 +258,23 @@ impl Default for AsanaConfig {
 pub struct NotionConfig {
     #[serde(default = "default_notion_refresh")]
     pub refresh_secs: u64,
+    #[serde(default = "default_notion_cache_ttl")]
+    pub cache_ttl_secs: u64,
 }
 
 fn default_notion_refresh() -> u64 {
     120
 }
 
+fn default_notion_cache_ttl() -> u64 {
+    60
+}
+
 impl Default for NotionConfig {
     fn default() -> Self {
         Self {
             refresh_secs: default_notion_refresh(),
+            cache_ttl_secs: default_notion_cache_ttl(),
         }
     }
 }
@@ -450,6 +457,8 @@ pub struct Keybinds {
     pub quit: Keybind,
     #[serde(default = "default_open_editor")]
     pub open_editor: Keybind,
+    #[serde(default = "default_show_tasks")]
+    pub show_tasks: Keybind,
 }
 
 fn default_nav_down() -> Keybind {
@@ -527,6 +536,9 @@ fn default_quit() -> Keybind {
 fn default_open_editor() -> Keybind {
     Keybind::new("e")
 }
+fn default_show_tasks() -> Keybind {
+    Keybind::new("t")
+}
 
 impl Default for Keybinds {
     fn default() -> Self {
@@ -556,6 +568,7 @@ impl Default for Keybinds {
             toggle_settings: default_toggle_settings(),
             quit: default_quit(),
             open_editor: default_open_editor(),
+            show_tasks: default_show_tasks(),
         }
     }
 }
@@ -588,6 +601,7 @@ impl Keybinds {
             ("toggle_settings", &self.toggle_settings),
             ("quit", &self.quit),
             ("open_editor", &self.open_editor),
+            ("show_tasks", &self.show_tasks),
         ]
     }
 

@@ -29,6 +29,7 @@ impl<'a> StatusBarWidget<'a> {
             (&self.keybinds.attach, "attach"),
             (&self.keybinds.delete_agent, "delete"),
             (&self.keybinds.refresh_all, "refresh"),
+            (&self.keybinds.show_tasks, "tasks"),
             (&self.keybinds.toggle_settings, "settings"),
             (&self.keybinds.toggle_help, "help"),
             (&self.keybinds.quit, "quit"),

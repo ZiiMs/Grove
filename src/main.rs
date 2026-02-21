@@ -418,6 +418,7 @@ async fn main() -> Result<()> {
         Config::notion_token().as_deref(),
         notion_database_id,
         notion_status_property,
+        config.notion.cache_ttl_secs,
     ));
 
     let pm_provider = state.settings.repo_config.project_mgmt.provider;
@@ -835,7 +836,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                         Some(Action::ProjectSetupNavigatePrev)
                     }
                 }
-                KeyCode::Down | KeyCode::Tab | KeyCode::Char('j') if !wizard.editing_text => {
+                KeyCode::Down | KeyCode::Char('j') if !wizard.editing_text => {
                     if wizard.dropdown_open {
                         Some(Action::ProjectSetupDropdownNext)
                     } else {
@@ -1038,8 +1039,10 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     }
 
     // Task browsing
+    if matches_keybind(key, &kb.show_tasks) {
+        return Some(Action::EnterInputMode(InputMode::BrowseTasks));
+    }
     match key.code {
-        KeyCode::Char('t') => Some(Action::EnterInputMode(InputMode::BrowseTasks)),
         KeyCode::Char('T') => {
             let selected_id = state.selected_agent_id();
             selected_id
@@ -1307,7 +1310,7 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
     // Normal settings navigation
     match key.code {
         KeyCode::Esc => Some(Action::SettingsClose),
-        KeyCode::Char('q') => Some(Action::SettingsSave),
+        KeyCode::Char('c') => Some(Action::SettingsSave),
         KeyCode::Tab => Some(Action::SettingsSwitchSection),
         KeyCode::BackTab => Some(Action::SettingsSwitchSectionBack),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
@@ -1605,7 +1608,7 @@ async fn process_action(
                                 &worktree_path,
                                 "commit",
                                 "-m",
-                                &format!("[grove] paused '{}'", name_clone),
+                                &format!("[GROVE] {}", name_clone),
                             ])
                             .output();
                     }
