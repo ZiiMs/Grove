@@ -165,14 +165,6 @@ impl NotionClient {
     ) -> Result<Vec<NotionPageData>> {
         let parent_pages = self.query_database(false).await?;
 
-        tracing::debug!(
-            "Notion: fetched {} parent pages from database",
-            parent_pages.len()
-        );
-
-        let mut all_pages = parent_pages.clone();
-
-        // Collect all related task IDs and map them to their parent page ID
         let mut child_to_parent: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         let mut child_ids_to_fetch: Vec<String> = Vec::new();
@@ -184,12 +176,19 @@ impl NotionClient {
             }
         }
 
+        let mut children_by_parent: std::collections::HashMap<String, Vec<NotionPageData>> =
+            std::collections::HashMap::new();
+
         for child_id in child_ids_to_fetch {
             match self.get_page(&child_id).await {
                 Ok(mut child_page) => {
                     child_page.parent_page_id =
                         Some(child_to_parent.get(&child_id).cloned().unwrap());
-                    all_pages.push(child_page);
+                    let parent_id = child_to_parent.get(&child_id).cloned().unwrap();
+                    children_by_parent
+                        .entry(parent_id)
+                        .or_default()
+                        .push(child_page);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to fetch child page {}: {}", child_id, e);
@@ -197,13 +196,21 @@ impl NotionClient {
             }
         }
 
-        if exclude_done {
-            let filtered: Vec<NotionPageData> =
-                all_pages.into_iter().filter(|p| !p.is_completed).collect();
-            Ok(filtered)
-        } else {
-            Ok(all_pages)
+        let mut sorted_pages = Vec::new();
+        for parent in parent_pages {
+            if !exclude_done || !parent.is_completed {
+                sorted_pages.push(parent.clone());
+            }
+            if let Some(children) = children_by_parent.get(&parent.id) {
+                for child in children {
+                    if !exclude_done || !child.is_completed {
+                        sorted_pages.push(child.clone());
+                    }
+                }
+            }
         }
+
+        Ok(sorted_pages)
     }
 
     pub async fn get_status_options(&self) -> Result<StatusOptions> {
