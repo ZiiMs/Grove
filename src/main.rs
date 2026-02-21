@@ -23,7 +23,8 @@ use grove::agent::{
 };
 use grove::app::{
     Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, StatusOption,
-    TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast, ToastLevel,
+    SubtaskStatusDropdownState, TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast,
+    ToastLevel,
 };
 use grove::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use grove::codeberg::OptionalCodebergClient;
@@ -1108,6 +1109,7 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectTaskNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
             KeyCode::Char('a') => Some(Action::AssignSelectedTaskToAgent),
+            KeyCode::Char('s') => Some(Action::ToggleSubtaskStatus),
             KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
             KeyCode::Left | KeyCode::Right => Some(Action::ToggleTaskExpand),
             KeyCode::Esc => Some(Action::ExitInputMode),
@@ -1120,6 +1122,24 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::TaskStatusDropdownNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::TaskStatusDropdownPrev),
             KeyCode::Enter => Some(Action::TaskStatusDropdownSelect),
+            KeyCode::Esc => Some(Action::ExitInputMode),
+            _ => None,
+        };
+    }
+
+    if matches!(state.input_mode, Some(InputMode::SelectSubtaskStatus)) {
+        return match key {
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::SubtaskStatusDropdownNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::SubtaskStatusDropdownPrev),
+            KeyCode::Enter => {
+                if let Some(ref dropdown) = state.subtask_status_dropdown {
+                    Some(Action::SubtaskStatusDropdownSelect {
+                        completed: dropdown.selected_index == 1,
+                    })
+                } else {
+                    Some(Action::ExitInputMode)
+                }
+            }
             KeyCode::Esc => Some(Action::ExitInputMode),
             _ => None,
         };
@@ -2518,6 +2538,22 @@ async fn process_action(
             }
         }
 
+        Action::SubtaskStatusDropdownNext => {
+            if let Some(ref mut dropdown) = state.subtask_status_dropdown {
+                if dropdown.selected_index < 1 {
+                    dropdown.selected_index += 1;
+                }
+            }
+        }
+
+        Action::SubtaskStatusDropdownPrev => {
+            if let Some(ref mut dropdown) = state.subtask_status_dropdown {
+                if dropdown.selected_index > 0 {
+                    dropdown.selected_index -= 1;
+                }
+            }
+        }
+
         Action::TaskStatusDropdownSelect => {
             tracing::info!("TaskStatusDropdownSelect triggered");
             let dropdown = state.task_status_dropdown.take();
@@ -2754,15 +2790,29 @@ async fn process_action(
                             Ok(tasks) => {
                                 let mut items: Vec<TaskListItem> = tasks
                                     .into_iter()
-                                    .filter(|t| !t.completed)
-                                    .map(|t| TaskListItem {
-                                        id: t.gid,
-                                        name: t.name,
-                                        status: TaskItemStatus::NotStarted,
-                                        status_name: "Not Started".to_string(),
-                                        url: t.permalink_url.unwrap_or_default(),
-                                        parent_id: t.parent_gid,
-                                        has_children: t.num_subtasks > 0,
+                                    .filter(|t| {
+                                        if t.parent_gid.is_some() {
+                                            true
+                                        } else {
+                                            !t.completed
+                                        }
+                                    })
+                                    .map(|t| {
+                                        let (status, status_name) = if t.completed {
+                                            (TaskItemStatus::Completed, "Completed".to_string())
+                                        } else {
+                                            (TaskItemStatus::NotStarted, "Not Started".to_string())
+                                        };
+                                        TaskListItem {
+                                            id: t.gid,
+                                            name: t.name,
+                                            status,
+                                            status_name,
+                                            url: t.permalink_url.unwrap_or_default(),
+                                            parent_id: t.parent_gid,
+                                            has_children: t.num_subtasks > 0,
+                                            completed: t.completed,
+                                        }
                                     })
                                     .collect();
                                 sort_tasks_by_parent(&mut items);
@@ -2790,9 +2840,14 @@ async fn process_action(
                                         let status =
                                             if status_name.to_lowercase().contains("progress") {
                                                 TaskItemStatus::InProgress
+                                            } else if status_name.to_lowercase().contains("done")
+                                                || status_name.to_lowercase().contains("complete")
+                                            {
+                                                TaskItemStatus::Completed
                                             } else {
                                                 TaskItemStatus::NotStarted
                                             };
+                                        let completed = matches!(status, TaskItemStatus::Completed);
                                         let has_children = parent_ids.contains(&p.id);
                                         TaskListItem {
                                             id: p.id,
@@ -2802,6 +2857,7 @@ async fn process_action(
                                             url: p.url,
                                             parent_id: p.parent_page_id,
                                             has_children,
+                                            completed,
                                         }
                                     })
                                     .collect();
@@ -2879,6 +2935,91 @@ async fn process_action(
                         state.task_list_expanded_ids.insert(task.id.clone());
                     }
                 }
+            }
+        }
+
+        Action::ToggleSubtaskStatus => {
+            if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
+                if task.is_subtask() {
+                    state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
+                        task_id: task.id.clone(),
+                        task_name: task.name.clone(),
+                        current_completed: task.completed,
+                        selected_index: if task.completed { 1 } else { 0 },
+                    });
+                    state.input_mode = Some(InputMode::SelectSubtaskStatus);
+                } else {
+                    state.show_warning("Status toggle only available for subtasks");
+                }
+            }
+        }
+
+        Action::SubtaskStatusDropdownSelect { completed } => {
+            let dropdown = state.subtask_status_dropdown.take();
+            state.exit_input_mode();
+            if let Some(dropdown) = dropdown {
+                let task_id = dropdown.task_id.clone();
+                let task_name = dropdown.task_name.clone();
+                let current_completed = dropdown.current_completed;
+
+                if completed == current_completed {
+                    state.show_info("No change needed");
+                    return Ok(false);
+                }
+
+                let client = Arc::clone(asana_client);
+                let tx = action_tx.clone();
+                state.loading_message = Some("Updating subtask status...".to_string());
+
+                tokio::spawn(async move {
+                    let result = if completed {
+                        client.complete_task(&task_id).await
+                    } else {
+                        client.uncomplete_task(&task_id).await
+                    };
+
+                    match result {
+                        Ok(()) => {
+                            let _ = tx.send(Action::SubtaskStatusUpdated { task_id, completed });
+                            let _ = tx.send(Action::SetLoading(None));
+                            let _ = tx.send(Action::ShowToast {
+                                message: format!(
+                                    "{} → {}",
+                                    task_name,
+                                    if completed {
+                                        "Completed"
+                                    } else {
+                                        "Not Complete"
+                                    }
+                                ),
+                                level: ToastLevel::Success,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Action::SetLoading(None));
+                            let _ = tx.send(Action::ShowError(format!(
+                                "Failed to update subtask: {}",
+                                e
+                            )));
+                        }
+                    }
+                });
+            }
+        }
+
+        Action::SubtaskStatusUpdated { task_id, completed } => {
+            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id) {
+                task.completed = completed;
+                task.status = if completed {
+                    TaskItemStatus::Completed
+                } else {
+                    TaskItemStatus::NotStarted
+                };
+                task.status_name = if completed {
+                    "Completed".to_string()
+                } else {
+                    "Not Started".to_string()
+                };
             }
         }
 
@@ -3182,6 +3323,9 @@ async fn process_action(
                     }
                     InputMode::SelectTaskStatus => {
                         // Handled by TaskStatusDropdownNext/Prev/Select
+                    }
+                    InputMode::SelectSubtaskStatus => {
+                        // Handled by SubtaskStatusDropdownNext/Prev/Select
                     }
                 }
             }

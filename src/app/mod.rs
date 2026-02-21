@@ -11,7 +11,7 @@ pub use config::{
 pub use state::{
     AppState, DevServerWarning, DropdownState, GlobalSetupState, GlobalSetupStep, LogEntry,
     LogLevel, PreviewTab, ProjectSetupState, SettingsCategory, SettingsField, SettingsItem,
-    SettingsState, SettingsTab, StatusOption, TaskReassignmentWarning, TaskStatusDropdownState,
-    Toast, ToastLevel,
+    SettingsState, SettingsTab, StatusOption, SubtaskStatusDropdownState, TaskReassignmentWarning,
+    TaskStatusDropdownState, Toast, ToastLevel,
 };
 pub use task_list::{TaskItemStatus, TaskListItem};
