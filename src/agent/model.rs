@@ -9,9 +9,84 @@ use crate::codeberg::PullRequestStatus as CodebergPullRequestStatus;
 use crate::git::GitSyncStatus;
 use crate::github::PullRequestStatus;
 use crate::gitlab::MergeRequestStatus;
+use crate::notion::NotionTaskStatus;
 
 /// Maximum number of activity ticks to track for sparkline
 const ACTIVITY_HISTORY_SIZE: usize = 20;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ProjectMgmtTaskStatus {
+    #[default]
+    None,
+    Asana(AsanaTaskStatus),
+    Notion(NotionTaskStatus),
+}
+
+impl ProjectMgmtTaskStatus {
+    pub fn format_short(&self) -> String {
+        match self {
+            ProjectMgmtTaskStatus::None => "—".to_string(),
+            ProjectMgmtTaskStatus::Asana(s) => s.format_short(),
+            ProjectMgmtTaskStatus::Notion(s) => s.format_short(),
+        }
+    }
+
+    pub fn is_linked(&self) -> bool {
+        !matches!(self, ProjectMgmtTaskStatus::None)
+    }
+
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            ProjectMgmtTaskStatus::Asana(s) => s.gid(),
+            ProjectMgmtTaskStatus::Notion(s) => s.page_id(),
+            ProjectMgmtTaskStatus::None => None,
+        }
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            ProjectMgmtTaskStatus::Asana(s) => s.name(),
+            ProjectMgmtTaskStatus::Notion(s) => s.name(),
+            ProjectMgmtTaskStatus::None => None,
+        }
+    }
+
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            ProjectMgmtTaskStatus::Asana(s) => s.url(),
+            ProjectMgmtTaskStatus::Notion(s) => s.url(),
+            ProjectMgmtTaskStatus::None => None,
+        }
+    }
+
+    pub fn is_asana_not_started(&self) -> bool {
+        matches!(
+            self,
+            ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted { .. })
+        )
+    }
+
+    pub fn is_notion_not_started(&self) -> bool {
+        matches!(
+            self,
+            ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted { .. })
+        )
+    }
+
+    pub fn as_asana(&self) -> Option<&AsanaTaskStatus> {
+        match self {
+            ProjectMgmtTaskStatus::Asana(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_notion(&self) -> Option<&NotionTaskStatus> {
+        match self {
+            ProjectMgmtTaskStatus::Notion(s) => Some(s),
+            _ => None,
+        }
+    }
+}
 
 /// Represents the current status of a Claude agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,9 +161,12 @@ pub struct Agent {
     /// Checklist progress (completed, total) if a checklist is detected
     #[serde(skip)]
     pub checklist_progress: Option<(u32, u32)>,
-    /// Asana task tracking status (persisted across sessions)
-    #[serde(default)]
+    /// Legacy Asana task status (for backward compatibility during migration)
+    #[serde(default, skip_serializing)]
     pub asana_task_status: AsanaTaskStatus,
+    /// Project management task status (persisted across sessions)
+    #[serde(default)]
+    pub pm_task_status: ProjectMgmtTaskStatus,
     /// Whether a work summary has been requested for this agent
     #[serde(default)]
     pub summary_requested: bool,
@@ -118,7 +196,16 @@ impl Agent {
             activity_history: VecDeque::with_capacity(ACTIVITY_HISTORY_SIZE),
             checklist_progress: None,
             asana_task_status: AsanaTaskStatus::None,
+            pm_task_status: ProjectMgmtTaskStatus::None,
             summary_requested: false,
+        }
+    }
+
+    pub fn migrate_legacy(&mut self) {
+        if !matches!(self.asana_task_status, AsanaTaskStatus::None)
+            && matches!(self.pm_task_status, ProjectMgmtTaskStatus::None)
+        {
+            self.pm_task_status = ProjectMgmtTaskStatus::Asana(self.asana_task_status.clone());
         }
     }
 

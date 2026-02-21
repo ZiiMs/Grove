@@ -5,9 +5,10 @@ use uuid::Uuid;
 
 use super::action::InputMode;
 use super::config::{
-    AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, RepoConfig, UiConfig,
-    WorktreeLocation,
+    AiAgent, Config, GitProvider, LogLevel as ConfigLogLevel, ProjectMgmtProvider, RepoConfig,
+    UiConfig, WorktreeLocation,
 };
+use super::task_list::TaskListItem;
 use crate::agent::Agent;
 use crate::ui::components::file_browser::DirEntry;
 
@@ -24,6 +25,15 @@ pub enum PreviewTab {
 pub struct DevServerWarning {
     pub agent_id: Uuid,
     pub running_servers: Vec<(String, Option<u16>)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskReassignmentWarning {
+    pub target_agent_id: Uuid,
+    pub task_id: String,
+    pub task_name: String,
+    pub agent_current_task: Option<(String, String)>,
+    pub task_current_agent: Option<(Uuid, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,9 +103,14 @@ pub enum SettingsField {
     BranchPrefix,
     MainBranch,
     WorktreeSymlinks,
+    ProjectMgmtProvider,
     AsanaProjectGid,
     AsanaInProgressGid,
     AsanaDoneGid,
+    NotionDatabaseId,
+    NotionStatusProperty,
+    NotionInProgressOption,
+    NotionDoneOption,
     SummaryPrompt,
     MergePrompt,
     PushPrompt,
@@ -114,7 +129,9 @@ pub enum SettingsCategory {
     GitProvider,
     GitConfig,
     Ci,
+    ProjectMgmt,
     Asana,
+    Notion,
     Prompts,
     DevServer,
 }
@@ -128,7 +145,9 @@ impl SettingsCategory {
             SettingsCategory::GitProvider => "Provider",
             SettingsCategory::GitConfig => "Configuration",
             SettingsCategory::Ci => "CI/CD",
+            SettingsCategory::ProjectMgmt => "Project Mgmt",
             SettingsCategory::Asana => "Asana",
+            SettingsCategory::Notion => "Notion",
             SettingsCategory::Prompts => "Prompts",
             SettingsCategory::DevServer => "Dev Server",
         }
@@ -166,9 +185,14 @@ impl SettingsField {
             | SettingsField::BranchPrefix
             | SettingsField::MainBranch
             | SettingsField::WorktreeSymlinks => SettingsTab::Git,
-            SettingsField::AsanaProjectGid
+            SettingsField::ProjectMgmtProvider
+            | SettingsField::AsanaProjectGid
             | SettingsField::AsanaInProgressGid
-            | SettingsField::AsanaDoneGid => SettingsTab::ProjectMgmt,
+            | SettingsField::AsanaDoneGid
+            | SettingsField::NotionDatabaseId
+            | SettingsField::NotionStatusProperty
+            | SettingsField::NotionInProgressOption
+            | SettingsField::NotionDoneOption => SettingsTab::ProjectMgmt,
             SettingsField::DevServerCommand
             | SettingsField::DevServerRunBefore
             | SettingsField::DevServerWorkingDir
@@ -186,7 +210,11 @@ impl SettingsField {
 }
 
 impl SettingsItem {
-    pub fn all_for_tab(tab: SettingsTab, provider: GitProvider) -> Vec<SettingsItem> {
+    pub fn all_for_tab(
+        tab: SettingsTab,
+        provider: GitProvider,
+        pm_provider: ProjectMgmtProvider,
+    ) -> Vec<SettingsItem> {
         match tab {
             SettingsTab::General => vec![
                 SettingsItem::Category(SettingsCategory::Agent),
@@ -232,12 +260,28 @@ impl SettingsItem {
                 items.push(SettingsItem::Field(SettingsField::WorktreeSymlinks));
                 items
             }
-            SettingsTab::ProjectMgmt => vec![
-                SettingsItem::Category(SettingsCategory::Asana),
-                SettingsItem::Field(SettingsField::AsanaProjectGid),
-                SettingsItem::Field(SettingsField::AsanaInProgressGid),
-                SettingsItem::Field(SettingsField::AsanaDoneGid),
-            ],
+            SettingsTab::ProjectMgmt => {
+                let mut items = vec![
+                    SettingsItem::Category(SettingsCategory::ProjectMgmt),
+                    SettingsItem::Field(SettingsField::ProjectMgmtProvider),
+                ];
+                match pm_provider {
+                    ProjectMgmtProvider::Asana => {
+                        items.push(SettingsItem::Category(SettingsCategory::Asana));
+                        items.push(SettingsItem::Field(SettingsField::AsanaProjectGid));
+                        items.push(SettingsItem::Field(SettingsField::AsanaInProgressGid));
+                        items.push(SettingsItem::Field(SettingsField::AsanaDoneGid));
+                    }
+                    ProjectMgmtProvider::Notion => {
+                        items.push(SettingsItem::Category(SettingsCategory::Notion));
+                        items.push(SettingsItem::Field(SettingsField::NotionDatabaseId));
+                        items.push(SettingsItem::Field(SettingsField::NotionStatusProperty));
+                        items.push(SettingsItem::Field(SettingsField::NotionInProgressOption));
+                        items.push(SettingsItem::Field(SettingsField::NotionDoneOption));
+                    }
+                }
+                items
+            }
             SettingsTab::DevServer => vec![
                 SettingsItem::Category(SettingsCategory::DevServer),
                 SettingsItem::Field(SettingsField::DevServerCommand),
@@ -329,7 +373,11 @@ impl Default for SettingsState {
 
 impl SettingsState {
     pub fn all_items(&self) -> Vec<SettingsItem> {
-        SettingsItem::all_for_tab(self.tab, self.repo_config.git.provider)
+        SettingsItem::all_for_tab(
+            self.tab,
+            self.repo_config.git.provider,
+            self.repo_config.project_mgmt.provider,
+        )
     }
 
     pub fn navigable_items(&self) -> Vec<(usize, SettingsField)> {
@@ -396,7 +444,7 @@ pub struct AppState {
     pub selected_index: usize,
     pub config: Config,
     pub running: bool,
-    pub error_message: Option<String>,
+    pub toast: Option<Toast>,
     pub show_help: bool,
     pub show_diff: bool,
     pub input_mode: Option<InputMode>,
@@ -421,6 +469,12 @@ pub struct AppState {
     pub preview_tab: PreviewTab,
     pub devserver_scroll: usize,
     pub devserver_warning: Option<DevServerWarning>,
+    pub task_reassignment_warning: Option<TaskReassignmentWarning>,
+    pub task_list: Vec<TaskListItem>,
+    pub task_list_loading: bool,
+    pub task_list_selected: usize,
+    pub task_list_expanded_ids: HashSet<String>,
+    pub task_status_dropdown: Option<TaskStatusDropdownState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -452,6 +506,19 @@ pub struct ProjectSetupState {
 }
 
 #[derive(Debug, Clone)]
+pub struct TaskStatusDropdownState {
+    pub agent_id: Uuid,
+    pub status_options: Vec<StatusOption>,
+    pub selected_index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct StatusOption {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct LogEntry {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub level: LogLevel,
@@ -464,6 +531,43 @@ pub enum LogLevel {
     Warn,
     Error,
     Debug,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    Success,
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub message: String,
+    pub level: ToastLevel,
+    pub created_at: std::time::Instant,
+    pub duration_secs: u64,
+}
+
+impl Toast {
+    pub fn new(message: String, level: ToastLevel) -> Self {
+        let duration_secs = match level {
+            ToastLevel::Success => 3,
+            ToastLevel::Info => 3,
+            ToastLevel::Warning => 4,
+            ToastLevel::Error => 5,
+        };
+        Self {
+            message,
+            level,
+            created_at: std::time::Instant::now(),
+            duration_secs,
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.created_at.elapsed().as_secs() >= self.duration_secs
+    }
 }
 
 impl AppState {
@@ -479,7 +583,7 @@ impl AppState {
             selected_index: 0,
             config,
             running: true,
-            error_message: None,
+            toast: None,
             show_help: false,
             show_diff: false,
             input_mode: None,
@@ -510,6 +614,12 @@ impl AppState {
             preview_tab: PreviewTab::default(),
             devserver_scroll: 0,
             devserver_warning: None,
+            task_reassignment_warning: None,
+            task_list: Vec::new(),
+            task_list_loading: false,
+            task_list_selected: 0,
+            task_list_expanded_ids: HashSet::new(),
+            task_status_dropdown: None,
         }
     }
 
@@ -630,6 +740,23 @@ impl AppState {
     pub fn exit_input_mode(&mut self) {
         self.input_mode = None;
         self.input_buffer.clear();
+        self.task_status_dropdown = None;
+    }
+
+    pub fn show_error(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg.into(), ToastLevel::Error));
+    }
+
+    pub fn show_success(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg.into(), ToastLevel::Success));
+    }
+
+    pub fn show_info(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg.into(), ToastLevel::Info));
+    }
+
+    pub fn show_warning(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg.into(), ToastLevel::Warning));
     }
 
     pub fn record_system_metrics(&mut self, cpu_percent: f32, memory_used: u64, memory_total: u64) {

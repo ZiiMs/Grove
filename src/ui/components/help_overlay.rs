@@ -68,13 +68,15 @@ impl HelpOverlay {
             Line::from("  o        Open MR in browser"),
             Line::from(""),
             Line::from(Span::styled(
-                "Asana",
+                "Project Mgmt",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from("  a        Assign Asana task"),
-            Line::from("  A        Open Asana task in browser"),
+            Line::from("  a        Assign task by URL/ID"),
+            Line::from("  A        Open task in browser"),
+            Line::from("  t        Browse tasks from project"),
+            Line::from("  T        Select task status"),
             Line::from(""),
             Line::from(Span::styled(
                 "Other",

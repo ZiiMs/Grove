@@ -256,6 +256,7 @@ impl<'a> ProjectSetupWizard<'a> {
                 "Project GID".to_string(),
                 self.state
                     .config
+                    .project_mgmt
                     .asana
                     .project_gid
                     .clone()

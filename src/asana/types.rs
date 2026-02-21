@@ -58,7 +58,16 @@ impl AsanaTaskStatus {
         }
     }
 
-    /// Whether an Asana task is linked.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            AsanaTaskStatus::None => None,
+            AsanaTaskStatus::NotStarted { name, .. }
+            | AsanaTaskStatus::InProgress { name, .. }
+            | AsanaTaskStatus::Completed { name, .. } => Some(name),
+            AsanaTaskStatus::Error { message, .. } => Some(message),
+        }
+    }
+
     pub fn is_linked(&self) -> bool {
         !matches!(self, AsanaTaskStatus::None)
     }
@@ -86,6 +95,13 @@ pub struct AsanaTaskData {
     pub name: String,
     pub completed: bool,
     pub permalink_url: Option<String>,
+    pub parent: Option<AsanaParent>,
+    pub num_subtasks: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaParent {
+    pub gid: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,4 +113,32 @@ pub struct AsanaSectionsResponse {
 pub struct AsanaSectionData {
     pub gid: String,
     pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaTaskListResponse {
+    pub data: Vec<AsanaTaskData>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AsanaTaskSummary {
+    pub gid: String,
+    pub name: String,
+    pub completed: bool,
+    pub permalink_url: Option<String>,
+    pub parent_gid: Option<String>,
+    pub num_subtasks: u32,
+}
+
+impl From<AsanaTaskData> for AsanaTaskSummary {
+    fn from(data: AsanaTaskData) -> Self {
+        Self {
+            gid: data.gid,
+            name: data.name,
+            completed: data.completed,
+            permalink_url: data.permalink_url,
+            parent_gid: data.parent.map(|p| p.gid),
+            num_subtasks: data.num_subtasks.unwrap_or(0),
+        }
+    }
 }

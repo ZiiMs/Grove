@@ -17,7 +17,7 @@ use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
     DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GlobalSetupWizard, HelpOverlay,
     LoadingOverlay, OutputViewWidget, ProjectSetupWizard, SettingsModal, StatusBarWidget,
-    SystemMetricsWidget,
+    StatusDropdown, SystemMetricsWidget, TaskListModal, TaskReassignmentWarningModal, ToastWidget,
 };
 
 #[derive(Clone)]
@@ -70,7 +70,6 @@ impl<'a> AppWidget<'a> {
         let show_preview = self.state.config.ui.show_preview;
         let show_metrics = self.state.config.ui.show_metrics;
         let show_logs = self.state.config.ui.show_logs;
-        let has_message = self.state.error_message.is_some();
 
         let agent_count = self.state.agents.len().max(1);
         let agent_list_height = ((agent_count * 2) + 3).min(size.height as usize / 3) as u16;
@@ -89,9 +88,6 @@ impl<'a> AppWidget<'a> {
         }
         if show_logs {
             constraints.push(Constraint::Length(6));
-        }
-        if has_message {
-            constraints.push(Constraint::Length(3));
         }
         constraints.push(Constraint::Length(1));
 
@@ -122,11 +118,6 @@ impl<'a> AppWidget<'a> {
 
         if show_logs {
             self.render_logs(frame, chunks[chunk_idx]);
-            chunk_idx += 1;
-        }
-
-        if has_message {
-            self.render_message(frame, chunks[chunk_idx]);
             chunk_idx += 1;
         }
 
@@ -165,14 +156,20 @@ impl<'a> AppWidget<'a> {
             }
         }
 
-        if let Some(warning) = &self.state.devserver_warning {
+        if let Some(message) = &self.state.loading_message {
+            LoadingOverlay::render(frame, message, self.state.animation_frame);
+        }
+
+        if let Some(warning) = &self.state.task_reassignment_warning {
+            TaskReassignmentWarningModal::new(warning, &self.state.agents).render(frame);
+        } else if let Some(warning) = &self.state.devserver_warning {
             DevServerWarningModal::new(warning).render(frame);
         } else if let Some(mode) = &self.state.input_mode {
             self.render_modal(frame, mode, size);
         }
 
-        if let Some(message) = &self.state.loading_message {
-            LoadingOverlay::render(frame, message, self.state.animation_frame);
+        if let Some(toast) = &self.state.toast {
+            ToastWidget::new(toast).render(frame);
         }
     }
 
@@ -248,6 +245,23 @@ impl<'a> AppWidget<'a> {
                     "n/Esc",
                 );
             }
+            InputMode::ConfirmDeleteTask => {
+                let agent_name = self
+                    .state
+                    .selected_agent()
+                    .map(|a| a.name.as_str())
+                    .unwrap_or("agent");
+                render_confirm_modal(
+                    frame,
+                    "Delete Agent",
+                    &format!(
+                        "Delete '{}'? Complete task? [y]es [n]o [Esc]cancel",
+                        agent_name
+                    ),
+                    "y",
+                    "n/Esc",
+                );
+            }
             InputMode::AssignAsana => {
                 render_input_modal(
                     frame,
@@ -255,6 +269,59 @@ impl<'a> AppWidget<'a> {
                     "Enter Asana task URL or GID:",
                     &self.state.input_buffer,
                 );
+            }
+            InputMode::AssignProjectTask => {
+                let provider_name = self
+                    .state
+                    .settings
+                    .repo_config
+                    .project_mgmt
+                    .provider
+                    .display_name();
+                render_input_modal(
+                    frame,
+                    &format!("Assign {} Task", provider_name),
+                    &format!("Enter {} task URL or ID:", provider_name),
+                    &self.state.input_buffer,
+                );
+            }
+            InputMode::BrowseTasks => {
+                let provider_name = self
+                    .state
+                    .settings
+                    .repo_config
+                    .project_mgmt
+                    .provider
+                    .display_name();
+
+                fn normalize_id(id: &str) -> String {
+                    id.replace('-', "").to_lowercase()
+                }
+
+                let assigned_tasks: HashMap<String, String> = self
+                    .state
+                    .agents
+                    .values()
+                    .filter_map(|a| {
+                        a.pm_task_status
+                            .id()
+                            .map(|id| (normalize_id(id), a.name.clone()))
+                    })
+                    .collect();
+                TaskListModal::new(
+                    &self.state.task_list,
+                    self.state.task_list_selected,
+                    self.state.task_list_loading,
+                    provider_name,
+                    &assigned_tasks,
+                    &self.state.task_list_expanded_ids,
+                )
+                .render(frame);
+            }
+            InputMode::SelectTaskStatus => {
+                if let Some(dropdown) = &self.state.task_status_dropdown {
+                    StatusDropdown::new(dropdown).render(frame);
+                }
             }
         }
     }
@@ -481,29 +548,6 @@ impl<'a> AppWidget<'a> {
         );
 
         frame.render_widget(paragraph, area);
-    }
-
-    fn render_message(&self, frame: &mut Frame, area: Rect) {
-        if let Some(msg) = &self.state.error_message {
-            let is_error = msg.contains("Error") || msg.contains("Failed") || msg.contains("error");
-            let (border_color, text_color) = if is_error {
-                (Color::Red, Color::Red)
-            } else {
-                (Color::Yellow, Color::Yellow)
-            };
-
-            let paragraph = Paragraph::new(Line::from(Span::styled(
-                msg.clone(),
-                Style::default().fg(text_color).add_modifier(Modifier::BOLD),
-            )))
-            .block(
-                Block::default()
-                    .title(" EVENT ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color)),
-            );
-            frame.render_widget(paragraph, area);
-        }
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
