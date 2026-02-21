@@ -443,7 +443,11 @@ impl<'a> SettingsModal<'a> {
             ),
             SettingsField::WorktreeSymlinks => (
                 "Symlinks".to_string(),
-                self.state.repo_config.git.worktree_symlinks.join(", "),
+                self.state
+                    .repo_config
+                    .dev_server
+                    .worktree_symlinks
+                    .join(", "),
                 false,
             ),
             SettingsField::AsanaProjectGid => (

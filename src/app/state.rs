@@ -183,8 +183,7 @@ impl SettingsField {
             | SettingsField::CodebergBaseUrl
             | SettingsField::CodebergCiProvider
             | SettingsField::BranchPrefix
-            | SettingsField::MainBranch
-            | SettingsField::WorktreeSymlinks => SettingsTab::Git,
+            | SettingsField::MainBranch => SettingsTab::Git,
             SettingsField::ProjectMgmtProvider
             | SettingsField::AsanaProjectGid
             | SettingsField::AsanaInProgressGid
@@ -197,7 +196,8 @@ impl SettingsField {
             | SettingsField::DevServerRunBefore
             | SettingsField::DevServerWorkingDir
             | SettingsField::DevServerPort
-            | SettingsField::DevServerAutoStart => SettingsTab::DevServer,
+            | SettingsField::DevServerAutoStart
+            | SettingsField::WorktreeSymlinks => SettingsTab::DevServer,
         }
     }
 
@@ -257,7 +257,6 @@ impl SettingsItem {
                 items.push(SettingsItem::Category(SettingsCategory::GitConfig));
                 items.push(SettingsItem::Field(SettingsField::BranchPrefix));
                 items.push(SettingsItem::Field(SettingsField::MainBranch));
-                items.push(SettingsItem::Field(SettingsField::WorktreeSymlinks));
                 items
             }
             SettingsTab::ProjectMgmt => {
@@ -289,6 +288,7 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::DevServerWorkingDir),
                 SettingsItem::Field(SettingsField::DevServerPort),
                 SettingsItem::Field(SettingsField::DevServerAutoStart),
+                SettingsItem::Field(SettingsField::WorktreeSymlinks),
             ],
         }
     }
@@ -410,7 +410,7 @@ impl SettingsState {
 
     pub fn init_file_browser(&mut self, repo_path: &str) {
         let repo_path = PathBuf::from(repo_path);
-        let symlinks = &self.repo_config.git.worktree_symlinks;
+        let symlinks = &self.repo_config.dev_server.worktree_symlinks;
 
         let mut selected_files = HashSet::new();
         for symlink in symlinks {
