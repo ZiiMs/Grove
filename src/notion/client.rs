@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use futures::future::join_all;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use tokio::sync::Mutex;
 
@@ -179,21 +180,39 @@ impl NotionClient {
         let mut children_by_parent: std::collections::HashMap<String, Vec<NotionPageData>> =
             std::collections::HashMap::new();
 
-        for child_id in child_ids_to_fetch {
-            match self.get_page(&child_id).await {
-                Ok(mut child_page) => {
-                    child_page.parent_page_id =
-                        Some(child_to_parent.get(&child_id).cloned().unwrap());
-                    let parent_id = child_to_parent.get(&child_id).cloned().unwrap();
-                    children_by_parent
-                        .entry(parent_id)
-                        .or_default()
-                        .push(child_page);
+        let child_parent_pairs: Vec<(String, String)> = child_ids_to_fetch
+            .into_iter()
+            .filter_map(|child_id| {
+                child_to_parent
+                    .get(&child_id)
+                    .map(|p| (child_id, p.clone()))
+            })
+            .collect();
+
+        let child_futures: Vec<_> = child_parent_pairs
+            .into_iter()
+            .map(|(child_id, parent_id)| async move {
+                match self.get_page(&child_id).await {
+                    Ok(mut child_page) => {
+                        child_page.parent_page_id = Some(parent_id.clone());
+                        Some((parent_id, child_page))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch child page {}: {}", child_id, e);
+                        None
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to fetch child page {}: {}", child_id, e);
-                }
-            }
+            })
+            .collect();
+
+        let child_results = join_all(child_futures).await;
+
+        for result in child_results.into_iter().flatten() {
+            let (parent_id, child_page) = result;
+            children_by_parent
+                .entry(parent_id)
+                .or_default()
+                .push(child_page);
         }
 
         let mut sorted_pages = Vec::new();
