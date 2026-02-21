@@ -232,6 +232,8 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default)]
     pub performance: PerformanceConfig,
+    #[serde(default)]
+    pub keybinds: Keybinds,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,6 +335,275 @@ impl Default for UiConfig {
             show_logs: default_true(),
             show_banner: default_true(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct Keybind {
+    pub key: String,
+    #[serde(default)]
+    pub modifiers: Vec<String>,
+}
+
+impl Keybind {
+    pub fn new(key: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            modifiers: Vec::new(),
+        }
+    }
+
+    pub fn with_modifiers(key: impl Into<String>, modifiers: Vec<String>) -> Self {
+        Self {
+            key: key.into(),
+            modifiers,
+        }
+    }
+
+    pub fn display(&self) -> String {
+        if self.modifiers.is_empty() {
+            self.key.clone()
+        } else {
+            format!("{}+{}", self.modifiers.join("+"), self.key)
+        }
+    }
+
+    pub fn display_short(&self) -> String {
+        let key_display = match self.key.as_str() {
+            "Up" => "↑".to_string(),
+            "Down" => "↓".to_string(),
+            "Left" => "←".to_string(),
+            "Right" => "→".to_string(),
+            "Enter" => "↵".to_string(),
+            "Backspace" => "⌫".to_string(),
+            "Tab" => "⇥".to_string(),
+            "Esc" => "Esc".to_string(),
+            k => k.to_string(),
+        };
+        if self.modifiers.is_empty() {
+            key_display
+        } else {
+            let mods: String = self
+                .modifiers
+                .iter()
+                .map(|m| match m.as_str() {
+                    "Control" => "C-".to_string(),
+                    "Shift" => "S-".to_string(),
+                    "Alt" => "M-".to_string(),
+                    _ => format!("{}-", m.chars().next().unwrap_or('?')),
+                })
+                .collect();
+            format!("{}{}", mods, key_display)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Keybinds {
+    #[serde(default = "default_nav_down")]
+    pub nav_down: Keybind,
+    #[serde(default = "default_nav_up")]
+    pub nav_up: Keybind,
+    #[serde(default = "default_nav_first")]
+    pub nav_first: Keybind,
+    #[serde(default = "default_nav_last")]
+    pub nav_last: Keybind,
+    #[serde(default = "default_new_agent")]
+    pub new_agent: Keybind,
+    #[serde(default = "default_delete_agent")]
+    pub delete_agent: Keybind,
+    #[serde(default = "default_attach")]
+    pub attach: Keybind,
+    #[serde(default = "default_set_note")]
+    pub set_note: Keybind,
+    #[serde(default = "default_yank")]
+    pub yank: Keybind,
+    #[serde(default = "default_pause")]
+    pub pause: Keybind,
+    #[serde(default = "default_resume")]
+    pub resume: Keybind,
+    #[serde(default = "default_merge")]
+    pub merge: Keybind,
+    #[serde(default = "default_push")]
+    pub push: Keybind,
+    #[serde(default = "default_fetch")]
+    pub fetch: Keybind,
+    #[serde(default = "default_summary")]
+    pub summary: Keybind,
+    #[serde(default = "default_toggle_diff")]
+    pub toggle_diff: Keybind,
+    #[serde(default = "default_toggle_logs")]
+    pub toggle_logs: Keybind,
+    #[serde(default = "default_open_mr")]
+    pub open_mr: Keybind,
+    #[serde(default = "default_asana_assign")]
+    pub asana_assign: Keybind,
+    #[serde(default = "default_asana_open")]
+    pub asana_open: Keybind,
+    #[serde(default = "default_refresh_all")]
+    pub refresh_all: Keybind,
+    #[serde(default = "default_toggle_help")]
+    pub toggle_help: Keybind,
+    #[serde(default = "default_toggle_settings")]
+    pub toggle_settings: Keybind,
+    #[serde(default = "default_quit")]
+    pub quit: Keybind,
+    #[serde(default = "default_open_editor")]
+    pub open_editor: Keybind,
+}
+
+fn default_nav_down() -> Keybind {
+    Keybind::new("j")
+}
+fn default_nav_up() -> Keybind {
+    Keybind::new("k")
+}
+fn default_nav_first() -> Keybind {
+    Keybind::new("g")
+}
+fn default_nav_last() -> Keybind {
+    Keybind::with_modifiers("g", vec!["Shift".to_string()])
+}
+fn default_new_agent() -> Keybind {
+    Keybind::new("n")
+}
+fn default_delete_agent() -> Keybind {
+    Keybind::new("d")
+}
+fn default_attach() -> Keybind {
+    Keybind::new("Enter")
+}
+fn default_set_note() -> Keybind {
+    Keybind::with_modifiers("n", vec!["Shift".to_string()])
+}
+fn default_yank() -> Keybind {
+    Keybind::new("y")
+}
+fn default_pause() -> Keybind {
+    Keybind::new("c")
+}
+fn default_resume() -> Keybind {
+    Keybind::new("r")
+}
+fn default_merge() -> Keybind {
+    Keybind::new("m")
+}
+fn default_push() -> Keybind {
+    Keybind::new("p")
+}
+fn default_fetch() -> Keybind {
+    Keybind::new("f")
+}
+fn default_summary() -> Keybind {
+    Keybind::new("s")
+}
+fn default_toggle_diff() -> Keybind {
+    Keybind::new("/")
+}
+fn default_toggle_logs() -> Keybind {
+    Keybind::with_modifiers("l", vec!["Shift".to_string()])
+}
+fn default_open_mr() -> Keybind {
+    Keybind::new("o")
+}
+fn default_asana_assign() -> Keybind {
+    Keybind::new("a")
+}
+fn default_asana_open() -> Keybind {
+    Keybind::with_modifiers("a", vec!["Shift".to_string()])
+}
+fn default_refresh_all() -> Keybind {
+    Keybind::with_modifiers("r", vec!["Shift".to_string()])
+}
+fn default_toggle_help() -> Keybind {
+    Keybind::new("?")
+}
+fn default_toggle_settings() -> Keybind {
+    Keybind::with_modifiers("s", vec!["Shift".to_string()])
+}
+fn default_quit() -> Keybind {
+    Keybind::new("q")
+}
+fn default_open_editor() -> Keybind {
+    Keybind::new("e")
+}
+
+impl Default for Keybinds {
+    fn default() -> Self {
+        Self {
+            nav_down: default_nav_down(),
+            nav_up: default_nav_up(),
+            nav_first: default_nav_first(),
+            nav_last: default_nav_last(),
+            new_agent: default_new_agent(),
+            delete_agent: default_delete_agent(),
+            attach: default_attach(),
+            set_note: default_set_note(),
+            yank: default_yank(),
+            pause: default_pause(),
+            resume: default_resume(),
+            merge: default_merge(),
+            push: default_push(),
+            fetch: default_fetch(),
+            summary: default_summary(),
+            toggle_diff: default_toggle_diff(),
+            toggle_logs: default_toggle_logs(),
+            open_mr: default_open_mr(),
+            asana_assign: default_asana_assign(),
+            asana_open: default_asana_open(),
+            refresh_all: default_refresh_all(),
+            toggle_help: default_toggle_help(),
+            toggle_settings: default_toggle_settings(),
+            quit: default_quit(),
+            open_editor: default_open_editor(),
+        }
+    }
+}
+
+impl Keybinds {
+    pub fn all_keybinds(&self) -> Vec<(&'static str, &Keybind)> {
+        vec![
+            ("nav_down", &self.nav_down),
+            ("nav_up", &self.nav_up),
+            ("nav_first", &self.nav_first),
+            ("nav_last", &self.nav_last),
+            ("new_agent", &self.new_agent),
+            ("delete_agent", &self.delete_agent),
+            ("attach", &self.attach),
+            ("set_note", &self.set_note),
+            ("yank", &self.yank),
+            ("pause", &self.pause),
+            ("resume", &self.resume),
+            ("merge", &self.merge),
+            ("push", &self.push),
+            ("fetch", &self.fetch),
+            ("summary", &self.summary),
+            ("toggle_diff", &self.toggle_diff),
+            ("toggle_logs", &self.toggle_logs),
+            ("open_mr", &self.open_mr),
+            ("asana_assign", &self.asana_assign),
+            ("asana_open", &self.asana_open),
+            ("refresh_all", &self.refresh_all),
+            ("toggle_help", &self.toggle_help),
+            ("toggle_settings", &self.toggle_settings),
+            ("quit", &self.quit),
+            ("open_editor", &self.open_editor),
+        ]
+    }
+
+    pub fn find_conflicts(&self) -> Vec<(String, String)> {
+        let keybinds = self.all_keybinds();
+        let mut conflicts = Vec::new();
+        for i in 0..keybinds.len() {
+            for j in (i + 1)..keybinds.len() {
+                let (name1, kb1) = keybinds[i];
+                let (name2, kb2) = keybinds[j];
+                if kb1 == kb2 {
+                    conflicts.push((name1.to_string(), name2.to_string()));
+                }
+            }
+        }
+        conflicts
     }
 }
 

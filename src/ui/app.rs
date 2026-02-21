@@ -124,7 +124,7 @@ impl<'a> AppWidget<'a> {
         self.render_footer(frame, chunks[chunk_idx]);
 
         if self.state.show_help {
-            HelpOverlay::render(frame, size);
+            HelpOverlay::new(&self.state.config.keybinds).render(frame, size);
         }
 
         if self.state.settings.active {
@@ -551,6 +551,6 @@ impl<'a> AppWidget<'a> {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        StatusBarWidget::new(None, false).render(frame, area);
+        StatusBarWidget::new(None, false, &self.state.config.keybinds).render(frame, area);
     }
 }
