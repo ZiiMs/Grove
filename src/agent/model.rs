@@ -43,6 +43,14 @@ impl ProjectMgmtTaskStatus {
         }
     }
 
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            ProjectMgmtTaskStatus::Asana(s) => s.name(),
+            ProjectMgmtTaskStatus::Notion(s) => s.name(),
+            ProjectMgmtTaskStatus::None => None,
+        }
+    }
+
     pub fn url(&self) -> Option<&str> {
         match self {
             ProjectMgmtTaskStatus::Asana(s) => s.url(),

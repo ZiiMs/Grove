@@ -17,7 +17,7 @@ use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
     DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GlobalSetupWizard, HelpOverlay,
     LoadingOverlay, OutputViewWidget, ProjectSetupWizard, SettingsModal, StatusBarWidget,
-    StatusDropdown, SystemMetricsWidget, TaskListModal, ToastWidget,
+    StatusDropdown, SystemMetricsWidget, TaskListModal, TaskReassignmentWarningModal, ToastWidget,
 };
 
 #[derive(Clone)]
@@ -160,7 +160,9 @@ impl<'a> AppWidget<'a> {
             LoadingOverlay::render(frame, message, self.state.animation_frame);
         }
 
-        if let Some(warning) = &self.state.devserver_warning {
+        if let Some(warning) = &self.state.task_reassignment_warning {
+            TaskReassignmentWarningModal::new(warning, &self.state.agents).render(frame);
+        } else if let Some(warning) = &self.state.devserver_warning {
             DevServerWarningModal::new(warning).render(frame);
         } else if let Some(mode) = &self.state.input_mode {
             self.render_modal(frame, mode, size);

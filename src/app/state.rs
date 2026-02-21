@@ -25,6 +25,15 @@ pub struct DevServerWarning {
     pub running_servers: Vec<(String, Option<u16>)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TaskReassignmentWarning {
+    pub target_agent_id: Uuid,
+    pub task_id: String,
+    pub task_name: String,
+    pub agent_current_task: Option<(String, String)>,
+    pub task_current_agent: Option<(Uuid, String)>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     General,
@@ -407,6 +416,7 @@ pub struct AppState {
     pub preview_tab: PreviewTab,
     pub devserver_scroll: usize,
     pub devserver_warning: Option<DevServerWarning>,
+    pub task_reassignment_warning: Option<TaskReassignmentWarning>,
     pub task_list: Vec<TaskListItem>,
     pub task_list_loading: bool,
     pub task_list_selected: usize,
@@ -551,6 +561,7 @@ impl AppState {
             preview_tab: PreviewTab::default(),
             devserver_scroll: 0,
             devserver_warning: None,
+            task_reassignment_warning: None,
             task_list: Vec::new(),
             task_list_loading: false,
             task_list_selected: 0,

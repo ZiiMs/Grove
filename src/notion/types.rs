@@ -56,6 +56,16 @@ impl NotionTaskStatus {
         }
     }
 
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            NotionTaskStatus::None => None,
+            NotionTaskStatus::NotStarted { name, .. }
+            | NotionTaskStatus::InProgress { name, .. }
+            | NotionTaskStatus::Completed { name, .. } => Some(name),
+            NotionTaskStatus::Error { message, .. } => Some(message),
+        }
+    }
+
     pub fn is_linked(&self) -> bool {
         !matches!(self, NotionTaskStatus::None)
     }

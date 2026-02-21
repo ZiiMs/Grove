@@ -530,12 +530,12 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
-            
+
             let devserver_statuses = devserver_manager
                 .try_lock()
                 .map(|m| m.all_statuses())
                 .unwrap_or_default();
-            
+
             AppWidget::new(&state)
                 .with_devserver(devserver_info)
                 .with_devserver_statuses(devserver_statuses)
@@ -628,6 +628,15 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Handle settings mode first
     if state.settings.active {
         return handle_settings_key(key, state);
+    }
+
+    // Handle task reassignment warning modal
+    if state.task_reassignment_warning.is_some() {
+        return match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => Some(Action::ConfirmTaskReassignment),
+            KeyCode::Char('n') | KeyCode::Esc => Some(Action::DismissTaskReassignmentWarning),
+            _ => None,
+        };
     }
 
     // Handle dev server warning modal
@@ -2701,35 +2710,40 @@ async fn process_action(
         Action::AssignSelectedTaskToAgent => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
                 if let Some(agent_id) = state.selected_agent_id() {
-                    let already_has_task = state
-                        .agents
-                        .get(&agent_id)
-                        .map(|a| a.pm_task_status.is_linked())
-                        .unwrap_or(false);
-
-                    if already_has_task {
-                        state.show_warning("Agent already has a task assigned");
-                    } else {
-                        let task_id_normalized = task.id.replace('-', "").to_lowercase();
-                        let old_agent_info = state.agents.values().find_map(|a| {
-                            let agent_task_id = a
-                                .pm_task_status
-                                .id()
-                                .map(|id| id.replace('-', "").to_lowercase());
-                            if agent_task_id.as_deref() == Some(&task_id_normalized) {
-                                Some((a.id, a.name.clone()))
-                            } else {
-                                None
-                            }
-                        });
-
-                        if let Some((old_id, old_name)) = old_agent_info {
-                            if let Some(old_agent) = state.agents.get_mut(&old_id) {
-                                old_agent.pm_task_status = ProjectMgmtTaskStatus::None;
-                            }
-                            state.log_info(format!("Removed task from agent '{}'", old_name));
+                    let agent_current_task = state.agents.get(&agent_id).and_then(|a| {
+                        if a.pm_task_status.is_linked() {
+                            Some((
+                                a.pm_task_status.id().unwrap_or_default().to_string(),
+                                a.pm_task_status.name().unwrap_or_default().to_string(),
+                            ))
+                        } else {
+                            None
                         }
+                    });
 
+                    let task_id_normalized = task.id.replace('-', "").to_lowercase();
+                    let task_current_agent = state.agents.values().find_map(|a| {
+                        let agent_task_id = a
+                            .pm_task_status
+                            .id()
+                            .map(|id| id.replace('-', "").to_lowercase());
+                        if agent_task_id.as_deref() == Some(&task_id_normalized) {
+                            Some((a.id, a.name.clone()))
+                        } else {
+                            None
+                        }
+                    });
+
+                    if agent_current_task.is_some() || task_current_agent.is_some() {
+                        state.task_reassignment_warning =
+                            Some(flock::app::TaskReassignmentWarning {
+                                target_agent_id: agent_id,
+                                task_id: task.id.clone(),
+                                task_name: task.name.clone(),
+                                agent_current_task,
+                                task_current_agent,
+                            });
+                    } else {
                         state.exit_input_mode();
                         action_tx.send(Action::AssignProjectTask {
                             id: agent_id,
@@ -2740,6 +2754,27 @@ async fn process_action(
                     state.show_warning("No agent selected");
                 }
             }
+        }
+
+        Action::ConfirmTaskReassignment => {
+            if let Some(warning) = state.task_reassignment_warning.take() {
+                if let Some((old_agent_id, old_agent_name)) = warning.task_current_agent {
+                    if let Some(old_agent) = state.agents.get_mut(&old_agent_id) {
+                        old_agent.pm_task_status = ProjectMgmtTaskStatus::None;
+                    }
+                    state.log_info(format!("Removed task from agent '{}'", old_agent_name));
+                }
+
+                state.exit_input_mode();
+                action_tx.send(Action::AssignProjectTask {
+                    id: warning.target_agent_id,
+                    url_or_id: warning.task_id,
+                })?;
+            }
+        }
+
+        Action::DismissTaskReassignmentWarning => {
+            state.task_reassignment_warning = None;
         }
 
         // UI state
@@ -2843,11 +2878,57 @@ async fn process_action(
                     }
                     InputMode::AssignProjectTask => {
                         if !input.is_empty() {
-                            if let Some(id) = state.selected_agent_id() {
-                                action_tx.send(Action::AssignProjectTask {
-                                    id,
-                                    url_or_id: input,
-                                })?;
+                            if let Some(agent_id) = state.selected_agent_id() {
+                                let agent_current_task =
+                                    state.agents.get(&agent_id).and_then(|a| {
+                                        if a.pm_task_status.is_linked() {
+                                            Some((
+                                                a.pm_task_status
+                                                    .id()
+                                                    .unwrap_or_default()
+                                                    .to_string(),
+                                                a.pm_task_status
+                                                    .name()
+                                                    .unwrap_or_default()
+                                                    .to_string(),
+                                            ))
+                                        } else {
+                                            None
+                                        }
+                                    });
+
+                                let input_normalized = input.replace('-', "").to_lowercase();
+                                let parts: Vec<&str> = input_normalized.split('/').collect();
+                                let task_id_part = parts.last().unwrap_or(&"").to_string();
+
+                                let task_current_agent = state.agents.values().find_map(|a| {
+                                    let agent_task_id = a
+                                        .pm_task_status
+                                        .id()
+                                        .map(|id| id.replace('-', "").to_lowercase());
+                                    if agent_task_id.as_deref() == Some(&task_id_part) {
+                                        Some((a.id, a.name.clone()))
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                                if agent_current_task.is_some() || task_current_agent.is_some() {
+                                    state.task_reassignment_warning =
+                                        Some(flock::app::TaskReassignmentWarning {
+                                            target_agent_id: agent_id,
+                                            task_id: input.clone(),
+                                            task_name: input.clone(),
+                                            agent_current_task,
+                                            task_current_agent,
+                                        });
+                                } else {
+                                    state.exit_input_mode();
+                                    action_tx.send(Action::AssignProjectTask {
+                                        id: agent_id,
+                                        url_or_id: input,
+                                    })?;
+                                }
                             }
                         }
                     }

@@ -58,7 +58,16 @@ impl AsanaTaskStatus {
         }
     }
 
-    /// Whether an Asana task is linked.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            AsanaTaskStatus::None => None,
+            AsanaTaskStatus::NotStarted { name, .. }
+            | AsanaTaskStatus::InProgress { name, .. }
+            | AsanaTaskStatus::Completed { name, .. } => Some(name),
+            AsanaTaskStatus::Error { message, .. } => Some(message),
+        }
+    }
+
     pub fn is_linked(&self) -> bool {
         !matches!(self, AsanaTaskStatus::None)
     }

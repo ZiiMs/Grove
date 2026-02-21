@@ -147,6 +147,9 @@ pub enum Action {
     AssignSelectedTaskToAgent,
     ToggleTaskExpand,
 
+    ConfirmTaskReassignment,
+    DismissTaskReassignmentWarning,
+
     ToggleDiffView,
     ToggleHelp,
     ToggleLogs,
