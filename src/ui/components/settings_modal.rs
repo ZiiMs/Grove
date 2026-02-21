@@ -639,7 +639,7 @@ impl<'a> SettingsModal<'a> {
         } else if self.state.editing_text {
             "[Enter] Save  [Esc] Cancel"
         } else if self.state.is_dropdown_open() {
-            "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
+            "[↑/k][↓/j] Navigate  [Enter] Select  [Esc] Cancel"
         } else {
             let field = self.state.current_field();
             let is_toggle = matches!(
@@ -652,11 +652,11 @@ impl<'a> SettingsModal<'a> {
             );
             let is_keybind = field.is_keybind_field();
             if is_keybind {
-                "[Tab] Switch tab  [Enter] Edit keybind  [↑/↓] Navigate  [Esc] Close  [q] Save"
+                "[Tab] Switch tab  [Enter] Edit keybind  [↑/k][↓/j] Navigate  [Esc] Close  [c] Save"
             } else if is_toggle {
-                "[Tab] Switch tab  [Enter] Toggle  [↑/↓] Navigate  [Esc] Close"
+                "[Tab] Switch tab  [Enter] Toggle  [↑/k][↓/j] Navigate  [Esc] Close"
             } else {
-                "[Tab] Switch tab  [Enter] Edit  [↑/↓] Navigate  [Esc] Close  [q] Save"
+                "[Tab] Switch tab  [Enter] Edit  [↑/k][↓/j] Navigate  [Esc] Close  [c] Save"
             }
         };
 
