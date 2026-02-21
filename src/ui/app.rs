@@ -8,6 +8,8 @@ use ratatui::{
     Frame,
 };
 
+use uuid::Uuid;
+
 use crate::app::{AppState, InputMode, LogLevel, PreviewTab};
 use crate::devserver::DevServerStatus;
 
@@ -39,6 +41,7 @@ const BANNER: &[&str] = &[
 pub struct AppWidget<'a> {
     state: &'a AppState,
     devserver_info: Option<DevServerRenderInfo>,
+    devserver_statuses: HashMap<Uuid, DevServerStatus>,
 }
 
 impl<'a> AppWidget<'a> {
@@ -46,11 +49,17 @@ impl<'a> AppWidget<'a> {
         Self {
             state,
             devserver_info: None,
+            devserver_statuses: HashMap::new(),
         }
     }
 
     pub fn with_devserver(mut self, info: Option<DevServerRenderInfo>) -> Self {
         self.devserver_info = info;
+        self
+    }
+
+    pub fn with_devserver_statuses(mut self, statuses: HashMap<Uuid, DevServerStatus>) -> Self {
+        self.devserver_statuses = statuses;
         self
     }
 
@@ -359,6 +368,7 @@ impl<'a> AppWidget<'a> {
                 self.state.selected_index,
                 self.state.animation_frame,
                 self.state.settings.repo_config.git.provider,
+                &self.devserver_statuses,
             )
             .with_count(self.state.agents.len())
             .render(frame, area);

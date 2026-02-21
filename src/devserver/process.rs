@@ -1,13 +1,16 @@
 use anyhow::{Context, Result};
 use std::collections::VecDeque;
 use std::path::Path;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Child;
 use uuid::Uuid;
 
 use crate::app::{Action, DevServerConfig};
+use crate::tmux::TmuxSession;
 
 const MAX_LOG_LINES: usize = 5000;
+
+pub fn tmux_session_name(agent_id: Uuid) -> String {
+    format!("flock-dev-{}", &agent_id.to_string()[..8])
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DevServerStatus {
@@ -54,7 +57,7 @@ impl DevServerStatus {
 pub struct DevServer {
     status: DevServerStatus,
     logs: VecDeque<String>,
-    process: Option<Child>,
+    tmux_session: Option<String>,
     agent_name: String,
 }
 
@@ -63,7 +66,7 @@ impl DevServer {
         Self {
             status: DevServerStatus::Stopped,
             logs: VecDeque::with_capacity(MAX_LOG_LINES),
-            process: None,
+            tmux_session: None,
             agent_name: String::new(),
         }
     }
@@ -99,12 +102,20 @@ impl DevServer {
             self.append_log(format!("$ {}", cmd));
         }
 
-        let child = self.spawn_process(command, &working_dir)?;
-        let pid = child.id().context("Failed to get process ID")?;
+        let session_name = tmux_session_name(agent_id);
+        let session = TmuxSession::new(&session_name);
 
-        self.spawn_log_streamer(child, agent_id, action_tx.clone());
-        self.process = None;
+        if session.exists() {
+            session.kill()?;
+        }
 
+        session
+            .create(&working_dir.to_string_lossy(), command)
+            .context("Failed to create tmux session for dev server")?;
+
+        let pid = self.get_tmux_session_pid(&session_name)?;
+
+        self.tmux_session = Some(session_name.clone());
         self.status = DevServerStatus::Running {
             pid,
             port: config.port,
@@ -112,6 +123,8 @@ impl DevServer {
 
         self.append_log(format!("$ {}", command));
         self.append_log(format!("Dev server started (PID: {})", pid));
+
+        self.spawn_log_poller(agent_id, session_name, action_tx);
 
         Ok(())
     }
@@ -121,18 +134,18 @@ impl DevServer {
             return Ok(());
         }
 
-        let pid = match &self.status {
-            DevServerStatus::Running { pid, .. } => *pid,
-            _ => return Ok(()),
-        };
-
         self.status = DevServerStatus::Stopping;
         self.append_log("Stopping dev server...".to_string());
 
-        self.kill_process_tree(pid)?;
+        if let Some(session_name) = &self.tmux_session {
+            let session = TmuxSession::new(session_name);
+            if session.exists() {
+                session.kill()?;
+            }
+        }
 
+        self.tmux_session = None;
         self.status = DevServerStatus::Stopped;
-        self.process = None;
         self.append_log("Dev server stopped".to_string());
 
         Ok(())
@@ -195,74 +208,82 @@ impl DevServer {
         Ok(())
     }
 
-    fn spawn_process(&mut self, command: &str, working_dir: &Path) -> Result<Child> {
-        use std::process::Stdio;
-        use tokio::process::Command;
+    fn get_tmux_session_pid(&self, session_name: &str) -> Result<u32> {
+        let output = std::process::Command::new("tmux")
+            .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])
+            .output()
+            .context("Failed to get tmux pane PID")?;
 
-        let child = Command::new("/bin/sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(working_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn()
-            .context("Failed to spawn dev server")?;
+        if !output.status.success() {
+            anyhow::bail!("Failed to list panes for session {}", session_name);
+        }
 
-        Ok(child)
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let pid = stdout
+            .lines()
+            .next()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .context("Failed to parse pane PID")?;
+
+        Ok(pid)
     }
 
-    fn kill_process_tree(&self, pid: u32) -> Result<()> {
-        let _ = std::process::Command::new("kill")
-            .arg(format!("-{}", pid))
-            .output();
-        Ok(())
+    pub fn tmux_session(&self) -> Option<&str> {
+        self.tmux_session.as_deref()
     }
 
-    fn spawn_log_streamer(
+    fn spawn_log_poller(
         &self,
-        mut child: Child,
         agent_id: Uuid,
+        session_name: String,
         action_tx: tokio::sync::mpsc::UnboundedSender<Action>,
     ) {
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        if let Some(stdout) = stdout {
-            let tx = action_tx.clone();
-            let id = agent_id;
-            tokio::spawn(async move {
-                let reader = BufReader::new(stdout).lines();
-                let mut lines = reader;
-                while let Some(line) = lines.next_line().await.ok().flatten() {
-                    let _ = tx.send(Action::AppendDevServerLog { agent_id: id, line });
-                }
-            });
-        }
-
-        if let Some(stderr) = stderr {
-            let id = agent_id;
-            let tx = action_tx.clone();
-            tokio::spawn(async move {
-                let reader = BufReader::new(stderr).lines();
-                let mut lines = reader;
-                while let Some(line) = lines.next_line().await.ok().flatten() {
-                    let _ = tx.send(Action::AppendDevServerLog {
-                        agent_id: id,
-                        line: format!("[stderr] {}", line),
-                    });
-                }
-            });
-        }
-
-        let tx = action_tx.clone();
+        let tx = action_tx;
         let id = agent_id;
+        let session = session_name;
+
         tokio::spawn(async move {
-            let _ = child.wait().await;
-            let _ = tx.send(Action::UpdateDevServerStatus {
-                agent_id: id,
-                status: DevServerStatus::Stopped,
-            });
+            use tokio::time::{sleep, Duration};
+
+            let mut last_content = String::new();
+
+            loop {
+                sleep(Duration::from_millis(500)).await;
+
+                let tmux = TmuxSession::new(&session);
+                if !tmux.exists() {
+                    let _ = tx.send(Action::UpdateDevServerStatus {
+                        agent_id: id,
+                        status: DevServerStatus::Stopped,
+                    });
+                    break;
+                }
+
+                match tmux.capture_pane(100) {
+                    Ok(content) => {
+                        if content != last_content {
+                            let new_lines: Vec<&str> = content
+                                .lines()
+                                .skip_while(|line| last_content.lines().any(|l| l == *line))
+                                .collect();
+
+                            for line in new_lines {
+                                if !line.trim().is_empty() {
+                                    let _ = tx.send(Action::AppendDevServerLog {
+                                        agent_id: id,
+                                        line: line.to_string(),
+                                    });
+                                }
+                            }
+
+                            last_content = content;
+                        }
+                    }
+                    Err(_) => {
+                        continue;
+                    }
+                }
+            }
         });
     }
 }

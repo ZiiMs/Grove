@@ -430,8 +430,53 @@ async fn main() -> Result<()> {
     let tick_interval = Duration::from_millis(100);
     let mut last_tick = std::time::Instant::now();
     let mut pending_attach: Option<Uuid> = None;
+    let mut pending_devserver_attach: Option<Uuid> = None;
 
     loop {
+        // Handle pending dev server attach (outside of async context)
+        if let Some(id) = pending_devserver_attach.take() {
+            let session_name = devserver_manager
+                .try_lock()
+                .ok()
+                .and_then(|m| m.get_tmux_session(id));
+
+            if let Some(session_name) = session_name {
+                state.log_info(format!(
+                    "Attaching to dev server session '{}'",
+                    session_name
+                ));
+
+                // Save session before attaching
+                let agents: Vec<Agent> = state.agents.values().cloned().collect();
+                let _ = save_session(&storage, &state.repo_path, &agents, state.selected_index);
+
+                // Leave TUI mode
+                disable_raw_mode()?;
+                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+
+                // Attach to tmux (blocks until detach)
+                let tmux_session = flock::tmux::TmuxSession::new(&session_name);
+                let attach_result = tmux_session.attach();
+
+                // Restore TUI mode
+                enable_raw_mode()?;
+                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                terminal.clear()?;
+
+                // Drain any stale input events
+                while poll(Duration::from_millis(1))? {
+                    let _ = event::read();
+                }
+
+                state.log_info("Returned from dev server session");
+
+                if let Err(e) = attach_result {
+                    state.log_error(format!("Attach error: {}", e));
+                }
+            }
+            continue;
+        }
+
         // Handle pending attach (outside of async context)
         if let Some(id) = pending_attach.take() {
             // Clone agent data we need before borrowing state mutably
@@ -485,8 +530,15 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
+            
+            let devserver_statuses = devserver_manager
+                .try_lock()
+                .map(|m| m.all_statuses())
+                .unwrap_or_default();
+            
             AppWidget::new(&state)
                 .with_devserver(devserver_info)
+                .with_devserver_statuses(devserver_statuses)
                 .render(f);
         })?;
 
@@ -495,11 +547,17 @@ async fn main() -> Result<()> {
             if let Event::Key(key) = event::read()? {
                 if let Some(action) = handle_key_event(key, &state) {
                     // Check if it's an attach action
-                    if let Action::AttachToAgent { id } = action {
-                        pending_attach = Some(id);
-                        continue;
+                    match action {
+                        Action::AttachToAgent { id } => {
+                            pending_attach = Some(id);
+                            continue;
+                        }
+                        Action::AttachToDevServer { agent_id } => {
+                            pending_devserver_attach = Some(agent_id);
+                            continue;
+                        }
+                        _ => action_tx.send(action)?,
                     }
-                    action_tx.send(action)?;
                 }
             }
         }
@@ -744,9 +802,14 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                 Some(Action::EnterInputMode(InputMode::ConfirmDelete))
             }
         }
-        KeyCode::Enter => state
-            .selected_agent_id()
-            .map(|id| Action::AttachToAgent { id }),
+        KeyCode::Enter => match state.preview_tab {
+            PreviewTab::Preview => state
+                .selected_agent_id()
+                .map(|id| Action::AttachToAgent { id }),
+            PreviewTab::DevServer => state
+                .selected_agent_id()
+                .map(|id| Action::AttachToDevServer { agent_id: id }),
+        },
 
         // Pause/checkout (only when not paused)
         KeyCode::Char('c') if !is_paused => state
@@ -1189,6 +1252,10 @@ async fn process_action(
         }
 
         Action::AttachToAgent { .. } => {
+            // Handled in main loop for terminal access
+        }
+
+        Action::AttachToDevServer { .. } => {
             // Handled in main loop for terminal access
         }
 
@@ -3991,7 +4058,15 @@ async fn process_action(
             if let Some(agent) = state.selected_agent() {
                 let agent_id = agent.id;
                 if let Ok(manager) = devserver_manager.try_lock() {
-                    if manager.has_running_server() {
+                    let current_running = manager
+                        .get(agent_id)
+                        .map(|s| s.status().is_running())
+                        .unwrap_or(false);
+
+                    if current_running {
+                        drop(manager);
+                        action_tx.send(Action::StopDevServer)?;
+                    } else if manager.has_running_server() {
                         let running = manager.running_servers();
                         state.devserver_warning = Some(flock::app::DevServerWarning {
                             agent_id,
