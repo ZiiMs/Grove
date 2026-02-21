@@ -138,6 +138,7 @@ pub enum Action {
     },
 
     FetchTaskList,
+    RefreshTaskList,
     TaskListFetched {
         tasks: Vec<TaskListItem>,
     },

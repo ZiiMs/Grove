@@ -412,6 +412,7 @@ async fn main() -> Result<()> {
     let asana_client = Arc::new(OptionalAsanaClient::new(
         Config::asana_token().as_deref(),
         asana_project_gid,
+        config.asana.cache_ttl_secs,
     ));
 
     let notion_client = Arc::new(OptionalNotionClient::new(
@@ -1113,6 +1114,7 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
             KeyCode::Char('a') => Some(Action::AssignSelectedTaskToAgent),
             KeyCode::Char('s') => Some(Action::ToggleSubtaskStatus),
+            KeyCode::Char('r') => Some(Action::RefreshTaskList),
             KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
             KeyCode::Left | KeyCode::Right => Some(Action::ToggleTaskExpand),
             KeyCode::Esc => Some(Action::ExitInputMode),
@@ -2823,6 +2825,15 @@ async fn process_action(
             }
 
             action_tx.send(Action::DeleteAgent { id })?;
+        }
+
+        Action::RefreshTaskList => {
+            match pm_provider {
+                ProjectMgmtProvider::Asana => asana_client.invalidate_cache().await,
+                ProjectMgmtProvider::Notion => notion_client.invalidate_cache().await,
+            }
+            state.task_list_loading = true;
+            let _ = action_tx.send(Action::FetchTaskList);
         }
 
         Action::FetchTaskList => {

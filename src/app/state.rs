@@ -151,6 +151,7 @@ pub enum SettingsField {
     KbQuit,
     KbOpenEditor,
     KbShowTasks,
+    KbRefreshTaskList,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,7 +267,8 @@ impl SettingsField {
             | SettingsField::KbToggleSettings
             | SettingsField::KbQuit
             | SettingsField::KbOpenEditor
-            | SettingsField::KbShowTasks => SettingsTab::Keybinds,
+            | SettingsField::KbShowTasks
+            | SettingsField::KbRefreshTaskList => SettingsTab::Keybinds,
         }
     }
 
@@ -306,6 +308,7 @@ impl SettingsField {
                 | SettingsField::KbQuit
                 | SettingsField::KbOpenEditor
                 | SettingsField::KbShowTasks
+                | SettingsField::KbRefreshTaskList
         )
     }
 
@@ -337,6 +340,7 @@ impl SettingsField {
             SettingsField::KbQuit => Some("Quit"),
             SettingsField::KbOpenEditor => Some("Open in Editor"),
             SettingsField::KbShowTasks => Some("Show Tasks"),
+            SettingsField::KbRefreshTaskList => Some("Refresh Task List"),
             _ => None,
         }
     }
@@ -451,6 +455,7 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::KbAsanaOpen),
                 SettingsItem::Field(SettingsField::KbOpenEditor),
                 SettingsItem::Field(SettingsField::KbShowTasks),
+                SettingsItem::Field(SettingsField::KbRefreshTaskList),
                 SettingsItem::Category(SettingsCategory::KeybindOther),
                 SettingsItem::Field(SettingsField::KbRefreshAll),
                 SettingsItem::Field(SettingsField::KbToggleHelp),
@@ -611,6 +616,7 @@ impl SettingsState {
             SettingsField::KbQuit => Some(&self.pending_keybinds.quit),
             SettingsField::KbOpenEditor => Some(&self.pending_keybinds.open_editor),
             SettingsField::KbShowTasks => Some(&self.pending_keybinds.show_tasks),
+            SettingsField::KbRefreshTaskList => Some(&self.pending_keybinds.refresh_task_list),
             _ => None,
         }
     }
@@ -643,6 +649,7 @@ impl SettingsState {
             SettingsField::KbQuit => self.pending_keybinds.quit = keybind,
             SettingsField::KbOpenEditor => self.pending_keybinds.open_editor = keybind,
             SettingsField::KbShowTasks => self.pending_keybinds.show_tasks = keybind,
+            SettingsField::KbRefreshTaskList => self.pending_keybinds.refresh_task_list = keybind,
             _ => {}
         }
         self.keybind_conflicts = self.pending_keybinds.find_conflicts();
