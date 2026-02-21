@@ -106,6 +106,7 @@ impl<'a> HelpOverlay<'a> {
                 "  {:8} Open MR/PR in browser",
                 kb.open_mr.display_short()
             )),
+            Line::from("  e        Open worktree in editor"),
             Line::from(""),
             Line::from(Span::styled(
                 "Project Mgmt",
