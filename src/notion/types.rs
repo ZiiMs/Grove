@@ -79,6 +79,7 @@ pub struct NotionPageData {
     pub status_name: Option<String>,
     pub is_completed: bool,
     pub parent_page_id: Option<String>,
+    pub related_task_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,6 +114,8 @@ pub struct NotionProperties {
     pub status: Option<NotionStatusPropertyValue>,
     #[serde(rename = "Task")]
     pub task: Option<NotionTitleProperty>,
+    #[serde(rename = "Tasks")]
+    pub tasks_relation: Option<NotionRelationPropertyValue>,
     #[serde(flatten)]
     pub other: std::collections::HashMap<String, serde_json::Value>,
 }
@@ -156,6 +159,16 @@ pub struct NotionTitleProperty {
 #[derive(Debug, Deserialize)]
 pub struct NotionStatusPropertyValue {
     pub status: Option<NotionStatusOption>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NotionRelationPropertyValue {
+    pub relation: Vec<NotionRelationItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NotionRelationItem {
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -266,12 +279,6 @@ pub struct NotionQueryResponse {
 
 impl From<NotionPageResponse> for NotionPageData {
     fn from(page: NotionPageResponse) -> Self {
-        tracing::debug!(
-            "Parsing NotionPageResponse: id={}, properties keys={:?}",
-            page.id,
-            page.properties.other.keys().collect::<Vec<_>>()
-        );
-
         let name = page.properties.get_title().unwrap_or_else(|| {
             tracing::warn!(
                 "No title found for page {}, properties: {:?}",
@@ -281,7 +288,7 @@ impl From<NotionPageResponse> for NotionPageData {
             "Untitled".to_string()
         });
 
-        tracing::debug!("Parsed page '{}' with name: {}", page.id, name);
+        let parent_page_id = page.parent.as_ref().and_then(|p| p.page_id.clone());
 
         let status = page.properties.status.as_ref();
         let status_id = status.and_then(|s| s.status.as_ref().map(|opt| opt.id.clone()));
@@ -294,6 +301,13 @@ impl From<NotionPageResponse> for NotionPageData {
             })
             .unwrap_or(false);
 
+        let related_task_ids: Vec<String> = page
+            .properties
+            .tasks_relation
+            .as_ref()
+            .map(|r| r.relation.iter().map(|i| i.id.clone()).collect())
+            .unwrap_or_default();
+
         NotionPageData {
             id: page.id,
             name,
@@ -301,7 +315,8 @@ impl From<NotionPageResponse> for NotionPageData {
             status_id,
             status_name,
             is_completed,
-            parent_page_id: page.parent.as_ref().and_then(|p| p.page_id.clone()),
+            parent_page_id,
+            related_task_ids,
         }
     }
 }

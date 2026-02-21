@@ -1,6 +1,5 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use super::types::{
@@ -158,97 +157,53 @@ impl NotionClient {
             .collect())
     }
 
-    /// Get child pages of a specific page by querying its block children.
-    pub async fn get_child_pages(&self, parent_page_id: &str) -> Result<Vec<NotionPageData>> {
-        let url = format!(
-            "{}/blocks/{}/children?page_size=100",
-            Self::BASE_URL,
-            clean_page_id(parent_page_id)
-        );
-
-        tracing::debug!("Notion get_child_pages: url={}", url);
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to fetch Notion block children")?;
-
-        let status = response.status();
-        let response_text = response.text().await.unwrap_or_default();
-
-        tracing::debug!(
-            "Notion get_child_pages response: status={}, body={}",
-            status,
-            response_text
-        );
-
-        if !status.is_success() {
-            tracing::error!("Notion API error: {} - {}", status, response_text);
-            bail!("Notion API error: {} - {}", status, response_text);
-        }
-
-        #[derive(Debug, Deserialize)]
-        struct NotionBlockChildrenResponse {
-            results: Vec<serde_json::Value>,
-        }
-
-        let children_response: NotionBlockChildrenResponse =
-            serde_json::from_str(&response_text)
-                .context("Failed to parse Notion block children response")?;
-
-        let mut child_pages = Vec::new();
-        for block in children_response.results {
-            if let Some(obj) = block.as_object() {
-                if obj.get("type").and_then(|v| v.as_str()) == Some("child_page") {
-                    if let Some(child_page) = obj.get("child_page") {
-                        if let Some(child_id) = child_page.get("id").and_then(|v| v.as_str()) {
-                            match self.get_page(child_id).await {
-                                Ok(page_data) => child_pages.push(page_data),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Failed to fetch child page {}: {}",
-                                        child_id,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        tracing::debug!(
-            "Notion get_child_pages: found {} child pages",
-            child_pages.len()
-        );
-
-        Ok(child_pages)
-    }
-
-    /// Query database and fetch all pages including child pages.
+    /// Query database and fetch all pages including related child tasks.
+    /// Child tasks are linked via a "Tasks" relation property on parent pages.
     pub async fn query_database_with_children(
         &self,
         exclude_done: bool,
     ) -> Result<Vec<NotionPageData>> {
-        let mut all_pages = self.query_database(exclude_done).await?;
+        let parent_pages = self.query_database(false).await?;
 
-        let page_ids: Vec<String> = all_pages.iter().map(|p| p.id.clone()).collect();
+        tracing::debug!(
+            "Notion: fetched {} parent pages from database",
+            parent_pages.len()
+        );
 
-        for page_id in page_ids {
-            match self.get_child_pages(&page_id).await {
-                Ok(children) => {
-                    all_pages.extend(children);
+        let mut all_pages = parent_pages.clone();
+
+        // Collect all related task IDs and map them to their parent page ID
+        let mut child_to_parent: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut child_ids_to_fetch: Vec<String> = Vec::new();
+
+        for parent in &parent_pages {
+            for child_id in &parent.related_task_ids {
+                child_to_parent.insert(child_id.clone(), parent.id.clone());
+                child_ids_to_fetch.push(child_id.clone());
+            }
+        }
+
+        for child_id in child_ids_to_fetch {
+            match self.get_page(&child_id).await {
+                Ok(mut child_page) => {
+                    child_page.parent_page_id =
+                        Some(child_to_parent.get(&child_id).cloned().unwrap());
+                    all_pages.push(child_page);
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to fetch child pages for page {}: {}", page_id, e);
+                    tracing::warn!("Failed to fetch child page {}: {}", child_id, e);
                 }
             }
         }
 
-        Ok(all_pages)
+        if exclude_done {
+            let filtered: Vec<NotionPageData> =
+                all_pages.into_iter().filter(|p| !p.is_completed).collect();
+            Ok(filtered)
+        } else {
+            Ok(all_pages)
+        }
     }
 
     pub async fn get_status_options(&self) -> Result<StatusOptions> {

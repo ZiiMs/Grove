@@ -2469,6 +2469,7 @@ async fn process_action(
                                     .filter_map(|p| p.parent_page_id.as_ref())
                                     .cloned()
                                     .collect();
+
                                 let items: Vec<TaskListItem> = pages
                                     .into_iter()
                                     .map(|p| {
