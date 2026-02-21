@@ -5033,100 +5033,64 @@ async fn poll_system_metrics(tx: mpsc::UnboundedSender<Action>) {
 
 /// Sort tasks so children appear directly after their parents.
 fn sort_tasks_by_parent(tasks: &mut [TaskListItem]) {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
-    let has_children: HashSet<&str> = tasks
+    let mut parent_to_children: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        if let Some(parent_id) = &task.parent_id {
+            parent_to_children
+                .entry(parent_id.clone())
+                .or_default()
+                .push(idx);
+        }
+    }
+
+    let root_indices: Vec<usize> = tasks
         .iter()
-        .filter(|t| t.has_children)
-        .map(|t| t.id.as_str())
+        .enumerate()
+        .filter(|(_, t)| t.parent_id.is_none())
+        .map(|(i, _)| i)
         .collect();
-
-    let child_to_parent: HashMap<&str, &str> = tasks
-        .iter()
-        .filter_map(|t| t.parent_id.as_ref().map(|p| (t.id.as_str(), p.as_str())))
-        .collect();
-
-    fn get_depth(id: &str, child_to_parent: &HashMap<&str, &str>) -> usize {
-        match child_to_parent.get(id) {
-            None => 0,
-            Some(&parent_id) => get_depth(parent_id, child_to_parent) + 1,
-        }
-    }
-
-    fn build_sorted(
-        tasks: &[TaskListItem],
-        has_children: &HashSet<&str>,
-        child_to_parent: &HashMap<&str, &str>,
-        processed: &mut HashSet<String>,
-        result: &mut Vec<TaskListItem>,
-    ) {
-        for task in tasks {
-            if processed.contains(&task.id) {
-                continue;
-            }
-            if task.parent_id.is_none() {
-                processed.insert(task.id.clone());
-                result.push(task.clone());
-                if has_children.contains(task.id.as_str()) {
-                    add_children(
-                        task.id.as_str(),
-                        tasks,
-                        has_children,
-                        child_to_parent,
-                        processed,
-                        result,
-                    );
-                }
-            }
-        }
-    }
-
-    fn add_children(
-        parent_id: &str,
-        tasks: &[TaskListItem],
-        has_children: &HashSet<&str>,
-        child_to_parent: &HashMap<&str, &str>,
-        processed: &mut HashSet<String>,
-        result: &mut Vec<TaskListItem>,
-    ) {
-        let mut children: Vec<_> = tasks
-            .iter()
-            .filter(|t| t.parent_id.as_deref() == Some(parent_id))
-            .collect();
-        children.sort_by(|a, b| {
-            let a_depth = get_depth(&a.id, child_to_parent);
-            let b_depth = get_depth(&b.id, child_to_parent);
-            a_depth.cmp(&b_depth).then_with(|| a.name.cmp(&b.name))
-        });
-
-        for child in children {
-            if processed.contains(&child.id) {
-                continue;
-            }
-            processed.insert(child.id.clone());
-            result.push(child.clone());
-            if has_children.contains(child.id.as_str()) {
-                add_children(
-                    child.id.as_str(),
-                    tasks,
-                    has_children,
-                    child_to_parent,
-                    processed,
-                    result,
-                );
-            }
-        }
-    }
 
     let mut result = Vec::with_capacity(tasks.len());
-    let mut processed = HashSet::new();
-    build_sorted(
-        tasks,
-        &has_children,
-        &child_to_parent,
-        &mut processed,
-        &mut result,
-    );
+    let mut processed = std::collections::HashSet::new();
+
+    fn collect_tree(
+        task_idx: usize,
+        tasks: &[TaskListItem],
+        parent_to_children: &HashMap<String, Vec<usize>>,
+        processed: &mut std::collections::HashSet<usize>,
+        result: &mut Vec<TaskListItem>,
+    ) {
+        if processed.contains(&task_idx) {
+            return;
+        }
+        processed.insert(task_idx);
+        result.push(tasks[task_idx].clone());
+
+        let task_id = &tasks[task_idx].id;
+        if let Some(children) = parent_to_children.get(task_id) {
+            for &child_idx in children {
+                collect_tree(child_idx, tasks, parent_to_children, processed, result);
+            }
+        }
+    }
+
+    for root_idx in root_indices {
+        collect_tree(
+            root_idx,
+            tasks,
+            &parent_to_children,
+            &mut processed,
+            &mut result,
+        );
+    }
+
+    for (idx, task) in tasks.iter().enumerate() {
+        if !processed.contains(&idx) {
+            result.push(task.clone());
+        }
+    }
 
     if result.len() == tasks.len() {
         for (i, item) in result.into_iter().enumerate() {
