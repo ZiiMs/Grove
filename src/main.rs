@@ -1065,6 +1065,71 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         };
     }
 
+    // Handle keybind capture mode
+    if state.settings.capturing_keybind.is_some() {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCancelKeybindCapture),
+            KeyCode::Char(c) => {
+                let mut modifiers = Vec::new();
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    modifiers.push("Control".to_string());
+                }
+                if key.modifiers.contains(KeyModifiers::ALT) {
+                    modifiers.push("Alt".to_string());
+                }
+                let key_char =
+                    if c.is_ascii_alphabetic() && key.modifiers.contains(KeyModifiers::SHIFT) {
+                        modifiers.push("Shift".to_string());
+                        c.to_ascii_lowercase().to_string()
+                    } else {
+                        c.to_string()
+                    };
+                Some(Action::SettingsCaptureKeybind {
+                    key: key_char,
+                    modifiers,
+                })
+            }
+            _ => {
+                let key_name = match key.code {
+                    KeyCode::Enter => "Enter",
+                    KeyCode::Backspace => "Backspace",
+                    KeyCode::Tab => "Tab",
+                    KeyCode::Delete => "Delete",
+                    KeyCode::Home => "Home",
+                    KeyCode::End => "End",
+                    KeyCode::PageUp => "PageUp",
+                    KeyCode::PageDown => "PageDown",
+                    KeyCode::Up => "Up",
+                    KeyCode::Down => "Down",
+                    KeyCode::Left => "Left",
+                    KeyCode::Right => "Right",
+                    KeyCode::Esc => "Esc",
+                    KeyCode::F(n) => {
+                        return Some(Action::SettingsCaptureKeybind {
+                            key: format!("F{}", n),
+                            modifiers: vec![],
+                        })
+                    }
+                    _ => return None,
+                };
+                let mut modifiers = Vec::new();
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    modifiers.push("Control".to_string());
+                }
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    modifiers.push("Shift".to_string());
+                }
+                if key.modifiers.contains(KeyModifiers::ALT) {
+                    modifiers.push("Alt".to_string());
+                }
+                Some(Action::SettingsCaptureKeybind {
+                    key: key_name.to_string(),
+                    modifiers,
+                })
+            }
+        };
+    }
+
     // Normal settings navigation
     match key.code {
         KeyCode::Esc => Some(Action::SettingsClose),
@@ -1073,7 +1138,14 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::BackTab => Some(Action::SettingsSwitchSectionBack),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
-        KeyCode::Enter => Some(Action::SettingsSelectField),
+        KeyCode::Enter => {
+            let field = state.settings.current_field();
+            if field.is_keybind_field() {
+                Some(Action::SettingsStartKeybindCapture)
+            } else {
+                Some(Action::SettingsSelectField)
+            }
+        }
         _ => None,
     }
 }
