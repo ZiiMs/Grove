@@ -225,6 +225,15 @@ pub enum Action {
     SettingsDropdownPrev,
     SettingsDropdownNext,
 
+    // File Browser
+    SettingsCloseFileBrowser,
+    FileBrowserToggle,
+    FileBrowserSelectNext,
+    FileBrowserSelectPrev,
+    FileBrowserEnterDir,
+    FileBrowserGoParent,
+
+    // Global Setup Wizard
     GlobalSetupNextStep,
     GlobalSetupPrevStep,
     GlobalSetupSelectNext,

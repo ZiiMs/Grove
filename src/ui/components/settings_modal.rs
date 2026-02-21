@@ -11,6 +11,7 @@ use crate::app::{
     SettingsCategory, SettingsField, SettingsItem, SettingsState, SettingsTab, UiConfig,
     WorktreeLocation,
 };
+use crate::ui::components::file_browser;
 
 pub struct SettingsModal<'a> {
     state: &'a SettingsState,
@@ -68,6 +69,10 @@ impl<'a> SettingsModal<'a> {
 
         if self.state.editing_prompt {
             self.render_prompt_editor(frame);
+        }
+
+        if self.state.file_browser.active {
+            self.render_file_browser(frame);
         }
     }
 
@@ -752,6 +757,18 @@ impl<'a> SettingsModal<'a> {
         )))
         .alignment(Alignment::Center);
         frame.render_widget(footer, chunks[1]);
+    }
+
+    fn render_file_browser(&self, frame: &mut Frame) {
+        let fb = &self.state.file_browser;
+        let widget = file_browser::FileBrowserWidget::new(
+            &fb.entries,
+            fb.selected_index,
+            &fb.selected_files,
+            &fb.current_path,
+            &fb.current_path,
+        );
+        widget.render(frame);
     }
 }
 

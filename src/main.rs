@@ -28,7 +28,7 @@ use flock::app::{
 use flock::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use flock::codeberg::OptionalCodebergClient;
 use flock::devserver::DevServerManager;
-use flock::git::GitSync;
+use flock::git::{GitSync, Worktree};
 use flock::github::OptionalGitHubClient;
 use flock::gitlab::OptionalGitLabClient;
 use flock::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
@@ -1047,6 +1047,20 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
             KeyCode::Enter => Some(Action::SettingsConfirmSelection),
             KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsDropdownPrev),
             KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsDropdownNext),
+            _ => None,
+        };
+    }
+
+    // Handle file browser mode
+    if state.settings.file_browser.active {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCloseFileBrowser),
+            KeyCode::Enter => Some(Action::FileBrowserToggle),
+            KeyCode::Char(' ') => Some(Action::FileBrowserToggle),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::FileBrowserSelectPrev),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::FileBrowserSelectNext),
+            KeyCode::Right => Some(Action::FileBrowserEnterDir),
+            KeyCode::Left => Some(Action::FileBrowserGoParent),
             _ => None,
         };
     }
@@ -3338,9 +3352,7 @@ async fn process_action(
                     state.settings.text_buffer = state.settings.repo_config.git.main_branch.clone();
                 }
                 flock::app::SettingsField::WorktreeSymlinks => {
-                    state.settings.editing_text = true;
-                    state.settings.text_buffer =
-                        state.settings.repo_config.git.worktree_symlinks.join(", ");
+                    state.settings.init_file_browser(&state.repo_path);
                 }
                 flock::app::SettingsField::GitLabProjectId => {
                     state.settings.editing_text = true;
@@ -3899,6 +3911,115 @@ async fn process_action(
             state.worktree_base = state.config.worktree_base_path(&state.repo_path);
             state.settings.active = false;
             state.log_info("Settings saved".to_string());
+        }
+
+        // File Browser Actions
+        Action::SettingsCloseFileBrowser => {
+            let repo_path = std::path::PathBuf::from(&state.repo_path);
+            let selected: Vec<String> = state
+                .settings
+                .file_browser
+                .selected_files
+                .iter()
+                .filter_map(|p| {
+                    p.strip_prefix(&repo_path)
+                        .ok()
+                        .map(|s| s.to_string_lossy().to_string())
+                })
+                .collect();
+
+            state.settings.repo_config.git.worktree_symlinks = selected;
+
+            if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                state.log_error(format!("Failed to save repo config: {}", e));
+            }
+
+            let symlinks = state.settings.repo_config.git.worktree_symlinks.clone();
+            let worktree = Worktree::new(&state.repo_path, state.worktree_base.clone());
+
+            let agent_worktrees: Vec<(String, String)> = state
+                .agents
+                .values()
+                .map(|a| (a.name.clone(), a.worktree_path.clone()))
+                .collect();
+
+            let mut refreshed_count = 0;
+            let mut errors = Vec::new();
+            for (name, worktree_path) in agent_worktrees {
+                if std::path::Path::new(&worktree_path).exists() {
+                    if let Err(e) = worktree.create_symlinks(&worktree_path, &symlinks) {
+                        errors.push(format!("{}: {}", name, e));
+                    } else {
+                        refreshed_count += 1;
+                    }
+                }
+            }
+
+            for error in errors {
+                state.log_error(format!("Failed to create symlinks for {}", error));
+            }
+
+            state.settings.file_browser.active = false;
+            state.log_info(format!(
+                "Symlinks saved and refreshed for {} worktrees",
+                refreshed_count
+            ));
+        }
+
+        Action::FileBrowserToggle => {
+            let fb = &mut state.settings.file_browser;
+            if let Some(entry) = fb.entries.get(fb.selected_index) {
+                if !entry.is_dir || entry.name == ".." {
+                    if fb.selected_files.contains(&entry.path) {
+                        fb.selected_files.remove(&entry.path);
+                    } else {
+                        fb.selected_files.insert(entry.path.clone());
+                    }
+                    fb.entries = flock::ui::components::file_browser::load_directory_entries(
+                        &fb.current_path,
+                        &fb.selected_files,
+                        &fb.current_path,
+                    );
+                }
+            }
+        }
+
+        Action::FileBrowserSelectNext => {
+            let fb = &mut state.settings.file_browser;
+            fb.selected_index = (fb.selected_index + 1).min(fb.entries.len().saturating_sub(1));
+        }
+
+        Action::FileBrowserSelectPrev => {
+            let fb = &mut state.settings.file_browser;
+            fb.selected_index = fb.selected_index.saturating_sub(1);
+        }
+
+        Action::FileBrowserEnterDir => {
+            let fb = &mut state.settings.file_browser;
+            if let Some(entry) = fb.entries.get(fb.selected_index) {
+                if entry.is_dir {
+                    fb.current_path = entry.path.clone();
+                    fb.selected_index = 0;
+                    fb.entries = flock::ui::components::file_browser::load_directory_entries(
+                        &fb.current_path,
+                        &fb.selected_files,
+                        &fb.current_path,
+                    );
+                }
+            }
+        }
+
+        Action::FileBrowserGoParent => {
+            let fb = &mut state.settings.file_browser;
+            if let Some(parent) = fb.current_path.parent() {
+                fb.current_path = parent.to_path_buf();
+                fb.selected_index = 0;
+                fb.entries = flock::ui::components::file_browser::load_directory_entries(
+                    &fb.current_path,
+                    &fb.selected_files,
+                    &fb.current_path,
+                );
+            }
         }
 
         // Global Setup Wizard Actions
