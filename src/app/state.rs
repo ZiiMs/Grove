@@ -1,5 +1,5 @@
 use chrono::Utc;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 
 use super::action::InputMode;
@@ -410,6 +410,7 @@ pub struct AppState {
     pub task_list: Vec<TaskListItem>,
     pub task_list_loading: bool,
     pub task_list_selected: usize,
+    pub task_list_expanded_ids: HashSet<String>,
     pub task_status_dropdown: Option<TaskStatusDropdownState>,
 }
 
@@ -553,6 +554,7 @@ impl AppState {
             task_list: Vec::new(),
             task_list_loading: false,
             task_list_selected: 0,
+            task_list_expanded_ids: HashSet::new(),
             task_status_dropdown: None,
         }
     }

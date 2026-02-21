@@ -86,6 +86,13 @@ pub struct AsanaTaskData {
     pub name: String,
     pub completed: bool,
     pub permalink_url: Option<String>,
+    pub parent: Option<AsanaParent>,
+    pub num_subtasks: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaParent {
+    pub gid: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,6 +117,8 @@ pub struct AsanaTaskSummary {
     pub name: String,
     pub completed: bool,
     pub permalink_url: Option<String>,
+    pub parent_gid: Option<String>,
+    pub num_subtasks: u32,
 }
 
 impl From<AsanaTaskData> for AsanaTaskSummary {
@@ -119,6 +128,8 @@ impl From<AsanaTaskData> for AsanaTaskSummary {
             name: data.name,
             completed: data.completed,
             permalink_url: data.permalink_url,
+            parent_gid: data.parent.map(|p| p.gid),
+            num_subtasks: data.num_subtasks.unwrap_or(0),
         }
     }
 }

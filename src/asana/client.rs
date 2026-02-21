@@ -45,7 +45,10 @@ impl AsanaClient {
         let response = self
             .client
             .get(&url)
-            .query(&[("opt_fields", "gid,name,completed,permalink_url")])
+            .query(&[(
+                "opt_fields",
+                "gid,name,completed,permalink_url,parent,num_subtasks",
+            )])
             .send()
             .await
             .context("Failed to fetch Asana task")?;
@@ -87,7 +90,10 @@ impl AsanaClient {
         let response = self
             .client
             .get(&url)
-            .query(&[("opt_fields", "gid,name,completed,permalink_url")])
+            .query(&[(
+                "opt_fields",
+                "gid,name,completed,permalink_url,parent,num_subtasks",
+            )])
             .send()
             .await
             .context("Failed to fetch Asana project tasks")?;

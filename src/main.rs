@@ -883,6 +883,7 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
             KeyCode::Char('a') => Some(Action::AssignSelectedTaskToAgent),
             KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
+            KeyCode::Left | KeyCode::Right => Some(Action::ToggleTaskExpand),
             KeyCode::Esc => Some(Action::ExitInputMode),
             _ => None,
         };
@@ -2450,6 +2451,8 @@ async fn process_action(
                                     status: TaskItemStatus::NotStarted,
                                     status_name: "Not Started".to_string(),
                                     url: t.permalink_url.unwrap_or_default(),
+                                    parent_id: t.parent_gid,
+                                    has_children: t.num_subtasks > 0,
                                 })
                                 .collect();
                             Ok(items)
@@ -2477,6 +2480,8 @@ async fn process_action(
                                         status,
                                         status_name,
                                         url: p.url,
+                                        parent_id: None,
+                                        has_children: false,
                                     }
                                 })
                                 .collect();
@@ -2498,8 +2503,13 @@ async fn process_action(
 
         Action::TaskListFetched { tasks } => {
             state.task_list_loading = false;
-            state.task_list = tasks;
+            state.task_list = tasks.clone();
             state.task_list_selected = 0;
+            state.task_list_expanded_ids = tasks
+                .iter()
+                .filter(|t| t.has_children)
+                .map(|t| t.id.clone())
+                .collect();
         }
 
         Action::TaskListFetchError { message } => {
@@ -2509,18 +2519,44 @@ async fn process_action(
         }
 
         Action::SelectTaskNext => {
-            if !state.task_list.is_empty() {
-                state.task_list_selected = (state.task_list_selected + 1) % state.task_list.len();
+            let visible_indices =
+                compute_visible_task_indices(&state.task_list, &state.task_list_expanded_ids);
+            if !visible_indices.is_empty() {
+                let visible_pos = visible_indices
+                    .iter()
+                    .position(|&i| i == state.task_list_selected)
+                    .unwrap_or(0);
+                let next_pos = (visible_pos + 1) % visible_indices.len();
+                state.task_list_selected = visible_indices[next_pos];
             }
         }
 
         Action::SelectTaskPrev => {
-            if !state.task_list.is_empty() {
-                state.task_list_selected = if state.task_list_selected == 0 {
-                    state.task_list.len() - 1
+            let visible_indices =
+                compute_visible_task_indices(&state.task_list, &state.task_list_expanded_ids);
+            if !visible_indices.is_empty() {
+                let visible_pos = visible_indices
+                    .iter()
+                    .position(|&i| i == state.task_list_selected)
+                    .unwrap_or(0);
+                let prev_pos = if visible_pos == 0 {
+                    visible_indices.len() - 1
                 } else {
-                    state.task_list_selected - 1
+                    visible_pos - 1
                 };
+                state.task_list_selected = visible_indices[prev_pos];
+            }
+        }
+
+        Action::ToggleTaskExpand => {
+            if let Some(task) = state.task_list.get(state.task_list_selected) {
+                if task.has_children {
+                    if state.task_list_expanded_ids.contains(&task.id) {
+                        state.task_list_expanded_ids.remove(&task.id);
+                    } else {
+                        state.task_list_expanded_ids.insert(task.id.clone());
+                    }
+                }
             }
         }
 
@@ -4471,6 +4507,50 @@ fn parse_asana_task_gid(input: &str) -> String {
     }
     // Bare GID (just digits)
     trimmed.to_string()
+}
+
+fn compute_visible_task_indices(
+    tasks: &[TaskListItem],
+    expanded_ids: &std::collections::HashSet<String>,
+) -> Vec<usize> {
+    use std::collections::{HashMap, HashSet};
+
+    let child_to_parent: HashMap<&str, &str> = tasks
+        .iter()
+        .filter_map(|t| t.parent_id.as_ref().map(|p| (t.id.as_str(), p.as_str())))
+        .collect();
+
+    fn is_ancestor_expanded(
+        task: &TaskListItem,
+        child_to_parent: &HashMap<&str, &str>,
+        expanded_ids: &HashSet<String>,
+    ) -> bool {
+        let mut current_id = task.id.as_str();
+        loop {
+            match child_to_parent.get(current_id) {
+                None => return true,
+                Some(&parent_id) => {
+                    if !expanded_ids.contains(parent_id) {
+                        return false;
+                    }
+                    current_id = parent_id;
+                }
+            }
+        }
+    }
+
+    tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, task)| {
+            if task.parent_id.is_none() {
+                true
+            } else {
+                is_ancestor_expanded(task, &child_to_parent, expanded_ids)
+            }
+        })
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// Background task to poll Asana for task status updates.

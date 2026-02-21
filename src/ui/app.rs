@@ -303,6 +303,7 @@ impl<'a> AppWidget<'a> {
                     self.state.task_list_loading,
                     provider_name,
                     &assigned_tasks,
+                    &self.state.task_list_expanded_ids,
                 )
                 .render(frame);
             }

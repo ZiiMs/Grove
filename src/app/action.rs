@@ -142,6 +142,7 @@ pub enum Action {
     SelectTaskPrev,
     CreateAgentFromSelectedTask,
     AssignSelectedTaskToAgent,
+    ToggleTaskExpand,
 
     ToggleDiffView,
     ToggleHelp,

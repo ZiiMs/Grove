@@ -22,4 +22,12 @@ pub struct TaskListItem {
     pub status: TaskItemStatus,
     pub status_name: String,
     pub url: String,
+    pub parent_id: Option<String>,
+    pub has_children: bool,
+}
+
+impl TaskListItem {
+    pub fn is_top_level(&self) -> bool {
+        self.parent_id.is_none()
+    }
 }

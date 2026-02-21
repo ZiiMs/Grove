@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -12,26 +12,92 @@ use crate::app::{TaskItemStatus, TaskListItem};
 
 pub struct TaskListModal<'a> {
     tasks: &'a [TaskListItem],
-    selected: usize,
+    selected_actual_idx: usize,
     loading: bool,
     provider_name: &'a str,
     assigned_tasks: &'a HashMap<String, String>,
+    expanded_ids: &'a HashSet<String>,
 }
 
 impl<'a> TaskListModal<'a> {
     pub fn new(
         tasks: &'a [TaskListItem],
-        selected: usize,
+        selected_actual_idx: usize,
         loading: bool,
         provider_name: &'a str,
         assigned_tasks: &'a HashMap<String, String>,
+        expanded_ids: &'a HashSet<String>,
     ) -> Self {
         Self {
             tasks,
-            selected,
+            selected_actual_idx,
             loading,
             provider_name,
             assigned_tasks,
+            expanded_ids,
+        }
+    }
+
+    fn compute_visible_tasks(&self) -> Vec<(usize, &'a TaskListItem, usize)> {
+        let child_to_parent: HashMap<&str, &str> = self
+            .tasks
+            .iter()
+            .filter_map(|t| t.parent_id.as_ref().map(|p| (t.id.as_str(), p.as_str())))
+            .collect();
+
+        fn get_depth_by_id(id: &str, child_to_parent: &HashMap<&str, &str>) -> usize {
+            match child_to_parent.get(id) {
+                None => 0,
+                Some(&parent_id) => get_depth_by_id(parent_id, child_to_parent) + 1,
+            }
+        }
+
+        fn get_depth(task: &TaskListItem, child_to_parent: &HashMap<&str, &str>) -> usize {
+            match &task.parent_id {
+                None => 0,
+                Some(_) => {
+                    let parent = child_to_parent.get(task.id.as_str());
+                    match parent {
+                        None => 1,
+                        Some(&pid) => get_depth_by_id(pid, child_to_parent) + 1,
+                    }
+                }
+            }
+        }
+
+        let mut visible = Vec::new();
+        for (idx, task) in self.tasks.iter().enumerate() {
+            let is_visible = if task.parent_id.is_none() {
+                true
+            } else {
+                self.is_ancestor_expanded(task, &child_to_parent)
+            };
+
+            if is_visible {
+                let depth = get_depth(task, &child_to_parent);
+                visible.push((idx, task, depth));
+            }
+        }
+
+        visible
+    }
+
+    fn is_ancestor_expanded(
+        &self,
+        task: &TaskListItem,
+        child_to_parent: &HashMap<&str, &str>,
+    ) -> bool {
+        let mut current_id = task.id.as_str();
+        loop {
+            match child_to_parent.get(current_id) {
+                None => return true,
+                Some(&parent_id) => {
+                    if !self.expanded_ids.contains(parent_id) {
+                        return false;
+                    }
+                    current_id = parent_id;
+                }
+            }
         }
     }
 
@@ -70,25 +136,32 @@ impl<'a> TaskListModal<'a> {
             .constraints([Constraint::Min(3), Constraint::Length(2)])
             .split(inner_area);
 
-        let max_name_width = self
-            .tasks
+        let visible_tasks = self.compute_visible_tasks();
+
+        let selected_visible_pos = visible_tasks
             .iter()
-            .map(|t| t.name.chars().count())
+            .position(|(actual_idx, _, _)| *actual_idx == self.selected_actual_idx)
+            .unwrap_or(0);
+
+        let max_name_width = visible_tasks
+            .iter()
+            .map(|(_, t, depth)| t.name.chars().count() + depth * 2)
             .max()
             .unwrap_or(20)
-            .min(50);
+            .min(60);
 
-        let items: Vec<ListItem> = self
-            .tasks
+        let items: Vec<ListItem> = visible_tasks
             .iter()
             .enumerate()
-            .map(|(i, task)| {
+            .map(|(visible_pos, (_actual_idx, task, depth))| {
                 let (status_icon, status_color) = match &task.status {
                     TaskItemStatus::NotStarted => ("○", Color::Gray),
                     TaskItemStatus::InProgress => ("◐", Color::Yellow),
                 };
 
-                let style = if i == self.selected {
+                let is_selected = visible_pos == selected_visible_pos;
+
+                let style = if is_selected {
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::Cyan)
@@ -97,13 +170,13 @@ impl<'a> TaskListModal<'a> {
                     Style::default().fg(Color::White)
                 };
 
-                let status_style = if i == self.selected {
+                let status_style = if is_selected {
                     Style::default().fg(Color::Black).bg(Color::Cyan)
                 } else {
                     Style::default().fg(status_color)
                 };
 
-                let status_name_style = if i == self.selected {
+                let status_name_style = if is_selected {
                     Style::default().fg(Color::Black).bg(Color::Cyan)
                 } else {
                     Style::default().fg(Color::DarkGray)
@@ -111,17 +184,34 @@ impl<'a> TaskListModal<'a> {
 
                 let normalized_id = task.id.replace('-', "").to_lowercase();
                 let assigned_info = self.assigned_tasks.get(&normalized_id);
-                let assigned_style = if i == self.selected {
+                let assigned_style = if is_selected {
                     Style::default().fg(Color::Black).bg(Color::Cyan)
                 } else {
                     Style::default().fg(Color::Green)
                 };
 
-                let padded_name = format!("{:width$}", task.name, width = max_name_width);
-                let truncated_name = if padded_name.chars().count() > 50 {
-                    format!("{}…", padded_name.chars().take(49).collect::<String>())
+                let indent = " ".repeat(*depth * 2);
+                let expand_indicator = if task.has_children {
+                    if self.expanded_ids.contains(&task.id) {
+                        "▼ "
+                    } else {
+                        "► "
+                    }
                 } else {
-                    padded_name
+                    "  "
+                };
+
+                let display_name = format!("{}{}{}", indent, expand_indicator, task.name);
+                let truncated_name = if display_name.chars().count() > max_name_width {
+                    format!(
+                        "{}…",
+                        display_name
+                            .chars()
+                            .take(max_name_width - 1)
+                            .collect::<String>()
+                    )
+                } else {
+                    format!("{:width$}", display_name, width = max_name_width)
                 };
 
                 let mut spans = vec![
@@ -151,7 +241,10 @@ impl<'a> TaskListModal<'a> {
                 "[Enter] Create Agent  ",
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled("[a] Assign  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "[←/→] Collapse/Expand  ",
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled("[Esc] Cancel", Style::default().fg(Color::DarkGray)),
         ]))
         .alignment(ratatui::layout::Alignment::Center);
