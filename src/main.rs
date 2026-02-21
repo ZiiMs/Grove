@@ -799,16 +799,28 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
             .selected_agent_id()
             .map(|id| Action::OpenProjectTaskInBrowser { id }),
         KeyCode::Char('t') => Some(Action::EnterInputMode(InputMode::BrowseTasks)),
-        KeyCode::Char('T') => state
-            .selected_agent_id()
-            .filter(|id| {
-                state
-                    .agents
-                    .get(id)
-                    .map(|a| a.pm_task_status.is_linked())
-                    .unwrap_or(false)
-            })
-            .map(|id| Action::OpenTaskStatusDropdown { id }),
+        KeyCode::Char('T') => {
+            tracing::info!("Shift+T pressed");
+            let selected_id = state.selected_agent_id();
+            if selected_id.is_none() {
+                tracing::info!("No agent selected");
+            }
+            let result = selected_id
+                .filter(|id| {
+                    let is_linked = state
+                        .agents
+                        .get(id)
+                        .map(|a| a.pm_task_status.is_linked())
+                        .unwrap_or(false);
+                    tracing::info!("Agent has linked task: {}", is_linked);
+                    is_linked
+                })
+                .map(|id| Action::OpenTaskStatusDropdown { id });
+            if result.is_none() {
+                tracing::info!("Shift+T: no action generated");
+            }
+            result
+        }
 
         // Other
         KeyCode::Char('R') => Some(Action::RefreshAll),
@@ -2045,7 +2057,9 @@ async fn process_action(
         }
 
         Action::OpenTaskStatusDropdown { id } => {
+            tracing::info!("OpenTaskStatusDropdown called for agent {}", id);
             if let Some(agent) = state.agents.get(&id) {
+                tracing::info!("Agent found, pm_task_status: {:?}", agent.pm_task_status);
                 match &agent.pm_task_status {
                     ProjectMgmtTaskStatus::Notion(notion_status) => {
                         if !notion_client.is_configured() {
@@ -2054,7 +2068,8 @@ async fn process_action(
                             );
                             return Ok(false);
                         }
-                        if notion_status.page_id().is_none() {
+                        let page_id = notion_status.page_id();
+                        if page_id.is_none() || page_id.map(|p| p.is_empty()).unwrap_or(true) {
                             state.show_error("No Notion page linked to this task");
                             return Ok(false);
                         }
@@ -2063,8 +2078,10 @@ async fn process_action(
                         let tx = action_tx.clone();
                         state.loading_message = Some("Loading status options...".to_string());
                         tokio::spawn(async move {
+                            tracing::info!("Fetching Notion status options...");
                             match client.get_status_options().await {
                                 Ok(opts) => {
+                                    tracing::info!("Got {} status options", opts.all_options.len());
                                     let options: Vec<StatusOption> = opts
                                         .all_options
                                         .into_iter()
@@ -2079,6 +2096,7 @@ async fn process_action(
                                     });
                                 }
                                 Err(e) => {
+                                    tracing::error!("Failed to load status options: {}", e);
                                     let _ = tx.send(Action::SetLoading(None));
                                     let _ = tx.send(Action::ShowError(format!(
                                         "Failed to load status options: {}",
@@ -2126,6 +2144,11 @@ async fn process_action(
         }
 
         Action::TaskStatusOptionsLoaded { id, options } => {
+            tracing::info!(
+                "TaskStatusOptionsLoaded: {} options for agent {}",
+                options.len(),
+                id
+            );
             state.loading_message = None;
             if !options.is_empty() {
                 state.task_status_dropdown = Some(TaskStatusDropdownState {
@@ -2134,6 +2157,7 @@ async fn process_action(
                     selected_index: 0,
                 });
                 state.input_mode = Some(InputMode::SelectTaskStatus);
+                tracing::info!("Dropdown opened with input_mode = SelectTaskStatus");
             } else {
                 state.show_warning("No status options found");
             }
@@ -2156,6 +2180,7 @@ async fn process_action(
         }
 
         Action::TaskStatusDropdownSelect => {
+            tracing::info!("TaskStatusDropdownSelect triggered");
             state.exit_input_mode();
             if let Some(dropdown) = state.task_status_dropdown.take() {
                 let agent_id = dropdown.agent_id;
@@ -2168,7 +2193,18 @@ async fn process_action(
                         match &agent.pm_task_status {
                             ProjectMgmtTaskStatus::Notion(notion_status) => {
                                 if let Some(page_id) = notion_status.page_id() {
+                                    if page_id.is_empty() {
+                                        state.show_error("No Notion page linked to this task");
+                                        return Ok(false);
+                                    }
                                     let page_id = page_id.to_string();
+                                    let task_name = match notion_status {
+                                        NotionTaskStatus::NotStarted { name, .. } => name.clone(),
+                                        NotionTaskStatus::InProgress { name, .. } => name.clone(),
+                                        NotionTaskStatus::Completed { name, .. } => name.clone(),
+                                        NotionTaskStatus::Error { .. } => "Task".to_string(),
+                                        NotionTaskStatus::None => "Task".to_string(),
+                                    };
                                     let client = Arc::clone(notion_client);
                                     let status_prop_name = state
                                         .settings
@@ -2184,13 +2220,13 @@ async fn process_action(
                                     {
                                         ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
                                             page_id: page_id.clone(),
-                                            name: notion_status.format_short(),
+                                            name: task_name.clone(),
                                         })
                                     } else if option_name.to_lowercase().contains("progress") {
                                         ProjectMgmtTaskStatus::Notion(
                                             NotionTaskStatus::InProgress {
                                                 page_id: page_id.clone(),
-                                                name: notion_status.format_short(),
+                                                name: task_name.clone(),
                                                 url: String::new(),
                                                 status_option_id: option_id.clone(),
                                             },
@@ -2199,7 +2235,7 @@ async fn process_action(
                                         ProjectMgmtTaskStatus::Notion(
                                             NotionTaskStatus::NotStarted {
                                                 page_id: page_id.clone(),
-                                                name: notion_status.format_short(),
+                                                name: task_name.clone(),
                                                 url: String::new(),
                                                 status_option_id: option_id.clone(),
                                             },
@@ -2210,6 +2246,11 @@ async fn process_action(
                                         agent.pm_task_status = new_status;
                                     }
 
+                                    tracing::info!(
+                                        "Updating Notion page {} status to '{}'",
+                                        page_id,
+                                        option_name
+                                    );
                                     tokio::spawn(async move {
                                         let prop_name = status_prop_name
                                             .unwrap_or_else(|| "Status".to_string());
@@ -2217,6 +2258,10 @@ async fn process_action(
                                             .update_page_status(&page_id, &prop_name, &option_id)
                                             .await
                                         {
+                                            tracing::error!(
+                                                "Failed to update Notion status: {}",
+                                                e
+                                            );
                                             let _ = tx.send(Action::ShowError(format!(
                                                 "Failed to update status: {}",
                                                 e
@@ -2224,6 +2269,8 @@ async fn process_action(
                                         }
                                     });
                                     state.show_success(format!("Task → {}", option_name));
+                                } else {
+                                    state.show_error("No Notion page linked to this task");
                                 }
                             }
                             ProjectMgmtTaskStatus::Asana(asana_status) => {

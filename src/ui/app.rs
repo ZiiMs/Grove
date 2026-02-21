@@ -147,14 +147,14 @@ impl<'a> AppWidget<'a> {
             }
         }
 
+        if let Some(message) = &self.state.loading_message {
+            LoadingOverlay::render(frame, message, self.state.animation_frame);
+        }
+
         if let Some(warning) = &self.state.devserver_warning {
             DevServerWarningModal::new(warning).render(frame);
         } else if let Some(mode) = &self.state.input_mode {
             self.render_modal(frame, mode, size);
-        }
-
-        if let Some(message) = &self.state.loading_message {
-            LoadingOverlay::render(frame, message, self.state.animation_frame);
         }
 
         if let Some(toast) = &self.state.toast {
