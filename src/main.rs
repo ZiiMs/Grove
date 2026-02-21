@@ -417,6 +417,7 @@ async fn main() -> Result<()> {
         Config::notion_token().as_deref(),
         notion_database_id,
         notion_status_property,
+        config.notion.cache_ttl_secs,
     ));
 
     let pm_provider = state.settings.repo_config.project_mgmt.provider;
