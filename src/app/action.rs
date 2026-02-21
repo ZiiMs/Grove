@@ -2,6 +2,7 @@ use uuid::Uuid;
 
 use crate::agent::ProjectMgmtTaskStatus;
 use crate::app::task_list::TaskListItem;
+use crate::app::ToastLevel;
 
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -146,6 +147,10 @@ pub enum Action {
     ToggleHelp,
     ToggleLogs,
     ShowError(String),
+    ShowToast {
+        message: String,
+        level: ToastLevel,
+    },
     ClearError,
     EnterInputMode(InputMode),
     ExitInputMode,

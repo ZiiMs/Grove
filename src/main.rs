@@ -23,7 +23,7 @@ use flock::agent::{
 };
 use flock::app::{
     Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, StatusOption,
-    TaskItemStatus, TaskListItem, TaskStatusDropdownState,
+    TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast, ToastLevel,
 };
 use flock::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use flock::codeberg::OptionalCodebergClient;
@@ -1010,7 +1010,7 @@ async fn process_action(
 
         // Navigation (clear any lingering messages)
         Action::SelectNext => {
-            state.error_message = None;
+            state.toast = None;
             state.select_next();
             let new_selected = state.selected_agent_id();
             tracing::info!("DEBUG SelectNext: new_selected={:?}", new_selected);
@@ -1020,7 +1020,7 @@ async fn process_action(
             }
         }
         Action::SelectPrevious => {
-            state.error_message = None;
+            state.toast = None;
             state.select_previous();
             let new_selected = state.selected_agent_id();
             tracing::info!("DEBUG SelectPrevious: new_selected={:?}", new_selected);
@@ -1030,12 +1030,12 @@ async fn process_action(
             }
         }
         Action::SelectFirst => {
-            state.error_message = None;
+            state.toast = None;
             state.select_first();
             let _ = selected_watch_tx.send(state.selected_agent_id());
         }
         Action::SelectLast => {
-            state.error_message = None;
+            state.toast = None;
             state.select_last();
             let _ = selected_watch_tx.send(state.selected_agent_id());
         }
@@ -1073,7 +1073,7 @@ async fn process_action(
 
                     state.add_agent(agent);
                     state.select_last();
-                    state.error_message = None;
+                    state.toast = None;
                     // Notify polling tasks of new agent
                     let _ = agent_watch_tx.send(state.agents.keys().cloned().collect());
                     let _ = branch_watch_tx.send(
@@ -1087,7 +1087,10 @@ async fn process_action(
                 }
                 Err(e) => {
                     state.log_error(format!("Failed to create agent: {}", e));
-                    state.error_message = Some(format!("Failed to create agent: {}", e));
+                    state.toast = Some(Toast::new(
+                        format!("Failed to create agent: {}", e),
+                        ToastLevel::Error,
+                    ));
                 }
             }
         }
@@ -1399,12 +1402,11 @@ async fn process_action(
                             agent.custom_note = Some("merging main...".to_string());
                         }
                         state.log_info(format!("Sent merge request to agent '{}'", name));
-                        state.error_message =
-                            Some(format!("Sent merge {} request to Claude", main_branch));
+                        state.show_success(format!("Sent merge {} request to Claude", main_branch));
                     }
                     Err(e) => {
                         state.log_error(format!("Failed to send merge request: {}", e));
-                        state.error_message = Some(format!("Failed to send merge request: {}", e));
+                        state.show_error(format!("Failed to send merge request: {}", e));
                     }
                 }
             }
@@ -1436,7 +1438,7 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to send {}: {}", cmd, e));
-                            state.error_message = Some(format!("Failed to send {}: {}", cmd, e));
+                            state.show_error(format!("Failed to send {}: {}", cmd, e));
                         }
                     }
                 }
@@ -1449,8 +1451,7 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to send push prompt: {}", e));
-                            state.error_message =
-                                Some(format!("Failed to send push prompt: {}", e));
+                            state.show_error(format!("Failed to send push prompt: {}", e));
                         }
                     }
                 }
@@ -1459,7 +1460,7 @@ async fn process_action(
                     if let Some(agent) = state.agents.get_mut(&id) {
                         agent.custom_note = Some("pushing...".to_string());
                     }
-                    state.error_message = Some(format!(
+                    state.show_success(format!(
                         "Sent push command to {}",
                         agent_type.display_name()
                     ));
@@ -1471,7 +1472,7 @@ async fn process_action(
             if let Some(agent) = state.agents.get(&id) {
                 let git_sync = GitSync::new(&agent.worktree_path);
                 if let Err(e) = git_sync.fetch() {
-                    state.error_message = Some(format!("Fetch failed: {}", e));
+                    state.show_error(format!("Fetch failed: {}", e));
                 }
             }
         }
@@ -1497,12 +1498,11 @@ async fn process_action(
                             agent.custom_note = Some("summary...".to_string());
                         }
                         state.log_info(format!("Requested summary from agent '{}'", name));
-                        state.error_message =
-                            Some("Requested work summary from Claude".to_string());
+                        state.show_success("Requested work summary from Claude");
                     }
                     Err(e) => {
                         state.log_error(format!("Failed to request summary: {}", e));
-                        state.error_message = Some(format!("Failed to request summary: {}", e));
+                        state.show_error(format!("Failed to request summary: {}", e));
                     }
                 }
             }
@@ -1561,7 +1561,7 @@ async fn process_action(
             // Log after mutation is done
             if let Some((name, iid, url)) = should_log {
                 state.log_info(format!("MR !{} detected for '{}'", iid, name));
-                state.error_message = Some(format!("MR !{}: {}", iid, url));
+                state.show_success(format!("MR !{}: {}", iid, url));
             }
         }
 
@@ -1574,11 +1574,11 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message = Some("No MR available for this agent".to_string());
+                    state.show_error("No MR available for this agent");
                 }
             }
         }
@@ -1623,7 +1623,7 @@ async fn process_action(
 
             if let Some((name, number, url)) = should_log {
                 state.log_info(format!("PR #{} detected for '{}'", number, name));
-                state.error_message = Some(format!("PR #{}: {}", number, url));
+                state.show_success(format!("PR #{}: {}", number, url));
             }
         }
 
@@ -1636,11 +1636,11 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message = Some("No PR available for this agent".to_string());
+                    state.show_error("No PR available for this agent");
                 }
             }
         }
@@ -1670,7 +1670,7 @@ async fn process_action(
 
             if let Some((name, number, url)) = should_log {
                 state.log_info(format!("Codeberg PR #{} detected for '{}'", number, name));
-                state.error_message = Some(format!("PR #{}: {}", number, url));
+                state.show_success(format!("PR #{}: {}", number, url));
             }
         }
 
@@ -1683,12 +1683,11 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message =
-                        Some("No Codeberg PR available for this agent".to_string());
+                    state.show_error("No Codeberg PR available for this agent");
                 }
             }
         }
@@ -1748,7 +1747,7 @@ async fn process_action(
             }
             if let Some(msg) = log_msg {
                 state.log_info(&msg);
-                state.error_message = Some(msg);
+                state.show_info(msg);
             }
             let asana_tasks: Vec<(Uuid, String)> = state
                 .agents
@@ -1771,11 +1770,11 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message = Some("No Asana task linked to this agent".to_string());
+                    state.show_error("No Asana task linked to this agent");
                 }
             }
         }
@@ -1894,7 +1893,7 @@ async fn process_action(
             }
             if let Some(msg) = log_msg {
                 state.log_info(&msg);
-                state.error_message = Some(msg);
+                state.show_info(msg);
             }
             let asana_tasks: Vec<(Uuid, String)> = state
                 .agents
@@ -2048,7 +2047,17 @@ async fn process_action(
         Action::OpenTaskStatusDropdown { id } => {
             if let Some(agent) = state.agents.get(&id) {
                 match &agent.pm_task_status {
-                    ProjectMgmtTaskStatus::Notion(_) => {
+                    ProjectMgmtTaskStatus::Notion(notion_status) => {
+                        if !notion_client.is_configured() {
+                            state.show_error(
+                                "Notion not configured. Set NOTION_TOKEN and database_id.",
+                            );
+                            return Ok(false);
+                        }
+                        if notion_status.page_id().is_none() {
+                            state.show_error("No Notion page linked to this task");
+                            return Ok(false);
+                        }
                         let agent_id = id;
                         let client = Arc::clone(notion_client);
                         let tx = action_tx.clone();
@@ -2079,7 +2088,17 @@ async fn process_action(
                             }
                         });
                     }
-                    ProjectMgmtTaskStatus::Asana(_) => {
+                    ProjectMgmtTaskStatus::Asana(asana_status) => {
+                        if !asana_client.is_configured() {
+                            state.show_error(
+                                "Asana not configured. Set ASANA_TOKEN and project_gid.",
+                            );
+                            return Ok(false);
+                        }
+                        if asana_status.gid().is_none() {
+                            state.show_error("No Asana task linked to this agent");
+                            return Ok(false);
+                        }
                         let options = vec![
                             StatusOption {
                                 id: "not_started".to_string(),
@@ -2116,7 +2135,7 @@ async fn process_action(
                 });
                 state.input_mode = Some(InputMode::SelectTaskStatus);
             } else {
-                state.error_message = Some("No status options found".to_string());
+                state.show_warning("No status options found");
             }
         }
 
@@ -2204,7 +2223,7 @@ async fn process_action(
                                             )));
                                         }
                                     });
-                                    state.log_info(format!("Notion task → {}", option_name));
+                                    state.show_success(format!("Task → {}", option_name));
                                 }
                             }
                             ProjectMgmtTaskStatus::Asana(asana_status) => {
@@ -2282,7 +2301,7 @@ async fn process_action(
                                     if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
                                         agent.pm_task_status = new_status;
                                     }
-                                    state.log_info(format!("Asana task → {}", option_name));
+                                    state.show_success(format!("Task → {}", option_name));
                                 }
                             }
                             ProjectMgmtTaskStatus::None => {}
@@ -2301,11 +2320,11 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to open browser: {}", e));
-                            state.error_message = Some(format!("Failed to open browser: {}", e));
+                            state.show_error(format!("Failed to open browser: {}", e));
                         }
                     }
                 } else {
-                    state.error_message = Some("No task linked to this agent".to_string());
+                    state.show_error("No task linked to this agent");
                 }
             }
         }
@@ -2437,7 +2456,7 @@ async fn process_action(
 
         Action::TaskListFetchError { message } => {
             state.task_list_loading = false;
-            state.error_message = Some(format!("Failed to fetch tasks: {}", message));
+            state.show_error(format!("Failed to fetch tasks: {}", message));
             state.exit_input_mode();
         }
 
@@ -2461,7 +2480,7 @@ async fn process_action(
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
                 let branch = flock::util::sanitize_branch_name(&task.name);
                 if branch.is_empty() {
-                    state.error_message = Some("Invalid task name for branch".to_string());
+                    state.show_error("Invalid task name for branch");
                 } else {
                     let name = task.name.clone();
                     state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
@@ -2495,7 +2514,7 @@ async fn process_action(
 
                             state.add_agent(agent);
                             state.select_last();
-                            state.error_message = None;
+                            state.toast = None;
                             state.exit_input_mode();
 
                             let _ = agent_watch_tx.send(state.agents.keys().cloned().collect());
@@ -2510,7 +2529,7 @@ async fn process_action(
                         }
                         Err(e) => {
                             state.log_error(format!("Failed to create agent: {}", e));
-                            state.error_message = Some(format!("Failed to create agent: {}", e));
+                            state.show_error(format!("Failed to create agent: {}", e));
                         }
                     }
                 }
@@ -2527,7 +2546,7 @@ async fn process_action(
                         .unwrap_or(false);
 
                     if already_has_task {
-                        state.error_message = Some("Agent already has a task assigned".to_string());
+                        state.show_warning("Agent already has a task assigned");
                     } else {
                         let task_id_normalized = task.id.replace('-', "").to_lowercase();
                         let old_agent_info = state.agents.values().find_map(|a| {
@@ -2556,7 +2575,7 @@ async fn process_action(
                         })?;
                     }
                 } else {
-                    state.error_message = Some("No agent selected".to_string());
+                    state.show_warning("No agent selected");
                 }
             }
         }
@@ -2575,11 +2594,15 @@ async fn process_action(
         }
 
         Action::ShowError(msg) => {
-            state.error_message = Some(msg);
+            state.toast = Some(Toast::new(msg, ToastLevel::Error));
+        }
+
+        Action::ShowToast { message, level } => {
+            state.toast = Some(Toast::new(message, level));
         }
 
         Action::ClearError => {
-            state.error_message = None;
+            state.toast = None;
         }
 
         Action::EnterInputMode(mode) => {
@@ -2688,10 +2711,10 @@ async fn process_action(
                 let name = agent.name.clone();
                 match Clipboard::new().and_then(|mut c| c.set_text(&name)) {
                     Ok(()) => {
-                        state.error_message = Some(format!("Copied '{}'", name));
+                        state.show_success(format!("Copied '{}'", name));
                     }
                     Err(e) => {
-                        state.error_message = Some(format!("Copy failed: {}", e));
+                        state.show_error(format!("Copy failed: {}", e));
                     }
                 }
             }
@@ -2699,7 +2722,7 @@ async fn process_action(
 
         // Application
         Action::RefreshAll => {
-            state.error_message = Some("Refreshing...".to_string());
+            state.show_info("Refreshing...");
 
             if let Some(agent) = state.selected_agent() {
                 let git_sync = GitSync::new(&agent.worktree_path);
@@ -2712,7 +2735,7 @@ async fn process_action(
         }
 
         Action::RefreshSelected => {
-            state.error_message = Some("Refreshing...".to_string());
+            state.show_info("Refreshing...");
 
             if let Some(agent) = state.selected_agent() {
                 let id = agent.id;
@@ -2830,8 +2853,12 @@ async fn process_action(
         }
 
         Action::Tick => {
-            // Advance animation frame for spinner
             state.advance_animation();
+            if let Some(ref toast) = state.toast {
+                if toast.is_expired() {
+                    state.toast = None;
+                }
+            }
         }
 
         Action::RecordActivity { id, had_activity } => {
@@ -2883,7 +2910,7 @@ async fn process_action(
             } else {
                 state.log_error(&message);
             }
-            state.error_message = Some(message);
+            state.show_info(message);
         }
 
         Action::PauseAgentComplete {
@@ -2897,10 +2924,11 @@ async fn process_action(
                     agent.status = flock::agent::AgentStatus::Paused;
                 }
                 state.log_info(&message);
+                state.show_success(message);
             } else {
                 state.log_error(&message);
+                state.show_error(message);
             }
-            state.error_message = Some(message);
         }
 
         Action::ResumeAgentComplete {
@@ -2914,10 +2942,11 @@ async fn process_action(
                     agent.status = flock::agent::AgentStatus::Running;
                 }
                 state.log_info(&message);
+                state.show_success(message);
             } else {
                 state.log_error(&message);
+                state.show_error(message);
             }
-            state.error_message = Some(message);
         }
 
         // Settings actions
@@ -3204,7 +3233,7 @@ async fn process_action(
                 flock::app::SettingsField::PushPrompt => {
                     let agent = &state.settings.pending_ai_agent;
                     if agent.push_command().is_some() {
-                        state.error_message = Some(format!(
+                        state.show_warning(format!(
                             "{} uses /push command, no prompt to configure",
                             agent.display_name()
                         ));
@@ -3588,7 +3617,7 @@ async fn process_action(
                 }
                 _ => {}
             }
-            state.error_message = Some("Saved".to_string());
+            state.show_success("Saved");
         }
 
         Action::SettingsInputChar(c) => {

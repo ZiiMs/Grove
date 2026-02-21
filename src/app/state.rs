@@ -382,7 +382,7 @@ pub struct AppState {
     pub selected_index: usize,
     pub config: Config,
     pub running: bool,
-    pub error_message: Option<String>,
+    pub toast: Option<Toast>,
     pub show_help: bool,
     pub show_diff: bool,
     pub input_mode: Option<InputMode>,
@@ -469,6 +469,43 @@ pub enum LogLevel {
     Debug,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    Success,
+    Info,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub message: String,
+    pub level: ToastLevel,
+    pub created_at: std::time::Instant,
+    pub duration_secs: u64,
+}
+
+impl Toast {
+    pub fn new(message: String, level: ToastLevel) -> Self {
+        let duration_secs = match level {
+            ToastLevel::Success => 3,
+            ToastLevel::Info => 3,
+            ToastLevel::Warning => 4,
+            ToastLevel::Error => 5,
+        };
+        Self {
+            message,
+            level,
+            created_at: std::time::Instant::now(),
+            duration_secs,
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.created_at.elapsed().as_secs() >= self.duration_secs
+    }
+}
+
 impl AppState {
     pub fn new(config: Config, repo_path: String) -> Self {
         let repo_config = RepoConfig::load(&repo_path).unwrap_or_default();
@@ -482,7 +519,7 @@ impl AppState {
             selected_index: 0,
             config,
             running: true,
-            error_message: None,
+            toast: None,
             show_help: false,
             show_diff: false,
             input_mode: None,
@@ -638,6 +675,22 @@ impl AppState {
         self.input_mode = None;
         self.input_buffer.clear();
         self.task_status_dropdown = None;
+    }
+
+    pub fn show_error(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg.into(), ToastLevel::Error));
+    }
+
+    pub fn show_success(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg.into(), ToastLevel::Success));
+    }
+
+    pub fn show_info(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg.into(), ToastLevel::Info));
+    }
+
+    pub fn show_warning(&mut self, msg: impl Into<String>) {
+        self.toast = Some(Toast::new(msg.into(), ToastLevel::Warning));
     }
 
     pub fn record_system_metrics(&mut self, cpu_percent: f32, memory_used: u64, memory_total: u64) {

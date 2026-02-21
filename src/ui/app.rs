@@ -15,7 +15,7 @@ use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
     DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GlobalSetupWizard, HelpOverlay,
     LoadingOverlay, OutputViewWidget, ProjectSetupWizard, SettingsModal, StatusBarWidget,
-    StatusDropdown, SystemMetricsWidget, TaskListModal,
+    StatusDropdown, SystemMetricsWidget, TaskListModal, ToastWidget,
 };
 
 #[derive(Clone)]
@@ -61,7 +61,6 @@ impl<'a> AppWidget<'a> {
         let show_preview = self.state.config.ui.show_preview;
         let show_metrics = self.state.config.ui.show_metrics;
         let show_logs = self.state.config.ui.show_logs;
-        let has_message = self.state.error_message.is_some();
 
         let agent_count = self.state.agents.len().max(1);
         let agent_list_height = ((agent_count * 2) + 3).min(size.height as usize / 3) as u16;
@@ -80,9 +79,6 @@ impl<'a> AppWidget<'a> {
         }
         if show_logs {
             constraints.push(Constraint::Length(6));
-        }
-        if has_message {
-            constraints.push(Constraint::Length(3));
         }
         constraints.push(Constraint::Length(1));
 
@@ -113,11 +109,6 @@ impl<'a> AppWidget<'a> {
 
         if show_logs {
             self.render_logs(frame, chunks[chunk_idx]);
-            chunk_idx += 1;
-        }
-
-        if has_message {
-            self.render_message(frame, chunks[chunk_idx]);
             chunk_idx += 1;
         }
 
@@ -164,6 +155,10 @@ impl<'a> AppWidget<'a> {
 
         if let Some(message) = &self.state.loading_message {
             LoadingOverlay::render(frame, message, self.state.animation_frame);
+        }
+
+        if let Some(toast) = &self.state.toast {
+            ToastWidget::new(toast).render(frame);
         }
     }
 
@@ -540,29 +535,6 @@ impl<'a> AppWidget<'a> {
         );
 
         frame.render_widget(paragraph, area);
-    }
-
-    fn render_message(&self, frame: &mut Frame, area: Rect) {
-        if let Some(msg) = &self.state.error_message {
-            let is_error = msg.contains("Error") || msg.contains("Failed") || msg.contains("error");
-            let (border_color, text_color) = if is_error {
-                (Color::Red, Color::Red)
-            } else {
-                (Color::Yellow, Color::Yellow)
-            };
-
-            let paragraph = Paragraph::new(Line::from(Span::styled(
-                msg.clone(),
-                Style::default().fg(text_color).add_modifier(Modifier::BOLD),
-            )))
-            .block(
-                Block::default()
-                    .title(" EVENT ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color)),
-            );
-            frame.render_widget(paragraph, area);
-        }
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
