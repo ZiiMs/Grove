@@ -74,6 +74,9 @@ pub enum Action {
     OpenMrInBrowser {
         id: Uuid,
     },
+    OpenInEditor {
+        id: Uuid,
+    },
 
     UpdatePrStatus {
         id: Uuid,
