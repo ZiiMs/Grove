@@ -269,9 +269,9 @@ impl<'a> ProjectSetupWizard<'a> {
         let hint = if self.state.editing_text {
             "[Enter] Save  [Esc] Cancel"
         } else if self.state.dropdown_open {
-            "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
+            "[↑/k][↓/j] Navigate  [Enter] Select  [Esc] Cancel"
         } else {
-            "[Tab/↑/↓] Navigate  [Enter] Edit  [c] Save  [Esc] Skip"
+            "[↑/k][↓/j] Navigate  [Enter] Edit  [c] Save  [Esc] Skip"
         };
 
         let paragraph = Paragraph::new(Line::from(Span::styled(

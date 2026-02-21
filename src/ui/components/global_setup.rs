@@ -188,12 +188,12 @@ impl<'a> GlobalSetupWizard<'a> {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let hint = match self.state.step {
-            GlobalSetupStep::WorktreeLocation => "[↑/↓] Select  [Enter] Next",
+            GlobalSetupStep::WorktreeLocation => "[↑/k][↓/j] Select  [Enter] Next",
             GlobalSetupStep::AgentSettings => {
                 if self.state.dropdown_open {
-                    "[↑/↓] Navigate  [Enter] Select  [Esc] Cancel"
+                    "[↑/k][↓/j] Navigate  [Enter] Select  [Esc] Cancel"
                 } else {
-                    "[↑/↓] Navigate  [Enter] Edit  [Esc] Back  [c] Complete"
+                    "[↑/k][↓/j] Navigate  [Enter] Edit  [Esc] Back  [c] Complete"
                 }
             }
         };
