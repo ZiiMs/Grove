@@ -133,9 +133,9 @@ impl AgentManager {
         Ok(())
     }
 
-    /// Get info about all currently running flock sessions.
+    /// Get info about all currently running grove sessions.
     pub fn list_running_sessions() -> Result<Vec<String>> {
-        crate::tmux::list_flock_sessions()
+        crate::tmux::list_grove_sessions()
     }
 
     /// Recover orphaned sessions (sessions without agents).
@@ -143,7 +143,7 @@ impl AgentManager {
         let sessions = Self::list_running_sessions()?;
         let known_session_names: Vec<String> = known_agents
             .iter()
-            .map(|id| format!("flock-{}", id.as_simple()))
+            .map(|id| format!("grove-{}", id.as_simple()))
             .collect();
 
         Ok(sessions

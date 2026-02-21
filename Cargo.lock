@@ -484,35 +484,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flock-tui"
-version = "0.1.0"
-dependencies = [
- "ansi-to-tui",
- "anyhow",
- "arboard",
- "chrono",
- "color-eyre",
- "crossterm",
- "dirs",
- "futures",
- "git2",
- "open",
- "pathdiff",
- "ratatui",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sysinfo",
- "tempfile",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -684,6 +655,35 @@ dependencies = [
  "openssl-probe",
  "openssl-sys",
  "url",
+]
+
+[[package]]
+name = "grove"
+version = "0.1.0"
+dependencies = [
+ "ansi-to-tui",
+ "anyhow",
+ "arboard",
+ "chrono",
+ "color-eyre",
+ "crossterm",
+ "dirs",
+ "futures",
+ "git2",
+ "open",
+ "pathdiff",
+ "ratatui",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -195,8 +195,8 @@ pub fn is_tmux_available() -> bool {
         .unwrap_or(false)
 }
 
-/// List all flock-managed tmux sessions.
-pub fn list_flock_sessions() -> Result<Vec<String>> {
+/// List all grove-managed tmux sessions.
+pub fn list_grove_sessions() -> Result<Vec<String>> {
     let output = Command::new("tmux")
         .args(["list-sessions", "-F", "#{session_name}"])
         .output()
@@ -210,7 +210,7 @@ pub fn list_flock_sessions() -> Result<Vec<String>> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout
         .lines()
-        .filter(|s| s.starts_with("flock-"))
+        .filter(|s| s.starts_with("grove-"))
         .map(String::from)
         .collect())
 }

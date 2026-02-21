@@ -1,5 +1,5 @@
 [package]
-name = "flock-tui"
+name = "grove"
 version = "0.1.0"
 edition = "2021"
 description = "A TUI for managing multiple Claude Code agents with git worktree isolation"

@@ -193,7 +193,7 @@ impl WorktreeLocation {
     pub fn description(&self) -> &'static str {
         match self {
             WorktreeLocation::Project => ".worktrees/ alongside your repo",
-            WorktreeLocation::Home => "~/.flock/worktrees/ (keeps repo clean)",
+            WorktreeLocation::Home => "~/.grove/worktrees/ (keeps repo clean)",
         }
     }
 
@@ -676,7 +676,7 @@ impl Config {
     pub fn config_dir() -> Result<PathBuf> {
         let dir = dirs::home_dir()
             .context("Could not find home directory")?
-            .join(".flock");
+            .join(".grove");
         Ok(dir)
     }
 
@@ -991,7 +991,7 @@ impl RepoConfig {
     pub fn save(&self, repo_path: &str) -> Result<()> {
         let config_dir = Self::config_dir(repo_path)?;
         if !config_dir.exists() {
-            std::fs::create_dir_all(&config_dir).context("Failed to create .flock directory")?;
+            std::fs::create_dir_all(&config_dir).context("Failed to create .grove directory")?;
         }
         let config_path = Self::config_path(repo_path)?;
         let content = toml::to_string_pretty(self).context("Failed to serialize repo config")?;
@@ -999,7 +999,7 @@ impl RepoConfig {
     }
 
     fn config_dir(repo_path: &str) -> Result<PathBuf> {
-        Ok(PathBuf::from(repo_path).join(".flock"))
+        Ok(PathBuf::from(repo_path).join(".grove"))
     }
 
     pub fn config_path(repo_path: &str) -> Result<PathBuf> {

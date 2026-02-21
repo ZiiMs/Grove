@@ -22,7 +22,7 @@ impl<'a> SetupDialog<'a> {
         frame.render_widget(Clear, area);
 
         let block = Block::default()
-            .title(" Flock Setup ")
+            .title(" Grove Setup ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
 
@@ -48,7 +48,7 @@ impl<'a> SetupDialog<'a> {
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let text = "Configure Flock for this repository";
+        let text = "Configure Grove for this repository";
         let paragraph = Paragraph::new(Line::from(Span::styled(
             text,
             Style::default().fg(Color::Gray),

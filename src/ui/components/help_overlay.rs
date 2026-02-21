@@ -25,7 +25,7 @@ impl<'a> HelpOverlay<'a> {
         let kb = self.keybinds;
         let help_text = vec![
             Line::from(Span::styled(
-                "Flock - AI Agent Manager",
+                "Grove - AI Agent Manager",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),

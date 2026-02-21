@@ -17,26 +17,26 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
-use flock_tui::agent::{
+use grove::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
     AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
 };
-use flock_tui::app::{
+use grove::app::{
     Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, StatusOption,
     TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast, ToastLevel,
 };
-use flock_tui::asana::{AsanaTaskStatus, OptionalAsanaClient};
-use flock_tui::codeberg::OptionalCodebergClient;
-use flock_tui::devserver::DevServerManager;
-use flock_tui::git::{GitSync, Worktree};
-use flock_tui::github::OptionalGitHubClient;
-use flock_tui::gitlab::OptionalGitLabClient;
-use flock_tui::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
-use flock_tui::storage::{save_session, SessionStorage};
-use flock_tui::tmux::is_tmux_available;
-use flock_tui::ui::{AppWidget, DevServerRenderInfo};
+use grove::asana::{AsanaTaskStatus, OptionalAsanaClient};
+use grove::codeberg::OptionalCodebergClient;
+use grove::devserver::DevServerManager;
+use grove::git::{GitSync, Worktree};
+use grove::github::OptionalGitHubClient;
+use grove::gitlab::OptionalGitLabClient;
+use grove::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
+use grove::storage::{save_session, SessionStorage};
+use grove::tmux::is_tmux_available;
+use grove::ui::{AppWidget, DevServerRenderInfo};
 
-fn matches_keybind(key: crossterm::event::KeyEvent, keybind: &flock_tui::app::config::Keybind) -> bool {
+fn matches_keybind(key: crossterm::event::KeyEvent, keybind: &grove::app::config::Keybind) -> bool {
     let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let has_alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -95,14 +95,14 @@ async fn main() -> Result<()> {
     let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/flock-debug.log")
+        .open("/tmp/grove-debug.log")
         .ok();
 
     if let Some(file) = log_file {
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("flock=debug".parse().unwrap()),
+                    .add_directive("grove=debug".parse().unwrap()),
             )
             .with_writer(std::sync::Arc::new(file))
             .init();
@@ -110,13 +110,13 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("flock=info".parse().unwrap()),
+                    .add_directive("grove=info".parse().unwrap()),
             )
             .with_writer(std::io::stderr)
             .init();
     }
 
-    tracing::info!("=== Flock starting ===");
+    tracing::info!("=== Grove starting ===");
 
     // Check prerequisites
     if !is_tmux_available() {
@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
     // Verify it's a git repository
     if !std::path::Path::new(&repo_path).join(".git").exists() {
         anyhow::bail!(
-            "Not a git repository: {}. Please run flock from a git repository.",
+            "Not a git repository: {}. Please run grove from a git repository.",
             repo_path
         );
     }
@@ -142,11 +142,11 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = Config::load().unwrap_or_default();
 
-    // Check if this is first launch (no ~/.flock directory exists)
+    // Check if this is first launch (no ~/.grove directory exists)
     let is_first_launch = !Config::exists();
 
     // Check if project config exists
-    let repo_config_path = flock_tui::app::RepoConfig::config_path(&repo_path).ok();
+    let repo_config_path = grove::app::RepoConfig::config_path(&repo_path).ok();
     let project_needs_setup = repo_config_path
         .as_ref()
         .map(|p| !p.exists())
@@ -157,17 +157,17 @@ async fn main() -> Result<()> {
 
     // Create app state
     let mut state = AppState::new(config.clone(), repo_path.clone());
-    state.log_info(format!("Flock started in {}", repo_path));
+    state.log_info(format!("Grove started in {}", repo_path));
 
     // Show global setup wizard if first launch
     if is_first_launch {
         state.show_global_setup = true;
-        state.global_setup = Some(flock_tui::app::GlobalSetupState::default());
+        state.global_setup = Some(grove::app::GlobalSetupState::default());
         state.log_info("First launch - showing global setup wizard".to_string());
     } else if project_needs_setup {
         // Show project setup wizard if project not configured
         state.show_project_setup = true;
-        state.project_setup = Some(flock_tui::app::ProjectSetupState::default());
+        state.project_setup = Some(grove::app::ProjectSetupState::default());
         state.log_info("Project not configured - showing project setup wizard".to_string());
     }
 
@@ -510,7 +510,7 @@ async fn main() -> Result<()> {
                 execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
                 // Attach to tmux (blocks until detach)
-                let tmux_session = flock_tui::tmux::TmuxSession::new(&session_name);
+                let tmux_session = grove::tmux::TmuxSession::new(&session_name);
                 let attach_result = tmux_session.attach();
 
                 // Restore TUI mode
@@ -765,7 +765,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                 KeyCode::Esc => {
                     if wizard.dropdown_open {
                         Some(Action::GlobalSetupToggleDropdown)
-                    } else if matches!(wizard.step, flock_tui::app::GlobalSetupStep::AgentSettings) {
+                    } else if matches!(wizard.step, grove::app::GlobalSetupStep::AgentSettings) {
                         Some(Action::GlobalSetupPrevStep)
                     } else {
                         None // Can't go back from first step
@@ -774,7 +774,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                 KeyCode::Up | KeyCode::Char('k') => {
                     if wizard.dropdown_open {
                         Some(Action::GlobalSetupDropdownPrev)
-                    } else if matches!(wizard.step, flock_tui::app::GlobalSetupStep::WorktreeLocation) {
+                    } else if matches!(wizard.step, grove::app::GlobalSetupStep::WorktreeLocation) {
                         Some(Action::GlobalSetupSelectPrev)
                     } else {
                         Some(Action::GlobalSetupNavigateUp)
@@ -783,7 +783,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                 KeyCode::Down | KeyCode::Char('j') => {
                     if wizard.dropdown_open {
                         Some(Action::GlobalSetupDropdownNext)
-                    } else if matches!(wizard.step, flock_tui::app::GlobalSetupStep::WorktreeLocation) {
+                    } else if matches!(wizard.step, grove::app::GlobalSetupStep::WorktreeLocation) {
                         Some(Action::GlobalSetupSelectNext)
                     } else {
                         Some(Action::GlobalSetupNavigateDown)
@@ -792,14 +792,14 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                 KeyCode::Enter => {
                     if wizard.dropdown_open {
                         Some(Action::GlobalSetupConfirmDropdown)
-                    } else if matches!(wizard.step, flock_tui::app::GlobalSetupStep::AgentSettings) {
+                    } else if matches!(wizard.step, grove::app::GlobalSetupStep::AgentSettings) {
                         Some(Action::GlobalSetupToggleDropdown)
                     } else {
                         Some(Action::GlobalSetupNextStep)
                     }
                 }
                 KeyCode::Char('c') => {
-                    if matches!(wizard.step, flock_tui::app::GlobalSetupStep::AgentSettings)
+                    if matches!(wizard.step, grove::app::GlobalSetupStep::AgentSettings)
                         && !wizard.dropdown_open
                     {
                         Some(Action::GlobalSetupComplete)
@@ -861,7 +861,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Check if selected agent is paused
     let is_paused = state
         .selected_agent()
-        .map(|a| matches!(a.status, flock_tui::agent::AgentStatus::Paused))
+        .map(|a| matches!(a.status, grove::agent::AgentStatus::Paused))
         .unwrap_or(false);
 
     let kb = &state.config.keybinds;
@@ -995,13 +995,13 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     if matches_keybind(key, &kb.open_mr) {
         let provider = state.settings.repo_config.git.provider;
         return match provider {
-            flock_tui::app::GitProvider::GitLab => state
+            grove::app::GitProvider::GitLab => state
                 .selected_agent_id()
                 .map(|id| Action::OpenMrInBrowser { id }),
-            flock_tui::app::GitProvider::GitHub => state
+            grove::app::GitProvider::GitHub => state
                 .selected_agent_id()
                 .map(|id| Action::OpenPrInBrowser { id }),
-            flock_tui::app::GitProvider::Codeberg => state
+            grove::app::GitProvider::Codeberg => state
                 .selected_agent_id()
                 .map(|id| Action::OpenCodebergPrInBrowser { id }),
         };
@@ -1161,7 +1161,7 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
 
 /// Handle key events in settings mode.
 fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
-    use flock_tui::app::DropdownState;
+    use grove::app::DropdownState;
 
     // Handle prompt editing mode (multi-line text editor)
     if state.settings.editing_prompt {
@@ -1447,7 +1447,7 @@ async fn process_action(
                 let repo_path = state.repo_path.clone();
                 tokio::spawn(async move {
                     // Kill tmux session
-                    let session = flock_tui::tmux::TmuxSession::new(&tmux_session);
+                    let session = grove::tmux::TmuxSession::new(&tmux_session);
                     if session.exists() {
                         let _ = session.kill();
                     }
@@ -1520,7 +1520,7 @@ async fn process_action(
         // Status updates
         Action::UpdateAgentStatus { id, status } => {
             if let Some(agent) = state.agents.get_mut(&id) {
-                if matches!(agent.status, flock_tui::agent::AgentStatus::Paused) {
+                if matches!(agent.status, grove::agent::AgentStatus::Paused) {
                     return Ok(false);
                 }
 
@@ -1584,7 +1584,7 @@ async fn process_action(
                                 &worktree_path,
                                 "commit",
                                 "-m",
-                                &format!("[flock] paused '{}'", name_clone),
+                                &format!("[grove] paused '{}'", name_clone),
                             ])
                             .output();
                     }
@@ -1691,7 +1691,7 @@ async fn process_action(
                         }
 
                         // Create symlinks for newly created worktree
-                        let worktree = flock_tui::git::Worktree::new(&repo_path, worktree_base);
+                        let worktree = grove::git::Worktree::new(&repo_path, worktree_base);
                         if let Err(e) = worktree.create_symlinks(&worktree_path, &worktree_symlinks)
                         {
                             // Log but don't fail - symlinks are optional
@@ -1699,7 +1699,7 @@ async fn process_action(
                         }
                     }
 
-                    let session = flock_tui::tmux::TmuxSession::new(&tmux_session);
+                    let session = grove::tmux::TmuxSession::new(&tmux_session);
                     if !session.exists() {
                         if let Err(e) = session.create(&worktree_path, ai_agent.command()) {
                             let _ = tx.send(Action::ResumeAgentComplete {
@@ -1734,7 +1734,7 @@ async fn process_action(
                 .map(|a| (a.name.clone(), a.tmux_session.clone()));
 
             if let Some((name, tmux_session)) = agent_info {
-                let session = flock_tui::tmux::TmuxSession::new(&tmux_session);
+                let session = grove::tmux::TmuxSession::new(&tmux_session);
                 match session.send_keys(&prompt) {
                     Ok(()) => {
                         if let Some(agent) = state.agents.get_mut(&id) {
@@ -1758,7 +1758,7 @@ async fn process_action(
                 .map(|a| (a.name.clone(), a.tmux_session.clone()));
 
             if let Some((name, tmux_session)) = agent_info {
-                let session = flock_tui::tmux::TmuxSession::new(&tmux_session);
+                let session = grove::tmux::TmuxSession::new(&tmux_session);
                 let agent_type = state.config.global.ai_agent.clone();
                 let push_cmd = agent_type.push_command();
                 let push_prompt = state
@@ -1829,7 +1829,7 @@ async fn process_action(
                 .map(|a| (a.name.clone(), a.tmux_session.clone()));
 
             if let Some((name, tmux_session)) = agent_info {
-                let session = flock_tui::tmux::TmuxSession::new(&tmux_session);
+                let session = grove::tmux::TmuxSession::new(&tmux_session);
                 match session.send_keys(&prompt) {
                     Ok(()) => {
                         if let Some(agent) = state.agents.get_mut(&id) {
@@ -1857,10 +1857,10 @@ async fn process_action(
         Action::UpdateMrStatus { id, status } => {
             // Check current state and extract needed data before mutable borrow
             let should_log = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.mr_status, flock_tui::gitlab::MergeRequestStatus::None);
-                let is_open = matches!(&status, flock_tui::gitlab::MergeRequestStatus::Open { .. });
+                let was_none = matches!(agent.mr_status, grove::gitlab::MergeRequestStatus::None);
+                let is_open = matches!(&status, grove::gitlab::MergeRequestStatus::Open { .. });
                 if was_none && is_open {
-                    if let flock_tui::gitlab::MergeRequestStatus::Open { iid, url, .. } = &status {
+                    if let grove::gitlab::MergeRequestStatus::Open { iid, url, .. } = &status {
                         Some((agent.name.clone(), *iid, url.clone()))
                     } else {
                         None
@@ -1872,15 +1872,15 @@ async fn process_action(
 
             // Auto-update note based on MR transitions
             let auto_note = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.mr_status, flock_tui::gitlab::MergeRequestStatus::None);
+                let was_none = matches!(agent.mr_status, grove::gitlab::MergeRequestStatus::None);
                 let was_pushing = agent.custom_note.as_deref() == Some("pushing...");
                 let was_merging = agent.custom_note.as_deref() == Some("merging main...");
 
                 match &status {
-                    flock_tui::gitlab::MergeRequestStatus::Open { .. } if was_none || was_pushing => {
+                    grove::gitlab::MergeRequestStatus::Open { .. } if was_none || was_pushing => {
                         Some("pushed".to_string())
                     }
-                    flock_tui::gitlab::MergeRequestStatus::Merged { .. } => Some("merged".to_string()),
+                    grove::gitlab::MergeRequestStatus::Merged { .. } => Some("merged".to_string()),
                     _ if was_merging => {
                         // If we had "merging main..." and status updates, merge is done
                         Some("main merged".to_string())
@@ -1928,10 +1928,10 @@ async fn process_action(
         // GitHub operations
         Action::UpdatePrStatus { id, status } => {
             let should_log = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.pr_status, flock_tui::github::PullRequestStatus::None);
-                let is_open = matches!(&status, flock_tui::github::PullRequestStatus::Open { .. });
+                let was_none = matches!(agent.pr_status, grove::github::PullRequestStatus::None);
+                let is_open = matches!(&status, grove::github::PullRequestStatus::Open { .. });
                 if was_none && is_open {
-                    if let flock_tui::github::PullRequestStatus::Open { number, url, .. } = &status {
+                    if let grove::github::PullRequestStatus::Open { number, url, .. } = &status {
                         Some((agent.name.clone(), *number, url.clone()))
                     } else {
                         None
@@ -1942,15 +1942,15 @@ async fn process_action(
             });
 
             let auto_note = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.pr_status, flock_tui::github::PullRequestStatus::None);
+                let was_none = matches!(agent.pr_status, grove::github::PullRequestStatus::None);
                 let was_pushing = agent.custom_note.as_deref() == Some("pushing...");
                 let was_merging = agent.custom_note.as_deref() == Some("merging main...");
 
                 match &status {
-                    flock_tui::github::PullRequestStatus::Open { .. } if was_none || was_pushing => {
+                    grove::github::PullRequestStatus::Open { .. } if was_none || was_pushing => {
                         Some("pushed".to_string())
                     }
-                    flock_tui::github::PullRequestStatus::Merged { .. } => Some("merged".to_string()),
+                    grove::github::PullRequestStatus::Merged { .. } => Some("merged".to_string()),
                     _ if was_merging => Some("main merged".to_string()),
                     _ => None,
                 }
@@ -1992,11 +1992,11 @@ async fn process_action(
             let should_log = state.agents.get(&id).and_then(|agent| {
                 let was_none = matches!(
                     agent.codeberg_pr_status,
-                    flock_tui::codeberg::PullRequestStatus::None
+                    grove::codeberg::PullRequestStatus::None
                 );
-                let is_open = matches!(&status, flock_tui::codeberg::PullRequestStatus::Open { .. });
+                let is_open = matches!(&status, grove::codeberg::PullRequestStatus::Open { .. });
                 if was_none && is_open {
-                    if let flock_tui::codeberg::PullRequestStatus::Open { number, url, .. } = &status {
+                    if let grove::codeberg::PullRequestStatus::Open { number, url, .. } = &status {
                         Some((agent.name.clone(), *number, url.clone()))
                     } else {
                         None
@@ -2902,7 +2902,7 @@ async fn process_action(
 
         Action::CreateAgentFromSelectedTask => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
-                let branch = flock_tui::util::sanitize_branch_name(&task.name);
+                let branch = grove::util::sanitize_branch_name(&task.name);
                 if branch.is_empty() {
                     state.show_error("Invalid task name for branch");
                 } else {
@@ -2993,7 +2993,7 @@ async fn process_action(
 
                     if agent_current_task.is_some() || task_current_agent.is_some() {
                         state.task_reassignment_warning =
-                            Some(flock_tui::app::TaskReassignmentWarning {
+                            Some(grove::app::TaskReassignmentWarning {
                                 target_agent_id: agent_id,
                                 task_id: task.id.clone(),
                                 task_name: task.name.clone(),
@@ -3085,7 +3085,7 @@ async fn process_action(
                 match mode {
                     InputMode::NewAgent => {
                         if !input.is_empty() {
-                            let branch = flock_tui::util::sanitize_branch_name(&input);
+                            let branch = grove::util::sanitize_branch_name(&input);
                             if branch.is_empty() {
                                 action_tx.send(Action::ShowError(
                                     "Invalid name: name cannot be only spaces".to_string(),
@@ -3172,7 +3172,7 @@ async fn process_action(
 
                                 if agent_current_task.is_some() || task_current_agent.is_some() {
                                     state.task_reassignment_warning =
-                                        Some(flock_tui::app::TaskReassignmentWarning {
+                                        Some(grove::app::TaskReassignmentWarning {
                                             target_agent_id: agent_id,
                                             task_id: input.clone(),
                                             task_name: input.clone(),
@@ -3259,7 +3259,7 @@ async fn process_action(
                     let status = gitlab_client_clone
                         .get_mr_for_branch(&branch_for_gitlab)
                         .await;
-                    if !matches!(status, flock_tui::gitlab::MergeRequestStatus::None) {
+                    if !matches!(status, grove::gitlab::MergeRequestStatus::None) {
                         let _ = tx_clone.send(Action::UpdateMrStatus { id, status });
                     }
                 });
@@ -3271,7 +3271,7 @@ async fn process_action(
                     let status = github_client_clone
                         .get_pr_for_branch(&branch_for_github)
                         .await;
-                    if !matches!(status, flock_tui::github::PullRequestStatus::None) {
+                    if !matches!(status, grove::github::PullRequestStatus::None) {
                         let _ = tx_clone.send(Action::UpdatePrStatus { id, status });
                     }
                 });
@@ -3283,7 +3283,7 @@ async fn process_action(
                     let status = codeberg_client_clone
                         .get_pr_for_branch(&branch_for_codeberg)
                         .await;
-                    if !matches!(status, flock_tui::codeberg::PullRequestStatus::None) {
+                    if !matches!(status, grove::codeberg::PullRequestStatus::None) {
                         let _ = tx_clone.send(Action::UpdateCodebergPrStatus { id, status });
                     }
                 });
@@ -3300,12 +3300,12 @@ async fn process_action(
                                         format!("https://app.asana.com/0/0/{}/f", task.gid)
                                     });
                                     let status = if task.completed {
-                                        flock_tui::asana::AsanaTaskStatus::Completed {
+                                        grove::asana::AsanaTaskStatus::Completed {
                                             gid: task.gid,
                                             name: task.name,
                                         }
                                     } else {
-                                        flock_tui::asana::AsanaTaskStatus::InProgress {
+                                        grove::asana::AsanaTaskStatus::InProgress {
                                             gid: task.gid,
                                             name: task.name,
                                             url,
@@ -3421,7 +3421,7 @@ async fn process_action(
             state.loading_message = None;
             if success {
                 if let Some(agent) = state.agents.get_mut(&id) {
-                    agent.status = flock_tui::agent::AgentStatus::Paused;
+                    agent.status = grove::agent::AgentStatus::Paused;
                 }
                 state.log_info(&message);
                 state.show_success(message);
@@ -3439,7 +3439,7 @@ async fn process_action(
             state.loading_message = None;
             if success {
                 if let Some(agent) = state.agents.get_mut(&id) {
-                    agent.status = flock_tui::agent::AgentStatus::Running;
+                    agent.status = grove::agent::AgentStatus::Running;
                 }
                 state.log_info(&message);
                 state.show_success(message);
@@ -3455,9 +3455,9 @@ async fn process_action(
                 state.settings.active = false;
             } else {
                 state.settings.active = true;
-                state.settings.tab = flock_tui::app::SettingsTab::General;
+                state.settings.tab = grove::app::SettingsTab::General;
                 state.settings.field_index = 0;
-                state.settings.dropdown = flock_tui::app::DropdownState::Closed;
+                state.settings.dropdown = grove::app::DropdownState::Closed;
                 state.settings.editing_text = false;
                 state.settings.pending_ai_agent = state.config.global.ai_agent.clone();
                 state.settings.pending_editor = state.config.global.editor.clone();
@@ -3470,14 +3470,14 @@ async fn process_action(
         Action::SettingsSwitchSection => {
             state.settings.tab = state.settings.next_tab();
             state.settings.field_index = 0;
-            state.settings.dropdown = flock_tui::app::DropdownState::Closed;
+            state.settings.dropdown = grove::app::DropdownState::Closed;
             state.settings.editing_text = false;
         }
 
         Action::SettingsSwitchSectionBack => {
             state.settings.tab = state.settings.prev_tab();
             state.settings.field_index = 0;
-            state.settings.dropdown = flock_tui::app::DropdownState::Closed;
+            state.settings.dropdown = grove::app::DropdownState::Closed;
             state.settings.editing_text = false;
         }
 
@@ -3502,8 +3502,8 @@ async fn process_action(
         }
 
         Action::SettingsDropdownPrev => {
-            if let flock_tui::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
-                state.settings.dropdown = flock_tui::app::DropdownState::Open {
+            if let grove::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
+                state.settings.dropdown = grove::app::DropdownState::Open {
                     selected_index: selected_index.saturating_sub(1),
                 };
             }
@@ -3511,23 +3511,23 @@ async fn process_action(
 
         Action::SettingsDropdownNext => {
             let field = state.settings.current_field();
-            if let flock_tui::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
+            if let grove::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
                 let max = match field {
-                    flock_tui::app::SettingsField::AiAgent => flock_tui::app::AiAgent::all().len(),
-                    flock_tui::app::SettingsField::GitProvider => flock_tui::app::GitProvider::all().len(),
-                    flock_tui::app::SettingsField::LogLevel => flock_tui::app::ConfigLogLevel::all().len(),
-                    flock_tui::app::SettingsField::WorktreeLocation => {
-                        flock_tui::app::WorktreeLocation::all().len()
+                    grove::app::SettingsField::AiAgent => grove::app::AiAgent::all().len(),
+                    grove::app::SettingsField::GitProvider => grove::app::GitProvider::all().len(),
+                    grove::app::SettingsField::LogLevel => grove::app::ConfigLogLevel::all().len(),
+                    grove::app::SettingsField::WorktreeLocation => {
+                        grove::app::WorktreeLocation::all().len()
                     }
-                    flock_tui::app::SettingsField::CodebergCiProvider => {
-                        flock_tui::app::CodebergCiProvider::all().len()
+                    grove::app::SettingsField::CodebergCiProvider => {
+                        grove::app::CodebergCiProvider::all().len()
                     }
-                    flock_tui::app::SettingsField::ProjectMgmtProvider => {
-                        flock_tui::app::ProjectMgmtProvider::all().len()
+                    grove::app::SettingsField::ProjectMgmtProvider => {
+                        grove::app::ProjectMgmtProvider::all().len()
                     }
                     _ => 0,
                 };
-                state.settings.dropdown = flock_tui::app::DropdownState::Open {
+                state.settings.dropdown = grove::app::DropdownState::Open {
                     selected_index: (*selected_index + 1).min(max.saturating_sub(1)),
                 };
             }
@@ -3536,73 +3536,73 @@ async fn process_action(
         Action::SettingsSelectField => {
             let field = state.settings.current_field();
             match field {
-                flock_tui::app::SettingsField::AiAgent => {
+                grove::app::SettingsField::AiAgent => {
                     let current = &state.settings.pending_ai_agent;
-                    let idx = flock_tui::app::AiAgent::all()
+                    let idx = grove::app::AiAgent::all()
                         .iter()
                         .position(|a| a == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock_tui::app::DropdownState::Open {
+                    state.settings.dropdown = grove::app::DropdownState::Open {
                         selected_index: idx,
                     };
                 }
-                flock_tui::app::SettingsField::Editor => {
+                grove::app::SettingsField::Editor => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state.settings.pending_editor.clone();
                 }
-                flock_tui::app::SettingsField::GitProvider => {
+                grove::app::SettingsField::GitProvider => {
                     let current = &state.settings.repo_config.git.provider;
-                    let idx = flock_tui::app::GitProvider::all()
+                    let idx = grove::app::GitProvider::all()
                         .iter()
                         .position(|g| g == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock_tui::app::DropdownState::Open {
+                    state.settings.dropdown = grove::app::DropdownState::Open {
                         selected_index: idx,
                     };
                 }
-                flock_tui::app::SettingsField::LogLevel => {
+                grove::app::SettingsField::LogLevel => {
                     let current = &state.settings.pending_log_level;
-                    let idx = flock_tui::app::ConfigLogLevel::all()
+                    let idx = grove::app::ConfigLogLevel::all()
                         .iter()
                         .position(|l| l == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock_tui::app::DropdownState::Open {
+                    state.settings.dropdown = grove::app::DropdownState::Open {
                         selected_index: idx,
                     };
                 }
-                flock_tui::app::SettingsField::WorktreeLocation => {
+                grove::app::SettingsField::WorktreeLocation => {
                     let current = &state.settings.pending_worktree_location;
-                    let idx = flock_tui::app::WorktreeLocation::all()
+                    let idx = grove::app::WorktreeLocation::all()
                         .iter()
                         .position(|w| w == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock_tui::app::DropdownState::Open {
+                    state.settings.dropdown = grove::app::DropdownState::Open {
                         selected_index: idx,
                     };
                 }
-                flock_tui::app::SettingsField::CodebergCiProvider => {
+                grove::app::SettingsField::CodebergCiProvider => {
                     let current = &state.settings.repo_config.git.codeberg.ci_provider;
-                    let idx = flock_tui::app::CodebergCiProvider::all()
+                    let idx = grove::app::CodebergCiProvider::all()
                         .iter()
                         .position(|c| c == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock_tui::app::DropdownState::Open {
+                    state.settings.dropdown = grove::app::DropdownState::Open {
                         selected_index: idx,
                     };
                 }
-                flock_tui::app::SettingsField::BranchPrefix => {
+                grove::app::SettingsField::BranchPrefix => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer =
                         state.settings.repo_config.git.branch_prefix.clone();
                 }
-                flock_tui::app::SettingsField::MainBranch => {
+                grove::app::SettingsField::MainBranch => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state.settings.repo_config.git.main_branch.clone();
                 }
-                flock_tui::app::SettingsField::WorktreeSymlinks => {
+                grove::app::SettingsField::WorktreeSymlinks => {
                     state.settings.init_file_browser(&state.repo_path);
                 }
-                flock_tui::app::SettingsField::GitLabProjectId => {
+                grove::app::SettingsField::GitLabProjectId => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3613,12 +3613,12 @@ async fn process_action(
                         .map(|id| id.to_string())
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::GitLabBaseUrl => {
+                grove::app::SettingsField::GitLabBaseUrl => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer =
                         state.settings.repo_config.git.gitlab.base_url.clone();
                 }
-                flock_tui::app::SettingsField::GitHubOwner => {
+                grove::app::SettingsField::GitHubOwner => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3629,7 +3629,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::GitHubRepo => {
+                grove::app::SettingsField::GitHubRepo => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3640,7 +3640,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::CodebergOwner => {
+                grove::app::SettingsField::CodebergOwner => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3651,7 +3651,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::CodebergRepo => {
+                grove::app::SettingsField::CodebergRepo => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3662,12 +3662,12 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::CodebergBaseUrl => {
+                grove::app::SettingsField::CodebergBaseUrl => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer =
                         state.settings.repo_config.git.codeberg.base_url.clone();
                 }
-                flock_tui::app::SettingsField::AsanaProjectGid => {
+                grove::app::SettingsField::AsanaProjectGid => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3678,7 +3678,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::AsanaInProgressGid => {
+                grove::app::SettingsField::AsanaInProgressGid => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3689,7 +3689,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::AsanaDoneGid => {
+                grove::app::SettingsField::AsanaDoneGid => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3700,7 +3700,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::SummaryPrompt => {
+                grove::app::SettingsField::SummaryPrompt => {
                     state.settings.editing_prompt = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3717,7 +3717,7 @@ async fn process_action(
                                 .to_string()
                         });
                 }
-                flock_tui::app::SettingsField::MergePrompt => {
+                grove::app::SettingsField::MergePrompt => {
                     state.settings.editing_prompt = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3733,7 +3733,7 @@ async fn process_action(
                                 .get_merge_prompt(&state.settings.repo_config.git.main_branch)
                         });
                 }
-                flock_tui::app::SettingsField::PushPrompt => {
+                grove::app::SettingsField::PushPrompt => {
                     let agent = &state.settings.pending_ai_agent;
                     if agent.push_command().is_some() {
                         state.show_warning(format!(
@@ -3745,52 +3745,52 @@ async fn process_action(
                     let default_prompt = agent.push_prompt().unwrap_or("");
                     state.settings.editing_prompt = true;
                     let current = match agent {
-                        flock_tui::app::AiAgent::Opencode => {
+                        grove::app::AiAgent::Opencode => {
                             &state.settings.repo_config.prompts.push_prompt_opencode
                         }
-                        flock_tui::app::AiAgent::Codex => {
+                        grove::app::AiAgent::Codex => {
                             &state.settings.repo_config.prompts.push_prompt_codex
                         }
-                        flock_tui::app::AiAgent::Gemini => {
+                        grove::app::AiAgent::Gemini => {
                             &state.settings.repo_config.prompts.push_prompt_gemini
                         }
-                        flock_tui::app::AiAgent::ClaudeCode => &None,
+                        grove::app::AiAgent::ClaudeCode => &None,
                     };
                     state.settings.text_buffer = current
                         .clone()
                         .unwrap_or_else(|| default_prompt.to_string());
                 }
-                flock_tui::app::SettingsField::ShowPreview => {
+                grove::app::SettingsField::ShowPreview => {
                     state.settings.pending_ui.show_preview =
                         !state.settings.pending_ui.show_preview;
                     state.config.ui.show_preview = state.settings.pending_ui.show_preview;
                     state.show_logs = state.config.ui.show_logs;
                 }
-                flock_tui::app::SettingsField::ShowMetrics => {
+                grove::app::SettingsField::ShowMetrics => {
                     state.settings.pending_ui.show_metrics =
                         !state.settings.pending_ui.show_metrics;
                     state.config.ui.show_metrics = state.settings.pending_ui.show_metrics;
                 }
-                flock_tui::app::SettingsField::ShowLogs => {
+                grove::app::SettingsField::ShowLogs => {
                     state.settings.pending_ui.show_logs = !state.settings.pending_ui.show_logs;
                     state.config.ui.show_logs = state.settings.pending_ui.show_logs;
                     state.show_logs = state.config.ui.show_logs;
                 }
-                flock_tui::app::SettingsField::ShowBanner => {
+                grove::app::SettingsField::ShowBanner => {
                     state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
                     state.config.ui.show_banner = state.settings.pending_ui.show_banner;
                 }
-                flock_tui::app::SettingsField::ProjectMgmtProvider => {
+                grove::app::SettingsField::ProjectMgmtProvider => {
                     let current = state.settings.repo_config.project_mgmt.provider;
-                    let idx = flock_tui::app::ProjectMgmtProvider::all()
+                    let idx = grove::app::ProjectMgmtProvider::all()
                         .iter()
                         .position(|p| *p == current)
                         .unwrap_or(0);
-                    state.settings.dropdown = flock_tui::app::DropdownState::Open {
+                    state.settings.dropdown = grove::app::DropdownState::Open {
                         selected_index: idx,
                     };
                 }
-                flock_tui::app::SettingsField::NotionDatabaseId => {
+                grove::app::SettingsField::NotionDatabaseId => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3801,7 +3801,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::NotionStatusProperty => {
+                grove::app::SettingsField::NotionStatusProperty => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3812,7 +3812,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_else(|| "Status".to_string());
                 }
-                flock_tui::app::SettingsField::NotionInProgressOption => {
+                grove::app::SettingsField::NotionInProgressOption => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3823,7 +3823,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::NotionDoneOption => {
+                grove::app::SettingsField::NotionDoneOption => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3834,7 +3834,7 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::DevServerCommand => {
+                grove::app::SettingsField::DevServerCommand => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3844,17 +3844,17 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::DevServerRunBefore => {
+                grove::app::SettingsField::DevServerRunBefore => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer =
                         state.settings.repo_config.dev_server.run_before.join(", ");
                 }
-                flock_tui::app::SettingsField::DevServerWorkingDir => {
+                grove::app::SettingsField::DevServerWorkingDir => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer =
                         state.settings.repo_config.dev_server.working_dir.clone();
                 }
-                flock_tui::app::SettingsField::DevServerPort => {
+                grove::app::SettingsField::DevServerPort => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
                         .settings
@@ -3864,7 +3864,7 @@ async fn process_action(
                         .map(|p| p.to_string())
                         .unwrap_or_default();
                 }
-                flock_tui::app::SettingsField::DevServerAutoStart => {
+                grove::app::SettingsField::DevServerAutoStart => {
                     state.settings.repo_config.dev_server.auto_start =
                         !state.settings.repo_config.dev_server.auto_start;
                 }
@@ -3878,15 +3878,15 @@ async fn process_action(
             if state.settings.editing_text || state.settings.editing_prompt {
                 let field = state.settings.current_field();
                 match field {
-                    flock_tui::app::SettingsField::BranchPrefix => {
+                    grove::app::SettingsField::BranchPrefix => {
                         state.settings.repo_config.git.branch_prefix =
                             state.settings.text_buffer.clone();
                     }
-                    flock_tui::app::SettingsField::MainBranch => {
+                    grove::app::SettingsField::MainBranch => {
                         state.settings.repo_config.git.main_branch =
                             state.settings.text_buffer.clone();
                     }
-                    flock_tui::app::SettingsField::WorktreeSymlinks => {
+                    grove::app::SettingsField::WorktreeSymlinks => {
                         state.settings.repo_config.dev_server.worktree_symlinks = state
                             .settings
                             .text_buffer
@@ -3895,44 +3895,44 @@ async fn process_action(
                             .filter(|s| !s.is_empty())
                             .collect();
                     }
-                    flock_tui::app::SettingsField::GitLabProjectId => {
+                    grove::app::SettingsField::GitLabProjectId => {
                         state.settings.repo_config.git.gitlab.project_id =
                             state.settings.text_buffer.parse().ok();
                     }
-                    flock_tui::app::SettingsField::GitLabBaseUrl => {
+                    grove::app::SettingsField::GitLabBaseUrl => {
                         state.settings.repo_config.git.gitlab.base_url =
                             state.settings.text_buffer.clone();
                     }
-                    flock_tui::app::SettingsField::GitHubOwner => {
+                    grove::app::SettingsField::GitHubOwner => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.git.github.owner =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::GitHubRepo => {
+                    grove::app::SettingsField::GitHubRepo => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.git.github.repo =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::CodebergOwner => {
+                    grove::app::SettingsField::CodebergOwner => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.git.codeberg.owner =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::CodebergRepo => {
+                    grove::app::SettingsField::CodebergRepo => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.git.codeberg.repo =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::CodebergBaseUrl => {
+                    grove::app::SettingsField::CodebergBaseUrl => {
                         state.settings.repo_config.git.codeberg.base_url =
                             state.settings.text_buffer.clone();
                     }
-                    flock_tui::app::SettingsField::AsanaProjectGid => {
+                    grove::app::SettingsField::AsanaProjectGid => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.asana.project_gid =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::AsanaInProgressGid => {
+                    grove::app::SettingsField::AsanaInProgressGid => {
                         let val = state.settings.text_buffer.clone();
                         state
                             .settings
@@ -3942,7 +3942,7 @@ async fn process_action(
                             .in_progress_section_gid =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::AsanaDoneGid => {
+                    grove::app::SettingsField::AsanaDoneGid => {
                         let val = state.settings.text_buffer.clone();
                         state
                             .settings
@@ -3951,12 +3951,12 @@ async fn process_action(
                             .asana
                             .done_section_gid = if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::DevServerCommand => {
+                    grove::app::SettingsField::DevServerCommand => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.dev_server.command =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::DevServerRunBefore => {
+                    grove::app::SettingsField::DevServerRunBefore => {
                         state.settings.repo_config.dev_server.run_before = state
                             .settings
                             .text_buffer
@@ -3965,48 +3965,48 @@ async fn process_action(
                             .filter(|s| !s.is_empty())
                             .collect();
                     }
-                    flock_tui::app::SettingsField::DevServerWorkingDir => {
+                    grove::app::SettingsField::DevServerWorkingDir => {
                         state.settings.repo_config.dev_server.working_dir =
                             state.settings.text_buffer.clone();
                     }
-                    flock_tui::app::SettingsField::DevServerPort => {
+                    grove::app::SettingsField::DevServerPort => {
                         state.settings.repo_config.dev_server.port =
                             state.settings.text_buffer.parse().ok();
                     }
-                    flock_tui::app::SettingsField::SummaryPrompt => {
+                    grove::app::SettingsField::SummaryPrompt => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.prompts.summary_prompt =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::MergePrompt => {
+                    grove::app::SettingsField::MergePrompt => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.prompts.merge_prompt =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::PushPrompt => {
+                    grove::app::SettingsField::PushPrompt => {
                         let val = state.settings.text_buffer.clone();
                         match state.settings.pending_ai_agent {
-                            flock_tui::app::AiAgent::Opencode => {
+                            grove::app::AiAgent::Opencode => {
                                 state.settings.repo_config.prompts.push_prompt_opencode =
                                     if val.is_empty() { None } else { Some(val) };
                             }
-                            flock_tui::app::AiAgent::Codex => {
+                            grove::app::AiAgent::Codex => {
                                 state.settings.repo_config.prompts.push_prompt_codex =
                                     if val.is_empty() { None } else { Some(val) };
                             }
-                            flock_tui::app::AiAgent::Gemini => {
+                            grove::app::AiAgent::Gemini => {
                                 state.settings.repo_config.prompts.push_prompt_gemini =
                                     if val.is_empty() { None } else { Some(val) };
                             }
-                            flock_tui::app::AiAgent::ClaudeCode => {}
+                            grove::app::AiAgent::ClaudeCode => {}
                         }
                     }
-                    flock_tui::app::SettingsField::NotionDatabaseId => {
+                    grove::app::SettingsField::NotionDatabaseId => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.notion.database_id =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::NotionStatusProperty => {
+                    grove::app::SettingsField::NotionStatusProperty => {
                         let val = state.settings.text_buffer.clone();
                         state
                             .settings
@@ -4015,7 +4015,7 @@ async fn process_action(
                             .notion
                             .status_property_name = if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::NotionInProgressOption => {
+                    grove::app::SettingsField::NotionInProgressOption => {
                         let val = state.settings.text_buffer.clone();
                         state
                             .settings
@@ -4024,12 +4024,12 @@ async fn process_action(
                             .notion
                             .in_progress_option = if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::NotionDoneOption => {
+                    grove::app::SettingsField::NotionDoneOption => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.notion.done_option =
                             if val.is_empty() { None } else { Some(val) };
                     }
-                    flock_tui::app::SettingsField::Editor => {
+                    grove::app::SettingsField::Editor => {
                         state.settings.pending_editor = state.settings.text_buffer.clone();
                     }
                     _ => {}
@@ -4037,57 +4037,57 @@ async fn process_action(
                 state.settings.editing_text = false;
                 state.settings.editing_prompt = false;
                 state.settings.text_buffer.clear();
-            } else if let flock_tui::app::DropdownState::Open { selected_index } =
+            } else if let grove::app::DropdownState::Open { selected_index } =
                 state.settings.dropdown
             {
                 let field = state.settings.current_field();
                 match field {
-                    flock_tui::app::SettingsField::AiAgent => {
-                        if let Some(agent) = flock_tui::app::AiAgent::all().get(selected_index) {
+                    grove::app::SettingsField::AiAgent => {
+                        if let Some(agent) = grove::app::AiAgent::all().get(selected_index) {
                             state.settings.pending_ai_agent = agent.clone();
                             state.config.global.ai_agent = agent.clone();
                         }
                     }
-                    flock_tui::app::SettingsField::GitProvider => {
-                        if let Some(provider) = flock_tui::app::GitProvider::all().get(selected_index) {
+                    grove::app::SettingsField::GitProvider => {
+                        if let Some(provider) = grove::app::GitProvider::all().get(selected_index) {
                             state.settings.repo_config.git.provider = *provider;
                         }
                     }
-                    flock_tui::app::SettingsField::LogLevel => {
-                        if let Some(level) = flock_tui::app::ConfigLogLevel::all().get(selected_index) {
+                    grove::app::SettingsField::LogLevel => {
+                        if let Some(level) = grove::app::ConfigLogLevel::all().get(selected_index) {
                             state.settings.pending_log_level = *level;
                             state.config.global.log_level = *level;
                         }
                     }
-                    flock_tui::app::SettingsField::WorktreeLocation => {
-                        if let Some(loc) = flock_tui::app::WorktreeLocation::all().get(selected_index) {
+                    grove::app::SettingsField::WorktreeLocation => {
+                        if let Some(loc) = grove::app::WorktreeLocation::all().get(selected_index) {
                             state.settings.pending_worktree_location = *loc;
                             state.config.global.worktree_location = *loc;
                             state.worktree_base = state.config.worktree_base_path(&state.repo_path);
                         }
                     }
-                    flock_tui::app::SettingsField::CodebergCiProvider => {
+                    grove::app::SettingsField::CodebergCiProvider => {
                         if let Some(provider) =
-                            flock_tui::app::CodebergCiProvider::all().get(selected_index)
+                            grove::app::CodebergCiProvider::all().get(selected_index)
                         {
                             state.settings.repo_config.git.codeberg.ci_provider = *provider;
                         }
                     }
-                    flock_tui::app::SettingsField::ProjectMgmtProvider => {
+                    grove::app::SettingsField::ProjectMgmtProvider => {
                         if let Some(provider) =
-                            flock_tui::app::ProjectMgmtProvider::all().get(selected_index)
+                            grove::app::ProjectMgmtProvider::all().get(selected_index)
                         {
                             state.settings.repo_config.project_mgmt.provider = *provider;
                         }
                     }
                     _ => {}
                 }
-                state.settings.dropdown = flock_tui::app::DropdownState::Closed;
+                state.settings.dropdown = grove::app::DropdownState::Closed;
             }
         }
 
         Action::SettingsCancelSelection => {
-            state.settings.dropdown = flock_tui::app::DropdownState::Closed;
+            state.settings.dropdown = grove::app::DropdownState::Closed;
             state.settings.editing_text = false;
             state.settings.editing_prompt = false;
             state.settings.text_buffer.clear();
@@ -4096,32 +4096,32 @@ async fn process_action(
         Action::SettingsPromptSave => {
             let field = state.settings.current_field();
             match field {
-                flock_tui::app::SettingsField::SummaryPrompt => {
+                grove::app::SettingsField::SummaryPrompt => {
                     let val = state.settings.text_buffer.clone();
                     state.settings.repo_config.prompts.summary_prompt =
                         if val.is_empty() { None } else { Some(val) };
                 }
-                flock_tui::app::SettingsField::MergePrompt => {
+                grove::app::SettingsField::MergePrompt => {
                     let val = state.settings.text_buffer.clone();
                     state.settings.repo_config.prompts.merge_prompt =
                         if val.is_empty() { None } else { Some(val) };
                 }
-                flock_tui::app::SettingsField::PushPrompt => {
+                grove::app::SettingsField::PushPrompt => {
                     let val = state.settings.text_buffer.clone();
                     match state.settings.pending_ai_agent {
-                        flock_tui::app::AiAgent::Opencode => {
+                        grove::app::AiAgent::Opencode => {
                             state.settings.repo_config.prompts.push_prompt_opencode =
                                 if val.is_empty() { None } else { Some(val) };
                         }
-                        flock_tui::app::AiAgent::Codex => {
+                        grove::app::AiAgent::Codex => {
                             state.settings.repo_config.prompts.push_prompt_codex =
                                 if val.is_empty() { None } else { Some(val) };
                         }
-                        flock_tui::app::AiAgent::Gemini => {
+                        grove::app::AiAgent::Gemini => {
                             state.settings.repo_config.prompts.push_prompt_gemini =
                                 if val.is_empty() { None } else { Some(val) };
                         }
-                        flock_tui::app::AiAgent::ClaudeCode => {}
+                        grove::app::AiAgent::ClaudeCode => {}
                     }
                 }
                 _ => {}
@@ -4178,7 +4178,7 @@ async fn process_action(
 
         Action::SettingsCaptureKeybind { key, modifiers } => {
             if let Some(field) = state.settings.capturing_keybind {
-                use flock_tui::app::config::Keybind;
+                use grove::app::config::Keybind;
                 let keybind = Keybind::with_modifiers(key, modifiers);
                 state.settings.set_keybind(field, keybind);
                 state.settings.capturing_keybind = None;
@@ -4256,7 +4256,7 @@ async fn process_action(
                     } else {
                         fb.selected_files.insert(entry.path.clone());
                     }
-                    fb.entries = flock_tui::ui::components::file_browser::load_directory_entries(
+                    fb.entries = grove::ui::components::file_browser::load_directory_entries(
                         &fb.current_path,
                         &fb.selected_files,
                         &fb.current_path,
@@ -4281,7 +4281,7 @@ async fn process_action(
                 if entry.is_dir {
                     fb.current_path = entry.path.clone();
                     fb.selected_index = 0;
-                    fb.entries = flock_tui::ui::components::file_browser::load_directory_entries(
+                    fb.entries = grove::ui::components::file_browser::load_directory_entries(
                         &fb.current_path,
                         &fb.selected_files,
                         &fb.current_path,
@@ -4295,7 +4295,7 @@ async fn process_action(
             if let Some(parent) = fb.current_path.parent() {
                 fb.current_path = parent.to_path_buf();
                 fb.selected_index = 0;
-                fb.entries = flock_tui::ui::components::file_browser::load_directory_entries(
+                fb.entries = grove::ui::components::file_browser::load_directory_entries(
                     &fb.current_path,
                     &fb.selected_files,
                     &fb.current_path,
@@ -4306,17 +4306,17 @@ async fn process_action(
         // Global Setup Wizard Actions
         Action::GlobalSetupNextStep => {
             if let Some(wizard) = &mut state.global_setup {
-                wizard.step = flock_tui::app::GlobalSetupStep::AgentSettings;
+                wizard.step = grove::app::GlobalSetupStep::AgentSettings;
             }
         }
         Action::GlobalSetupPrevStep => {
             if let Some(wizard) = &mut state.global_setup {
-                wizard.step = flock_tui::app::GlobalSetupStep::WorktreeLocation;
+                wizard.step = grove::app::GlobalSetupStep::WorktreeLocation;
             }
         }
         Action::GlobalSetupSelectNext => {
             if let Some(wizard) = &mut state.global_setup {
-                let all = flock_tui::app::config::WorktreeLocation::all();
+                let all = grove::app::config::WorktreeLocation::all();
                 let current_idx = all
                     .iter()
                     .position(|l| *l == wizard.worktree_location)
@@ -4327,7 +4327,7 @@ async fn process_action(
         }
         Action::GlobalSetupSelectPrev => {
             if let Some(wizard) = &mut state.global_setup {
-                let all = flock_tui::app::config::WorktreeLocation::all();
+                let all = grove::app::config::WorktreeLocation::all();
                 let current_idx = all
                     .iter()
                     .position(|l| *l == wizard.worktree_location)
@@ -4359,12 +4359,12 @@ async fn process_action(
                 wizard.dropdown_open = !wizard.dropdown_open;
                 // Set dropdown_index to current value
                 if wizard.field_index == 0 {
-                    wizard.dropdown_index = flock_tui::app::config::AiAgent::all()
+                    wizard.dropdown_index = grove::app::config::AiAgent::all()
                         .iter()
                         .position(|a| *a == wizard.ai_agent)
                         .unwrap_or(0);
                 } else {
-                    wizard.dropdown_index = flock_tui::app::config::LogLevel::all()
+                    wizard.dropdown_index = grove::app::config::LogLevel::all()
                         .iter()
                         .position(|l| *l == wizard.log_level)
                         .unwrap_or(0);
@@ -4381,9 +4381,9 @@ async fn process_action(
         Action::GlobalSetupDropdownNext => {
             if let Some(wizard) = &mut state.global_setup {
                 let max = if wizard.field_index == 0 {
-                    flock_tui::app::config::AiAgent::all().len()
+                    grove::app::config::AiAgent::all().len()
                 } else {
-                    flock_tui::app::config::LogLevel::all().len()
+                    grove::app::config::LogLevel::all().len()
                 };
                 if wizard.dropdown_index < max.saturating_sub(1) {
                     wizard.dropdown_index += 1;
@@ -4393,12 +4393,12 @@ async fn process_action(
         Action::GlobalSetupConfirmDropdown => {
             if let Some(wizard) = &mut state.global_setup {
                 if wizard.field_index == 0 {
-                    let all_agents = flock_tui::app::config::AiAgent::all();
+                    let all_agents = grove::app::config::AiAgent::all();
                     if wizard.dropdown_index < all_agents.len() {
                         wizard.ai_agent = all_agents[wizard.dropdown_index].clone();
                     }
                 } else {
-                    let all_levels = flock_tui::app::config::LogLevel::all();
+                    let all_levels = grove::app::config::LogLevel::all();
                     if wizard.dropdown_index < all_levels.len() {
                         wizard.log_level = all_levels[wizard.dropdown_index];
                     }
@@ -4422,14 +4422,14 @@ async fn process_action(
                 state.log_info("Global setup complete".to_string());
 
                 // Show project setup if needed
-                let repo_config_path = flock_tui::app::RepoConfig::config_path(&state.repo_path).ok();
+                let repo_config_path = grove::app::RepoConfig::config_path(&state.repo_path).ok();
                 let project_needs_setup = repo_config_path
                     .as_ref()
                     .map(|p| !p.exists())
                     .unwrap_or(true);
                 if project_needs_setup {
                     state.show_project_setup = true;
-                    state.project_setup = Some(flock_tui::app::ProjectSetupState::default());
+                    state.project_setup = Some(grove::app::ProjectSetupState::default());
                 }
             }
         }
@@ -4504,7 +4504,7 @@ async fn process_action(
         }
         Action::ProjectSetupDropdownNext => {
             if let Some(wizard) = &mut state.project_setup {
-                let max = flock_tui::app::config::GitProvider::all().len();
+                let max = grove::app::config::GitProvider::all().len();
                 if wizard.dropdown_index < max.saturating_sub(1) {
                     wizard.dropdown_index += 1;
                 }
@@ -4512,7 +4512,7 @@ async fn process_action(
         }
         Action::ProjectSetupConfirmDropdown => {
             if let Some(wizard) = &mut state.project_setup {
-                let all_providers = flock_tui::app::config::GitProvider::all();
+                let all_providers = grove::app::config::GitProvider::all();
                 if wizard.dropdown_index < all_providers.len() {
                     wizard.config.git.provider = all_providers[wizard.dropdown_index];
                 }
@@ -4551,7 +4551,7 @@ async fn process_action(
                         action_tx.send(Action::StopDevServer)?;
                     } else if manager.has_running_server() {
                         let running = manager.running_servers();
-                        state.devserver_warning = Some(flock_tui::app::DevServerWarning {
+                        state.devserver_warning = Some(grove::app::DevServerWarning {
                             agent_id,
                             running_servers: running
                                 .into_iter()
@@ -4703,8 +4703,8 @@ enum ProjectSetupField {
     AsanaProjectGid,
 }
 
-fn get_project_fields(provider: &flock_tui::app::config::GitProvider) -> Vec<ProjectSetupField> {
-    use flock_tui::app::config::GitProvider;
+fn get_project_fields(provider: &grove::app::config::GitProvider) -> Vec<ProjectSetupField> {
+    use grove::app::config::GitProvider;
     let mut fields = vec![ProjectSetupField::GitProvider];
     match provider {
         GitProvider::GitLab => {
@@ -4727,7 +4727,7 @@ fn get_project_fields(provider: &flock_tui::app::config::GitProvider) -> Vec<Pro
     fields
 }
 
-fn get_project_field_value(config: &flock_tui::app::RepoConfig, field: &ProjectSetupField) -> String {
+fn get_project_field_value(config: &grove::app::RepoConfig, field: &ProjectSetupField) -> String {
     match field {
         ProjectSetupField::GitProvider => config.git.provider.display_name().to_string(),
         ProjectSetupField::GitLabProjectId => config
@@ -4754,7 +4754,7 @@ fn get_project_field_value(config: &flock_tui::app::RepoConfig, field: &ProjectS
 }
 
 fn set_project_field_value(
-    config: &mut flock_tui::app::RepoConfig,
+    config: &mut grove::app::RepoConfig,
     field: &ProjectSetupField,
     value: &str,
 ) {
@@ -4830,7 +4830,7 @@ async fn poll_agents(
     mut agent_rx: watch::Receiver<HashSet<Uuid>>,
     mut selected_rx: watch::Receiver<Option<Uuid>>,
     tx: mpsc::UnboundedSender<Action>,
-    ai_agent: flock_tui::app::config::AiAgent,
+    ai_agent: grove::app::config::AiAgent,
 ) {
     use std::collections::HashMap;
 
@@ -4861,7 +4861,7 @@ async fn poll_agents(
 
         for id in agent_ids {
             let is_selected = selected_id == Some(id);
-            let session_name = format!("flock-{}", id.as_simple());
+            let session_name = format!("grove-{}", id.as_simple());
 
             // PRIORITY 1: Capture preview for selected agent FIRST
             // This ensures preview updates even if status detection crashes
@@ -5219,7 +5219,7 @@ async fn poll_gitlab_mrs(
 
         for (id, branch) in branches {
             let status = gitlab_client.get_mr_for_branch(&branch).await;
-            if !matches!(status, flock_tui::gitlab::MergeRequestStatus::None) {
+            if !matches!(status, grove::gitlab::MergeRequestStatus::None) {
                 let _ = tx.send(Action::UpdateMrStatus { id, status });
             }
         }
@@ -5250,7 +5250,7 @@ async fn poll_github_prs(
             tracing::info!("GitHub poll: checking branch {}", branch);
             let status = github_client.get_pr_for_branch(&branch).await;
             tracing::info!("GitHub poll: branch {} -> {:?}", branch, status);
-            if !matches!(status, flock_tui::github::PullRequestStatus::None) {
+            if !matches!(status, grove::github::PullRequestStatus::None) {
                 let _ = tx.send(Action::UpdatePrStatus { id, status });
             }
         }
@@ -5281,7 +5281,7 @@ async fn poll_codeberg_prs(
             tracing::info!("Codeberg poll: checking branch {}", branch);
             let status = codeberg_client.get_pr_for_branch(&branch).await;
             tracing::info!("Codeberg poll: branch {} -> {:?}", branch, status);
-            if !matches!(status, flock_tui::codeberg::PullRequestStatus::None) {
+            if !matches!(status, grove::codeberg::PullRequestStatus::None) {
                 let _ = tx.send(Action::UpdateCodebergPrStatus { id, status });
             }
         }

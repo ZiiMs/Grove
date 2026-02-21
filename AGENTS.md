@@ -1,10 +1,10 @@
 # AGENTS.md
 
-Guidelines for coding agents working in the Flock codebase.
+Guidelines for coding agents working in the Grove codebase.
 
 ## Project Overview
 
-Flock is a terminal UI (TUI) for managing multiple Claude Code agents with git worktree isolation. Built with Rust using ratatui for the UI, tokio for async runtime, and git2 for git operations.
+Grove is a terminal UI (TUI) for managing multiple Claude Code agents with git worktree isolation. Built with Rust using ratatui for the UI, tokio for async runtime, and git2 for git operations.
 
 ## Build/Lint/Test Commands
 
@@ -174,9 +174,9 @@ src/
 
 ## Configuration
 
-Flock uses a two-level configuration system:
+Grove uses a two-level configuration system:
 
-### Global Config (`~/.flock/config.toml`)
+### Global Config (`~/.grove/config.toml`)
 
 User preferences stored globally:
 
@@ -196,7 +196,7 @@ git_refresh_secs = 30
 gitlab_refresh_secs = 60
 ```
 
-### Repo Config (`.flock/project.toml`)
+### Repo Config (`.grove/project.toml`)
 
 Project-specific settings stored in the repo (can be committed):
 
@@ -236,7 +236,7 @@ API tokens are read from environment variables (never stored in config files):
 
 ## Adding New Keybinds
 
-Keybinds are user-customizable and stored in `~/.flock/config.toml`. When adding a new keybind, you MUST update all of the following:
+Keybinds are user-customizable and stored in `~/.grove/config.toml`. When adding a new keybind, you MUST update all of the following:
 
 ### 1. Add to `Keybinds` struct (`src/app/config.rs`)
 

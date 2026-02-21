@@ -175,7 +175,7 @@ pub struct Agent {
 impl Agent {
     pub fn new(name: String, branch: String, worktree_path: String) -> Self {
         let id = Uuid::new_v4();
-        let tmux_session = format!("flock-{}", id.as_simple());
+        let tmux_session = format!("grove-{}", id.as_simple());
 
         Self {
             id,

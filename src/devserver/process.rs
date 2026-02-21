@@ -9,7 +9,7 @@ use crate::tmux::TmuxSession;
 const MAX_LOG_LINES: usize = 5000;
 
 pub fn tmux_session_name(agent_id: Uuid) -> String {
-    format!("flock-dev-{}", &agent_id.to_string()[..8])
+    format!("grove-dev-{}", &agent_id.to_string()[..8])
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

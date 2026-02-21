@@ -30,7 +30,7 @@ impl<'a> GlobalSetupWizard<'a> {
         frame.render_widget(Clear, area);
 
         let block = Block::default()
-            .title(" Welcome to Flock! ")
+            .title(" Welcome to Grove! ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
 
@@ -89,7 +89,7 @@ impl<'a> GlobalSetupWizard<'a> {
         let mut lines = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "  Where should Flock store worktrees?",
+                "  Where should Grove store worktrees?",
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),

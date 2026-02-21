@@ -42,7 +42,7 @@ impl CodebergClient {
 
         let client = reqwest::Client::builder()
             .default_headers(headers)
-            .user_agent("flock-tui")
+            .user_agent("grove")
             .build()
             .context("Failed to create HTTP client")?;
 
