@@ -132,12 +132,6 @@ impl<'a> SettingsModal<'a> {
             match item {
                 SettingsItem::Category(cat) => {
                     lines.push(self.render_category_line(cat));
-                    if *cat == SettingsCategory::Asana {
-                        lines.push(Self::render_token_status_line(
-                            "ASANA_TOKEN",
-                            Config::asana_token().is_some(),
-                        ));
-                    }
                 }
                 SettingsItem::Field(field) => {
                     let is_selected = item_idx == selected_field_idx;
@@ -471,25 +465,25 @@ impl<'a> SettingsModal<'a> {
                 false,
             ),
             SettingsField::AsanaInProgressGid => (
-                "In Progress GID".to_string(),
+                "In Progress".to_string(),
                 self.state
                     .repo_config
                     .project_mgmt
                     .asana
                     .in_progress_section_gid
                     .clone()
-                    .unwrap_or_default(),
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
                 false,
             ),
             SettingsField::AsanaDoneGid => (
-                "Done GID".to_string(),
+                "Done".to_string(),
                 self.state
                     .repo_config
                     .project_mgmt
                     .asana
                     .done_section_gid
                     .clone()
-                    .unwrap_or_default(),
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
                 false,
             ),
             SettingsField::ProjectMgmtProvider => (
