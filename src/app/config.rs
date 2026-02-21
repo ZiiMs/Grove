@@ -574,8 +574,6 @@ pub struct RepoGitConfig {
     #[serde(default = "default_main_branch")]
     pub main_branch: String,
     #[serde(default)]
-    pub worktree_symlinks: Vec<String>,
-    #[serde(default)]
     pub gitlab: RepoGitLabConfig,
     #[serde(default)]
     pub github: RepoGitHubConfig,
@@ -597,7 +595,6 @@ impl Default for RepoGitConfig {
             provider: GitProvider::default(),
             branch_prefix: default_branch_prefix(),
             main_branch: default_main_branch(),
-            worktree_symlinks: Vec::new(),
             gitlab: RepoGitLabConfig::default(),
             github: RepoGitHubConfig::default(),
             codeberg: RepoCodebergConfig::default(),
@@ -672,6 +669,8 @@ pub struct DevServerConfig {
     pub port: Option<u16>,
     #[serde(default)]
     pub auto_start: bool,
+    #[serde(default)]
+    pub worktree_symlinks: Vec<String>,
 }
 
 impl RepoConfig {
