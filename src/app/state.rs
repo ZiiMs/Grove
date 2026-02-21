@@ -149,6 +149,7 @@ pub enum SettingsField {
     KbToggleHelp,
     KbToggleSettings,
     KbQuit,
+    KbOpenEditor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,7 +263,8 @@ impl SettingsField {
             | SettingsField::KbRefreshAll
             | SettingsField::KbToggleHelp
             | SettingsField::KbToggleSettings
-            | SettingsField::KbQuit => SettingsTab::Keybinds,
+            | SettingsField::KbQuit
+            | SettingsField::KbOpenEditor => SettingsTab::Keybinds,
         }
     }
 
@@ -300,6 +302,7 @@ impl SettingsField {
                 | SettingsField::KbToggleHelp
                 | SettingsField::KbToggleSettings
                 | SettingsField::KbQuit
+                | SettingsField::KbOpenEditor
         )
     }
 
@@ -329,6 +332,7 @@ impl SettingsField {
             SettingsField::KbToggleHelp => Some("Toggle Help"),
             SettingsField::KbToggleSettings => Some("Toggle Settings"),
             SettingsField::KbQuit => Some("Quit"),
+            SettingsField::KbOpenEditor => Some("Open in Editor"),
             _ => None,
         }
     }
@@ -441,6 +445,7 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::KbOpenMr),
                 SettingsItem::Field(SettingsField::KbAsanaAssign),
                 SettingsItem::Field(SettingsField::KbAsanaOpen),
+                SettingsItem::Field(SettingsField::KbOpenEditor),
                 SettingsItem::Category(SettingsCategory::KeybindOther),
                 SettingsItem::Field(SettingsField::KbRefreshAll),
                 SettingsItem::Field(SettingsField::KbToggleHelp),
@@ -599,6 +604,7 @@ impl SettingsState {
             SettingsField::KbToggleHelp => Some(&self.pending_keybinds.toggle_help),
             SettingsField::KbToggleSettings => Some(&self.pending_keybinds.toggle_settings),
             SettingsField::KbQuit => Some(&self.pending_keybinds.quit),
+            SettingsField::KbOpenEditor => Some(&self.pending_keybinds.open_editor),
             _ => None,
         }
     }
@@ -629,6 +635,7 @@ impl SettingsState {
             SettingsField::KbToggleHelp => self.pending_keybinds.toggle_help = keybind,
             SettingsField::KbToggleSettings => self.pending_keybinds.toggle_settings = keybind,
             SettingsField::KbQuit => self.pending_keybinds.quit = keybind,
+            SettingsField::KbOpenEditor => self.pending_keybinds.open_editor = keybind,
             _ => {}
         }
         self.keybind_conflicts = self.pending_keybinds.find_conflicts();

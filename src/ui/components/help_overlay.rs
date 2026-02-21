@@ -106,7 +106,10 @@ impl<'a> HelpOverlay<'a> {
                 "  {:8} Open MR/PR in browser",
                 kb.open_mr.display_short()
             )),
-            Line::from("  e        Open worktree in editor"),
+            Line::from(format!(
+                "  {:8} Open worktree in editor",
+                kb.open_editor.display_short()
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "Project Mgmt",
@@ -114,8 +117,14 @@ impl<'a> HelpOverlay<'a> {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from("  a        Assign task by URL/ID"),
-            Line::from("  A        Open task in browser"),
+            Line::from(format!(
+                "  {:8} Assign task by URL/ID",
+                kb.asana_assign.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Open task in browser",
+                kb.asana_open.display_short()
+            )),
             Line::from("  t        Browse tasks from project"),
             Line::from("  T        Select task status"),
             Line::from(""),

@@ -448,6 +448,8 @@ pub struct Keybinds {
     pub toggle_settings: Keybind,
     #[serde(default = "default_quit")]
     pub quit: Keybind,
+    #[serde(default = "default_open_editor")]
+    pub open_editor: Keybind,
 }
 
 fn default_nav_down() -> Keybind {
@@ -522,6 +524,9 @@ fn default_toggle_settings() -> Keybind {
 fn default_quit() -> Keybind {
     Keybind::new("q")
 }
+fn default_open_editor() -> Keybind {
+    Keybind::new("e")
+}
 
 impl Default for Keybinds {
     fn default() -> Self {
@@ -550,6 +555,7 @@ impl Default for Keybinds {
             toggle_help: default_toggle_help(),
             toggle_settings: default_toggle_settings(),
             quit: default_quit(),
+            open_editor: default_open_editor(),
         }
     }
 }
@@ -581,6 +587,7 @@ impl Keybinds {
             ("toggle_help", &self.toggle_help),
             ("toggle_settings", &self.toggle_settings),
             ("quit", &self.quit),
+            ("open_editor", &self.open_editor),
         ]
     }
 
