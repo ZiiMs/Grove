@@ -2752,7 +2752,7 @@ async fn process_action(
                     ProjectMgmtProvider::Asana => {
                         match asana_client.get_project_tasks_with_subtasks().await {
                             Ok(tasks) => {
-                                let items: Vec<TaskListItem> = tasks
+                                let mut items: Vec<TaskListItem> = tasks
                                     .into_iter()
                                     .filter(|t| !t.completed)
                                     .map(|t| TaskListItem {
@@ -2765,6 +2765,7 @@ async fn process_action(
                                         has_children: t.num_subtasks > 0,
                                     })
                                     .collect();
+                                sort_tasks_by_parent(&mut items);
                                 Ok(items)
                             }
                             Err(e) => Err(e.to_string()),
@@ -2779,7 +2780,7 @@ async fn process_action(
                                     .cloned()
                                     .collect();
 
-                                let items: Vec<TaskListItem> = pages
+                                let mut items: Vec<TaskListItem> = pages
                                     .into_iter()
                                     .map(|p| {
                                         let status_name = p
@@ -2804,6 +2805,7 @@ async fn process_action(
                                         }
                                     })
                                     .collect();
+                                sort_tasks_by_parent(&mut items);
                                 Ok(items)
                             }
                             Err(e) => Err(e.to_string()),
@@ -5026,6 +5028,110 @@ async fn poll_system_metrics(tx: mpsc::UnboundedSender<Action>) {
             memory_used,
             memory_total,
         });
+    }
+}
+
+/// Sort tasks so children appear directly after their parents.
+fn sort_tasks_by_parent(tasks: &mut [TaskListItem]) {
+    use std::collections::{HashMap, HashSet};
+
+    let has_children: HashSet<&str> = tasks
+        .iter()
+        .filter(|t| t.has_children)
+        .map(|t| t.id.as_str())
+        .collect();
+
+    let child_to_parent: HashMap<&str, &str> = tasks
+        .iter()
+        .filter_map(|t| t.parent_id.as_ref().map(|p| (t.id.as_str(), p.as_str())))
+        .collect();
+
+    fn get_depth(id: &str, child_to_parent: &HashMap<&str, &str>) -> usize {
+        match child_to_parent.get(id) {
+            None => 0,
+            Some(&parent_id) => get_depth(parent_id, child_to_parent) + 1,
+        }
+    }
+
+    fn build_sorted(
+        tasks: &[TaskListItem],
+        has_children: &HashSet<&str>,
+        child_to_parent: &HashMap<&str, &str>,
+        processed: &mut HashSet<String>,
+        result: &mut Vec<TaskListItem>,
+    ) {
+        for task in tasks {
+            if processed.contains(&task.id) {
+                continue;
+            }
+            if task.parent_id.is_none() {
+                processed.insert(task.id.clone());
+                result.push(task.clone());
+                if has_children.contains(task.id.as_str()) {
+                    add_children(
+                        task.id.as_str(),
+                        tasks,
+                        has_children,
+                        child_to_parent,
+                        processed,
+                        result,
+                    );
+                }
+            }
+        }
+    }
+
+    fn add_children(
+        parent_id: &str,
+        tasks: &[TaskListItem],
+        has_children: &HashSet<&str>,
+        child_to_parent: &HashMap<&str, &str>,
+        processed: &mut HashSet<String>,
+        result: &mut Vec<TaskListItem>,
+    ) {
+        let mut children: Vec<_> = tasks
+            .iter()
+            .filter(|t| t.parent_id.as_deref() == Some(parent_id))
+            .collect();
+        children.sort_by(|a, b| {
+            let a_depth = get_depth(&a.id, child_to_parent);
+            let b_depth = get_depth(&b.id, child_to_parent);
+            a_depth.cmp(&b_depth).then_with(|| a.name.cmp(&b.name))
+        });
+
+        for child in children {
+            if processed.contains(&child.id) {
+                continue;
+            }
+            processed.insert(child.id.clone());
+            result.push(child.clone());
+            if has_children.contains(child.id.as_str()) {
+                add_children(
+                    child.id.as_str(),
+                    tasks,
+                    has_children,
+                    child_to_parent,
+                    processed,
+                    result,
+                );
+            }
+        }
+    }
+
+    let mut result = Vec::with_capacity(tasks.len());
+    let mut processed = HashSet::new();
+    build_sorted(
+        tasks,
+        &has_children,
+        &child_to_parent,
+        &mut processed,
+        &mut result,
+    );
+
+    if result.len() == tasks.len() {
+        for (i, item) in result.into_iter().enumerate() {
+            tasks[i] = item;
+        }
     }
 }
 
