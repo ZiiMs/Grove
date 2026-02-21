@@ -23,7 +23,8 @@ use grove::agent::{
 };
 use grove::app::{
     Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, StatusOption,
-    TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast, ToastLevel,
+    SubtaskStatusDropdownState, TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast,
+    ToastLevel,
 };
 use grove::asana::{AsanaTaskStatus, OptionalAsanaClient};
 use grove::codeberg::OptionalCodebergClient;
@@ -411,6 +412,7 @@ async fn main() -> Result<()> {
     let asana_client = Arc::new(OptionalAsanaClient::new(
         Config::asana_token().as_deref(),
         asana_project_gid,
+        config.asana.cache_ttl_secs,
     ));
 
     let notion_client = Arc::new(OptionalNotionClient::new(
@@ -680,7 +682,6 @@ async fn main() -> Result<()> {
                 &codeberg_client,
                 &asana_client,
                 &notion_client,
-                pm_provider,
                 &storage,
                 &action_tx,
                 &agent_watch_tx,
@@ -1111,6 +1112,8 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectTaskNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
             KeyCode::Char('a') => Some(Action::AssignSelectedTaskToAgent),
+            KeyCode::Char('s') => Some(Action::ToggleSubtaskStatus),
+            KeyCode::Char('r') => Some(Action::RefreshTaskList),
             KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
             KeyCode::Left | KeyCode::Right => Some(Action::ToggleTaskExpand),
             KeyCode::Esc => Some(Action::ExitInputMode),
@@ -1123,6 +1126,24 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::TaskStatusDropdownNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::TaskStatusDropdownPrev),
             KeyCode::Enter => Some(Action::TaskStatusDropdownSelect),
+            KeyCode::Esc => Some(Action::ExitInputMode),
+            _ => None,
+        };
+    }
+
+    if matches!(state.input_mode, Some(InputMode::SelectSubtaskStatus)) {
+        return match key {
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::SubtaskStatusDropdownNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::SubtaskStatusDropdownPrev),
+            KeyCode::Enter => {
+                if let Some(ref dropdown) = state.subtask_status_dropdown {
+                    Some(Action::SubtaskStatusDropdownSelect {
+                        completed: dropdown.selected_index == 1,
+                    })
+                } else {
+                    Some(Action::ExitInputMode)
+                }
+            }
             KeyCode::Esc => Some(Action::ExitInputMode),
             _ => None,
         };
@@ -1318,7 +1339,6 @@ async fn process_action(
     codeberg_client: &Arc<OptionalCodebergClient>,
     asana_client: &Arc<OptionalAsanaClient>,
     notion_client: &Arc<OptionalNotionClient>,
-    pm_provider: ProjectMgmtProvider,
     _storage: &SessionStorage,
     action_tx: &mpsc::UnboundedSender<Action>,
     agent_watch_tx: &watch::Sender<HashSet<Uuid>>,
@@ -1383,12 +1403,13 @@ async fn process_action(
                     state.log_info(format!("Agent '{}' created successfully", agent.name));
 
                     if let Some(ref task_item) = task {
-                        let pm_status = match pm_provider {
+                        let pm_status = match state.settings.repo_config.project_mgmt.provider {
                             ProjectMgmtProvider::Asana => {
                                 ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
                                     gid: task_item.id.clone(),
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
+                                    is_subtask: task_item.is_subtask(),
                                 })
                             }
                             ProjectMgmtProvider::Notion => {
@@ -2048,16 +2069,19 @@ async fn process_action(
                         let url = task
                             .permalink_url
                             .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
+                        let is_subtask = task.parent.is_some();
                         let status = if task.completed {
                             AsanaTaskStatus::Completed {
                                 gid: task.gid,
                                 name: task.name,
+                                is_subtask,
                             }
                         } else {
                             AsanaTaskStatus::NotStarted {
                                 gid: task.gid,
                                 name: task.name,
                                 url,
+                                is_subtask,
                             }
                         };
                         let _ = tx.send(Action::UpdateAsanaTaskStatus { id, status });
@@ -2124,80 +2148,87 @@ async fn process_action(
             }
         }
 
-        Action::AssignProjectTask { id, url_or_id } => match pm_provider {
-            ProjectMgmtProvider::Asana => {
-                let gid = parse_asana_task_gid(&url_or_id);
-                let client = Arc::clone(asana_client);
-                let tx = action_tx.clone();
-                tokio::spawn(async move {
-                    match client.get_task(&gid).await {
-                        Ok(task) => {
-                            let url = task.permalink_url.unwrap_or_else(|| {
-                                format!("https://app.asana.com/0/0/{}/f", task.gid)
-                            });
-                            let status = if task.completed {
-                                AsanaTaskStatus::Completed {
-                                    gid: task.gid,
-                                    name: task.name,
-                                }
-                            } else {
-                                AsanaTaskStatus::NotStarted {
-                                    gid: task.gid,
-                                    name: task.name,
-                                    url,
-                                }
-                            };
-                            let _ = tx.send(Action::UpdateProjectTaskStatus {
-                                id,
-                                status: ProjectMgmtTaskStatus::Asana(status),
-                            });
+        Action::AssignProjectTask { id, url_or_id } => {
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            match provider {
+                ProjectMgmtProvider::Asana => {
+                    let gid = parse_asana_task_gid(&url_or_id);
+                    let client = Arc::clone(asana_client);
+                    let tx = action_tx.clone();
+                    tokio::spawn(async move {
+                        match client.get_task(&gid).await {
+                            Ok(task) => {
+                                let url = task.permalink_url.unwrap_or_else(|| {
+                                    format!("https://app.asana.com/0/0/{}/f", task.gid)
+                                });
+                                let is_subtask = task.parent.is_some();
+                                let status = if task.completed {
+                                    AsanaTaskStatus::Completed {
+                                        gid: task.gid,
+                                        name: task.name,
+                                        is_subtask,
+                                    }
+                                } else {
+                                    AsanaTaskStatus::NotStarted {
+                                        gid: task.gid,
+                                        name: task.name,
+                                        url,
+                                        is_subtask,
+                                    }
+                                };
+                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                    id,
+                                    status: ProjectMgmtTaskStatus::Asana(status),
+                                });
+                            }
+                            Err(e) => {
+                                let status = ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Error {
+                                    gid,
+                                    message: e.to_string(),
+                                });
+                                let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                            }
                         }
-                        Err(e) => {
-                            let status = ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Error {
-                                gid,
-                                message: e.to_string(),
-                            });
-                            let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                    });
+                }
+                ProjectMgmtProvider::Notion => {
+                    let page_id = parse_notion_page_id(&url_or_id);
+                    let client = Arc::clone(notion_client);
+                    let tx = action_tx.clone();
+                    tokio::spawn(async move {
+                        match client.get_page(&page_id).await {
+                            Ok(page) => {
+                                let status = if page.is_completed {
+                                    NotionTaskStatus::Completed {
+                                        page_id: page.id,
+                                        name: page.name,
+                                    }
+                                } else {
+                                    NotionTaskStatus::NotStarted {
+                                        page_id: page.id,
+                                        name: page.name,
+                                        url: page.url,
+                                        status_option_id: page.status_id.unwrap_or_default(),
+                                    }
+                                };
+                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                    id,
+                                    status: ProjectMgmtTaskStatus::Notion(status),
+                                });
+                            }
+                            Err(e) => {
+                                let status =
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Error {
+                                        page_id,
+                                        message: e.to_string(),
+                                    });
+                                let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
-            ProjectMgmtProvider::Notion => {
-                let page_id = parse_notion_page_id(&url_or_id);
-                let client = Arc::clone(notion_client);
-                let tx = action_tx.clone();
-                tokio::spawn(async move {
-                    match client.get_page(&page_id).await {
-                        Ok(page) => {
-                            let status = if page.is_completed {
-                                NotionTaskStatus::Completed {
-                                    page_id: page.id,
-                                    name: page.name,
-                                }
-                            } else {
-                                NotionTaskStatus::NotStarted {
-                                    page_id: page.id,
-                                    name: page.name,
-                                    url: page.url,
-                                    status_option_id: page.status_id.unwrap_or_default(),
-                                }
-                            };
-                            let _ = tx.send(Action::UpdateProjectTaskStatus {
-                                id,
-                                status: ProjectMgmtTaskStatus::Notion(status),
-                            });
-                        }
-                        Err(e) => {
-                            let status = ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Error {
-                                page_id,
-                                message: e.to_string(),
-                            });
-                            let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
-                        }
-                    }
-                });
-            }
-        },
+        }
 
         Action::UpdateProjectTaskStatus { id, status } => {
             let log_msg = match &status {
@@ -2267,10 +2298,16 @@ async fn process_action(
                 let current_status = agent.pm_task_status.clone();
                 match &current_status {
                     ProjectMgmtTaskStatus::Asana(asana_status) => match asana_status {
-                        AsanaTaskStatus::NotStarted { gid, name, url } => {
+                        AsanaTaskStatus::NotStarted {
+                            gid,
+                            name,
+                            url,
+                            is_subtask,
+                        } => {
                             let gid = gid.clone();
                             let name = name.clone();
                             let url = url.clone();
+                            let is_subtask = *is_subtask;
                             let agent_id = id;
                             if let Some(agent) = state.agents.get_mut(&id) {
                                 agent.pm_task_status =
@@ -2278,6 +2315,7 @@ async fn process_action(
                                         gid: gid.clone(),
                                         name: name.clone(),
                                         url: url.clone(),
+                                        is_subtask,
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -2310,15 +2348,22 @@ async fn process_action(
                             });
                             state.log_info(format!("Asana task '{}' → In Progress", name));
                         }
-                        AsanaTaskStatus::InProgress { gid, name, .. } => {
+                        AsanaTaskStatus::InProgress {
+                            gid,
+                            name,
+                            is_subtask,
+                            ..
+                        } => {
                             let gid = gid.clone();
                             let name = name.clone();
+                            let is_subtask = *is_subtask;
                             let agent_id = id;
                             if let Some(agent) = state.agents.get_mut(&id) {
                                 agent.pm_task_status =
                                     ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
                                         gid: gid.clone(),
                                         name: name.clone(),
+                                        is_subtask,
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -2347,12 +2392,15 @@ async fn process_action(
                             });
                             state.log_info(format!("Asana task '{}' → Done", name));
                         }
-                        AsanaTaskStatus::Completed { name, .. } => {
+                        AsanaTaskStatus::Completed {
+                            name, is_subtask, ..
+                        } => {
                             let gid = match asana_status.gid() {
                                 Some(g) => g.to_string(),
                                 None => return Ok(false),
                             };
                             let name = name.clone();
+                            let is_subtask = *is_subtask;
                             let agent_id = id;
                             if let Some(agent) = state.agents.get_mut(&id) {
                                 agent.pm_task_status =
@@ -2360,6 +2408,7 @@ async fn process_action(
                                         gid: gid.clone(),
                                         name: name.clone(),
                                         url: String::new(),
+                                        is_subtask,
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -2450,26 +2499,50 @@ async fn process_action(
                             state.show_error("No Asana task linked to this agent");
                             return Ok(false);
                         }
-                        let options = vec![
-                            StatusOption {
-                                id: "not_started".to_string(),
-                                name: "Not Started".to_string(),
-                            },
-                            StatusOption {
-                                id: "in_progress".to_string(),
-                                name: "In Progress".to_string(),
-                            },
-                            StatusOption {
-                                id: "done".to_string(),
-                                name: "Done".to_string(),
-                            },
-                        ];
-                        state.task_status_dropdown = Some(TaskStatusDropdownState {
-                            agent_id: id,
-                            status_options: options,
-                            selected_index: 0,
-                        });
-                        state.input_mode = Some(InputMode::SelectTaskStatus);
+
+                        if asana_status.is_subtask() {
+                            let gid = asana_status.gid().unwrap().to_string();
+                            let name = asana_status.name().unwrap_or("Task").to_string();
+                            let is_completed =
+                                matches!(asana_status, AsanaTaskStatus::Completed { .. });
+                            state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
+                                task_id: gid,
+                                task_name: name,
+                                current_completed: is_completed,
+                                selected_index: if is_completed { 1 } else { 0 },
+                            });
+                            state.input_mode = Some(InputMode::SelectSubtaskStatus);
+                        } else {
+                            let agent_id = id;
+                            let client = Arc::clone(asana_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Loading sections...".to_string());
+                            tokio::spawn(async move {
+                                match client.get_sections().await {
+                                    Ok(sections) => {
+                                        let options: Vec<StatusOption> = sections
+                                            .into_iter()
+                                            .map(|s| StatusOption {
+                                                id: s.gid,
+                                                name: s.name,
+                                            })
+                                            .collect();
+                                        let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                            id: agent_id,
+                                            options,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load Asana sections: {}", e);
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to load sections: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
                     }
                     ProjectMgmtTaskStatus::None => {}
                 }
@@ -2506,6 +2579,22 @@ async fn process_action(
 
         Action::TaskStatusDropdownPrev => {
             if let Some(ref mut dropdown) = state.task_status_dropdown {
+                if dropdown.selected_index > 0 {
+                    dropdown.selected_index -= 1;
+                }
+            }
+        }
+
+        Action::SubtaskStatusDropdownNext => {
+            if let Some(ref mut dropdown) = state.subtask_status_dropdown {
+                if dropdown.selected_index < 1 {
+                    dropdown.selected_index += 1;
+                }
+            }
+        }
+
+        Action::SubtaskStatusDropdownPrev => {
+            if let Some(ref mut dropdown) = state.subtask_status_dropdown {
                 if dropdown.selected_index > 0 {
                     dropdown.selected_index -= 1;
                 }
@@ -2609,75 +2698,50 @@ async fn process_action(
                             }
                             ProjectMgmtTaskStatus::Asana(asana_status) => {
                                 if let Some(gid_str) = asana_status.gid() {
-                                    let gid = gid_str.to_string();
-                                    let name = asana_status.format_short();
+                                    let task_gid = gid_str.to_string();
+                                    let task_name = asana_status.format_short();
+                                    let is_subtask = asana_status.is_subtask();
                                     let client = Arc::clone(asana_client);
-                                    let in_progress_gid = state
-                                        .settings
-                                        .repo_config
-                                        .project_mgmt
-                                        .asana
-                                        .in_progress_section_gid
-                                        .clone();
-                                    let done_gid = state
-                                        .settings
-                                        .repo_config
-                                        .project_mgmt
-                                        .asana
-                                        .done_section_gid
-                                        .clone();
                                     let agent_id_clone = agent_id;
+                                    let section_gid = option_id.clone();
+                                    let section_name_lower = option_name.to_lowercase();
 
-                                    let new_status = match option_id.as_str() {
-                                        "not_started" => {
-                                            let status = ProjectMgmtTaskStatus::Asana(
-                                                AsanaTaskStatus::NotStarted {
-                                                    gid: gid.clone(),
-                                                    name: name.clone(),
-                                                    url: String::new(),
-                                                },
-                                            );
-                                            tokio::spawn(async move {
-                                                let _ = client.uncomplete_task(&gid).await;
-                                            });
-                                            status
-                                        }
-                                        "in_progress" => {
-                                            let status = ProjectMgmtTaskStatus::Asana(
-                                                AsanaTaskStatus::InProgress {
-                                                    gid: gid.clone(),
-                                                    name: name.clone(),
-                                                    url: String::new(),
-                                                },
-                                            );
-                                            let client = Arc::clone(&client);
-                                            tokio::spawn(async move {
-                                                let _ = client
-                                                    .move_to_in_progress(
-                                                        &gid,
-                                                        in_progress_gid.as_deref(),
-                                                    )
-                                                    .await;
-                                            });
-                                            status
-                                        }
-                                        "done" => {
-                                            let status = ProjectMgmtTaskStatus::Asana(
-                                                AsanaTaskStatus::Completed {
-                                                    gid: gid.clone(),
-                                                    name: name.clone(),
-                                                },
-                                            );
-                                            tokio::spawn(async move {
-                                                let _ = client.complete_task(&gid).await;
-                                                let _ = client
-                                                    .move_to_done(&gid, done_gid.as_deref())
-                                                    .await;
-                                            });
-                                            status
-                                        }
-                                        _ => return Ok(false),
+                                    let is_done = section_name_lower.contains("done")
+                                        || section_name_lower.contains("complete");
+                                    let is_in_progress = section_name_lower.contains("progress");
+
+                                    let new_status = if is_done {
+                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
+                                            gid: task_gid.clone(),
+                                            name: task_name.clone(),
+                                            is_subtask,
+                                        })
+                                    } else if is_in_progress {
+                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
+                                            gid: task_gid.clone(),
+                                            name: task_name.clone(),
+                                            url: String::new(),
+                                            is_subtask,
+                                        })
+                                    } else {
+                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                            gid: task_gid.clone(),
+                                            name: task_name.clone(),
+                                            url: String::new(),
+                                            is_subtask,
+                                        })
                                     };
+
+                                    tokio::spawn(async move {
+                                        if is_done {
+                                            let _ = client.complete_task(&task_gid).await;
+                                        } else {
+                                            let _ = client.uncomplete_task(&task_gid).await;
+                                        }
+                                        let _ = client
+                                            .move_task_to_section(&task_gid, &section_gid)
+                                            .await;
+                                    });
 
                                     if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
                                         agent.pm_task_status = new_status;
@@ -2765,8 +2829,18 @@ async fn process_action(
             action_tx.send(Action::DeleteAgent { id })?;
         }
 
+        Action::RefreshTaskList => {
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            match provider {
+                ProjectMgmtProvider::Asana => asana_client.invalidate_cache().await,
+                ProjectMgmtProvider::Notion => notion_client.invalidate_cache().await,
+            }
+            state.task_list_loading = true;
+            let _ = action_tx.send(Action::FetchTaskList);
+        }
+
         Action::FetchTaskList => {
-            let provider = pm_provider;
+            let provider = state.settings.repo_config.project_mgmt.provider;
             let asana_client = Arc::clone(asana_client);
             let notion_client = Arc::clone(notion_client);
             let tx = action_tx.clone();
@@ -2775,19 +2849,34 @@ async fn process_action(
                     ProjectMgmtProvider::Asana => {
                         match asana_client.get_project_tasks_with_subtasks().await {
                             Ok(tasks) => {
-                                let items: Vec<TaskListItem> = tasks
+                                let mut items: Vec<TaskListItem> = tasks
                                     .into_iter()
-                                    .filter(|t| !t.completed)
-                                    .map(|t| TaskListItem {
-                                        id: t.gid,
-                                        name: t.name,
-                                        status: TaskItemStatus::NotStarted,
-                                        status_name: "Not Started".to_string(),
-                                        url: t.permalink_url.unwrap_or_default(),
-                                        parent_id: t.parent_gid,
-                                        has_children: t.num_subtasks > 0,
+                                    .filter(|t| {
+                                        if t.parent_gid.is_some() {
+                                            true
+                                        } else {
+                                            !t.completed
+                                        }
+                                    })
+                                    .map(|t| {
+                                        let (status, status_name) = if t.completed {
+                                            (TaskItemStatus::Completed, "Completed".to_string())
+                                        } else {
+                                            (TaskItemStatus::NotStarted, "Not Started".to_string())
+                                        };
+                                        TaskListItem {
+                                            id: t.gid,
+                                            name: t.name,
+                                            status,
+                                            status_name,
+                                            url: t.permalink_url.unwrap_or_default(),
+                                            parent_id: t.parent_gid,
+                                            has_children: t.num_subtasks > 0,
+                                            completed: t.completed,
+                                        }
                                     })
                                     .collect();
+                                sort_tasks_by_parent(&mut items);
                                 Ok(items)
                             }
                             Err(e) => Err(e.to_string()),
@@ -2802,7 +2891,7 @@ async fn process_action(
                                     .cloned()
                                     .collect();
 
-                                let items: Vec<TaskListItem> = pages
+                                let mut items: Vec<TaskListItem> = pages
                                     .into_iter()
                                     .map(|p| {
                                         let status_name = p
@@ -2812,9 +2901,14 @@ async fn process_action(
                                         let status =
                                             if status_name.to_lowercase().contains("progress") {
                                                 TaskItemStatus::InProgress
+                                            } else if status_name.to_lowercase().contains("done")
+                                                || status_name.to_lowercase().contains("complete")
+                                            {
+                                                TaskItemStatus::Completed
                                             } else {
                                                 TaskItemStatus::NotStarted
                                             };
+                                        let completed = matches!(status, TaskItemStatus::Completed);
                                         let has_children = parent_ids.contains(&p.id);
                                         TaskListItem {
                                             id: p.id,
@@ -2824,9 +2918,11 @@ async fn process_action(
                                             url: p.url,
                                             parent_id: p.parent_page_id,
                                             has_children,
+                                            completed,
                                         }
                                     })
                                     .collect();
+                                sort_tasks_by_parent(&mut items);
                                 Ok(items)
                             }
                             Err(e) => Err(e.to_string()),
@@ -2903,6 +2999,120 @@ async fn process_action(
             }
         }
 
+        Action::ToggleSubtaskStatus => {
+            if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
+                if task.is_subtask() {
+                    state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
+                        task_id: task.id.clone(),
+                        task_name: task.name.clone(),
+                        current_completed: task.completed,
+                        selected_index: if task.completed { 1 } else { 0 },
+                    });
+                    state.input_mode = Some(InputMode::SelectSubtaskStatus);
+                } else {
+                    state.show_warning("Status toggle only available for subtasks");
+                }
+            }
+        }
+
+        Action::SubtaskStatusDropdownSelect { completed } => {
+            let dropdown = state.subtask_status_dropdown.take();
+            state.exit_input_mode();
+            if let Some(dropdown) = dropdown {
+                let task_id = dropdown.task_id.clone();
+                let task_name = dropdown.task_name.clone();
+                let current_completed = dropdown.current_completed;
+
+                if completed == current_completed {
+                    state.show_info("No change needed");
+                    return Ok(false);
+                }
+
+                let client = Arc::clone(asana_client);
+                let tx = action_tx.clone();
+                state.loading_message = Some("Updating subtask status...".to_string());
+
+                tokio::spawn(async move {
+                    let result = if completed {
+                        client.complete_task(&task_id).await
+                    } else {
+                        client.uncomplete_task(&task_id).await
+                    };
+
+                    match result {
+                        Ok(()) => {
+                            let _ = tx.send(Action::SubtaskStatusUpdated { task_id, completed });
+                            let _ = tx.send(Action::SetLoading(None));
+                            let _ = tx.send(Action::ShowToast {
+                                message: format!(
+                                    "{} → {}",
+                                    task_name,
+                                    if completed {
+                                        "Completed"
+                                    } else {
+                                        "Not Complete"
+                                    }
+                                ),
+                                level: ToastLevel::Success,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Action::SetLoading(None));
+                            let _ = tx.send(Action::ShowError(format!(
+                                "Failed to update subtask: {}",
+                                e
+                            )));
+                        }
+                    }
+                });
+            }
+        }
+
+        Action::SubtaskStatusUpdated { task_id, completed } => {
+            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id) {
+                task.completed = completed;
+                task.status = if completed {
+                    TaskItemStatus::Completed
+                } else {
+                    TaskItemStatus::NotStarted
+                };
+                task.status_name = if completed {
+                    "Completed".to_string()
+                } else {
+                    "Not Started".to_string()
+                };
+            }
+
+            for agent in state.agents.values_mut() {
+                if let Some(gid) = agent.pm_task_status.id() {
+                    if gid == task_id {
+                        let name = agent.pm_task_status.name().unwrap_or("").to_string();
+                        let url = agent.pm_task_status.url().unwrap_or("").to_string();
+                        let is_subtask = agent
+                            .pm_task_status
+                            .as_asana()
+                            .map(|s| s.is_subtask())
+                            .unwrap_or(false);
+                        agent.pm_task_status = if completed {
+                            ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
+                                gid: task_id.clone(),
+                                name,
+                                is_subtask,
+                            })
+                        } else {
+                            ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                gid: task_id.clone(),
+                                name,
+                                url,
+                                is_subtask,
+                            })
+                        };
+                        break;
+                    }
+                }
+            }
+        }
+
         Action::CreateAgentFromSelectedTask => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
                 let branch = grove::util::sanitize_branch_name(&task.name);
@@ -2923,12 +3133,13 @@ async fn process_action(
                         Ok(mut agent) => {
                             state.log_info(format!("Agent '{}' created successfully", agent.name));
 
-                            let pm_status = match pm_provider {
+                            let pm_status = match state.settings.repo_config.project_mgmt.provider {
                                 ProjectMgmtProvider::Asana => {
                                     ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
                                         gid: task.id.clone(),
                                         name: task.name.clone(),
                                         url: task.url.clone(),
+                                        is_subtask: task.is_subtask(),
                                     })
                                 }
                                 ProjectMgmtProvider::Notion => {
@@ -3204,6 +3415,9 @@ async fn process_action(
                     InputMode::SelectTaskStatus => {
                         // Handled by TaskStatusDropdownNext/Prev/Select
                     }
+                    InputMode::SelectSubtaskStatus => {
+                        // Handled by SubtaskStatusDropdownNext/Prev/Select
+                    }
                 }
             }
         }
@@ -3302,16 +3516,19 @@ async fn process_action(
                                     let url = task.permalink_url.unwrap_or_else(|| {
                                         format!("https://app.asana.com/0/0/{}/f", task.gid)
                                     });
+                                    let is_subtask = task.parent.is_some();
                                     let status = if task.completed {
                                         grove::asana::AsanaTaskStatus::Completed {
                                             gid: task.gid,
                                             name: task.name,
+                                            is_subtask,
                                         }
                                     } else {
                                         grove::asana::AsanaTaskStatus::InProgress {
                                             gid: task.gid,
                                             name: task.name,
                                             url,
+                                            is_subtask,
                                         }
                                     };
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
@@ -4151,6 +4368,8 @@ async fn process_action(
         }
 
         Action::SettingsSave => {
+            let old_provider = state.settings.repo_config.project_mgmt.provider;
+
             state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
             state.config.global.editor = state.settings.pending_editor.clone();
             state.config.global.log_level = state.settings.pending_log_level;
@@ -4164,6 +4383,13 @@ async fn process_action(
 
             if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
                 state.log_error(format!("Failed to save repo config: {}", e));
+            }
+
+            let new_provider = state.settings.repo_config.project_mgmt.provider;
+            if old_provider != new_provider {
+                state.task_list.clear();
+                state.task_list_loading = true;
+                let _ = action_tx.send(Action::FetchTaskList);
             }
 
             state.show_logs = state.config.ui.show_logs;
@@ -5052,6 +5278,74 @@ async fn poll_system_metrics(tx: mpsc::UnboundedSender<Action>) {
     }
 }
 
+/// Sort tasks so children appear directly after their parents.
+fn sort_tasks_by_parent(tasks: &mut [TaskListItem]) {
+    use std::collections::HashMap;
+
+    let mut parent_to_children: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, task) in tasks.iter().enumerate() {
+        if let Some(parent_id) = &task.parent_id {
+            parent_to_children
+                .entry(parent_id.clone())
+                .or_default()
+                .push(idx);
+        }
+    }
+
+    let root_indices: Vec<usize> = tasks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.parent_id.is_none())
+        .map(|(i, _)| i)
+        .collect();
+
+    let mut result = Vec::with_capacity(tasks.len());
+    let mut processed = std::collections::HashSet::new();
+
+    fn collect_tree(
+        task_idx: usize,
+        tasks: &[TaskListItem],
+        parent_to_children: &HashMap<String, Vec<usize>>,
+        processed: &mut std::collections::HashSet<usize>,
+        result: &mut Vec<TaskListItem>,
+    ) {
+        if processed.contains(&task_idx) {
+            return;
+        }
+        processed.insert(task_idx);
+        result.push(tasks[task_idx].clone());
+
+        let task_id = &tasks[task_idx].id;
+        if let Some(children) = parent_to_children.get(task_id) {
+            for &child_idx in children {
+                collect_tree(child_idx, tasks, parent_to_children, processed, result);
+            }
+        }
+    }
+
+    for root_idx in root_indices {
+        collect_tree(
+            root_idx,
+            tasks,
+            &parent_to_children,
+            &mut processed,
+            &mut result,
+        );
+    }
+
+    for (idx, task) in tasks.iter().enumerate() {
+        if !processed.contains(&idx) {
+            result.push(task.clone());
+        }
+    }
+
+    if result.len() == tasks.len() {
+        for (i, item) in result.into_iter().enumerate() {
+            tasks[i] = item;
+        }
+    }
+}
+
 /// Parse an Asana task GID from a URL or bare GID.
 /// Supports: `https://app.asana.com/0/{project}/{task}/f`, `https://app.asana.com/0/{project}/{task}`, or bare `{task_gid}`.
 fn parse_asana_task_gid(input: &str) -> String {
@@ -5142,16 +5436,19 @@ async fn poll_asana_tasks(
                     let url = task
                         .permalink_url
                         .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
+                    let is_subtask = task.parent.is_some();
                     let status = if task.completed {
                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
                             gid: task.gid,
                             name: task.name,
+                            is_subtask,
                         })
                     } else {
                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
                             gid: task.gid,
                             name: task.name,
                             url,
+                            is_subtask,
                         })
                     };
                     let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });

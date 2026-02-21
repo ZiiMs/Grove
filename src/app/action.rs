@@ -138,6 +138,7 @@ pub enum Action {
     },
 
     FetchTaskList,
+    RefreshTaskList,
     TaskListFetched {
         tasks: Vec<TaskListItem>,
     },
@@ -149,6 +150,17 @@ pub enum Action {
     CreateAgentFromSelectedTask,
     AssignSelectedTaskToAgent,
     ToggleTaskExpand,
+    ToggleSubtaskStatus,
+
+    SubtaskStatusDropdownNext,
+    SubtaskStatusDropdownPrev,
+    SubtaskStatusDropdownSelect {
+        completed: bool,
+    },
+    SubtaskStatusUpdated {
+        task_id: String,
+        completed: bool,
+    },
 
     ConfirmTaskReassignment,
     DismissTaskReassignmentWarning,
@@ -304,4 +316,5 @@ pub enum InputMode {
     ConfirmDeleteAsana,
     BrowseTasks,
     SelectTaskStatus,
+    SelectSubtaskStatus,
 }

@@ -240,16 +240,23 @@ pub struct Config {
 pub struct AsanaConfig {
     #[serde(default = "default_asana_refresh")]
     pub refresh_secs: u64,
+    #[serde(default = "default_asana_cache_ttl")]
+    pub cache_ttl_secs: u64,
 }
 
 fn default_asana_refresh() -> u64 {
     120
 }
 
+fn default_asana_cache_ttl() -> u64 {
+    60
+}
+
 impl Default for AsanaConfig {
     fn default() -> Self {
         Self {
             refresh_secs: default_asana_refresh(),
+            cache_ttl_secs: default_asana_cache_ttl(),
         }
     }
 }
@@ -459,6 +466,8 @@ pub struct Keybinds {
     pub open_editor: Keybind,
     #[serde(default = "default_show_tasks")]
     pub show_tasks: Keybind,
+    #[serde(default = "default_refresh_task_list")]
+    pub refresh_task_list: Keybind,
 }
 
 fn default_nav_down() -> Keybind {
@@ -539,6 +548,9 @@ fn default_open_editor() -> Keybind {
 fn default_show_tasks() -> Keybind {
     Keybind::new("t")
 }
+fn default_refresh_task_list() -> Keybind {
+    Keybind::new("r")
+}
 
 impl Default for Keybinds {
     fn default() -> Self {
@@ -569,6 +581,7 @@ impl Default for Keybinds {
             quit: default_quit(),
             open_editor: default_open_editor(),
             show_tasks: default_show_tasks(),
+            refresh_task_list: default_refresh_task_list(),
         }
     }
 }
@@ -602,6 +615,7 @@ impl Keybinds {
             ("quit", &self.quit),
             ("open_editor", &self.open_editor),
             ("show_tasks", &self.show_tasks),
+            ("refresh_task_list", &self.refresh_task_list),
         ]
     }
 

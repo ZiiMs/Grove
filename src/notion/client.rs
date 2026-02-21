@@ -1,7 +1,6 @@
 use anyhow::{bail, Context, Result};
 use futures::future::join_all;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use std::time::Instant;
 use tokio::sync::Mutex;
 
 use super::types::{
@@ -414,16 +413,11 @@ fn clean_page_id(id: &str) -> String {
     }
 }
 
+use crate::cache::Cache;
+
 pub struct OptionalNotionClient {
     client: Option<NotionClient>,
-    cached_tasks: Mutex<Option<CachedTasks>>,
-    cache_ttl_secs: u64,
-}
-
-struct CachedTasks {
-    fetched_at: Instant,
-    pages: Vec<NotionPageData>,
-    exclude_done: bool,
+    cached_tasks: Cache<(bool, Vec<NotionPageData>)>,
 }
 
 impl OptionalNotionClient {
@@ -438,8 +432,7 @@ impl OptionalNotionClient {
         });
         Self {
             client,
-            cached_tasks: Mutex::new(None),
-            cache_ttl_secs,
+            cached_tasks: Cache::new(cache_ttl_secs),
         }
     }
 
@@ -465,18 +458,10 @@ impl OptionalNotionClient {
         &self,
         exclude_done: bool,
     ) -> Result<Vec<NotionPageData>> {
-        {
-            let cache = self.cached_tasks.lock().await;
-            if let Some(ref cached) = *cache {
-                if cached.exclude_done == exclude_done
-                    && cached.fetched_at.elapsed().as_secs() < self.cache_ttl_secs
-                {
-                    tracing::debug!(
-                        "Notion cache hit: returning {} cached pages",
-                        cached.pages.len()
-                    );
-                    return Ok(cached.pages.clone());
-                }
+        if let Some((cached_exclude_done, pages)) = self.cached_tasks.get().await {
+            if cached_exclude_done == exclude_done {
+                tracing::debug!("Notion cache hit: returning {} cached pages", pages.len());
+                return Ok(pages);
             }
         }
 
@@ -487,12 +472,7 @@ impl OptionalNotionClient {
         let pages = client.query_database_with_children(exclude_done).await?;
 
         tracing::debug!("Notion cache miss: fetched {} pages", pages.len());
-        let mut cache = self.cached_tasks.lock().await;
-        *cache = Some(CachedTasks {
-            fetched_at: Instant::now(),
-            pages: pages.clone(),
-            exclude_done,
-        });
+        self.cached_tasks.set((exclude_done, pages.clone())).await;
 
         Ok(pages)
     }
@@ -519,8 +499,7 @@ impl OptionalNotionClient {
         };
 
         if result.is_ok() {
-            let mut cache = self.cached_tasks.lock().await;
-            *cache = None;
+            self.cached_tasks.invalidate().await;
             tracing::debug!("Notion cache invalidated after status update");
         }
 
@@ -535,8 +514,7 @@ impl OptionalNotionClient {
     }
 
     pub async fn invalidate_cache(&self) {
-        let mut cache = self.cached_tasks.lock().await;
-        *cache = None;
+        self.cached_tasks.invalidate().await;
         tracing::debug!("Notion cache manually invalidated");
     }
 }

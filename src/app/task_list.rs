@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub enum TaskItemStatus {
     NotStarted,
     InProgress,
+    Completed,
 }
 
 impl TaskItemStatus {
@@ -11,6 +12,7 @@ impl TaskItemStatus {
         match self {
             TaskItemStatus::NotStarted => "Not Started",
             TaskItemStatus::InProgress => "In Progress",
+            TaskItemStatus::Completed => "Completed",
         }
     }
 }
@@ -24,10 +26,15 @@ pub struct TaskListItem {
     pub url: String,
     pub parent_id: Option<String>,
     pub has_children: bool,
+    pub completed: bool,
 }
 
 impl TaskListItem {
     pub fn is_top_level(&self) -> bool {
         self.parent_id.is_none()
+    }
+
+    pub fn is_subtask(&self) -> bool {
+        self.parent_id.is_some()
     }
 }

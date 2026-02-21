@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 
 use super::types::{
     AsanaSectionsResponse, AsanaTaskData, AsanaTaskListResponse, AsanaTaskResponse,
-    AsanaTaskSummary,
+    AsanaTaskSummary, SectionOption,
 };
 
 /// Asana API client.
@@ -342,6 +342,40 @@ impl AsanaClient {
         }
     }
 
+    /// Get all sections for the configured project.
+    /// Returns a list of section options for use in status dropdown.
+    pub async fn get_sections(&self) -> Result<Vec<SectionOption>> {
+        let project_gid = match &self.project_gid {
+            Some(gid) => gid,
+            None => anyhow::bail!("No Asana project GID configured"),
+        };
+
+        let url = format!(
+            "https://app.asana.com/api/1.0/projects/{}/sections",
+            project_gid
+        );
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch Asana sections")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Asana API error fetching sections: {} - {}", status, body);
+        }
+
+        let sections: AsanaSectionsResponse = response
+            .json()
+            .await
+            .context("Failed to parse Asana sections response")?;
+
+        Ok(sections.data.into_iter().map(SectionOption::from).collect())
+    }
+
     /// Move a task to "In Progress" section.
     /// Uses `override_gid` if provided, otherwise auto-detects by section name.
     pub async fn move_to_in_progress(
@@ -428,15 +462,21 @@ impl AsanaClient {
     }
 }
 
+use crate::cache::Cache;
+
 /// Optional Asana client wrapper — mirrors `OptionalGitLabClient` pattern.
 pub struct OptionalAsanaClient {
     client: Option<AsanaClient>,
+    cached_tasks: Cache<Vec<AsanaTaskSummary>>,
 }
 
 impl OptionalAsanaClient {
-    pub fn new(token: Option<&str>, project_gid: Option<String>) -> Self {
+    pub fn new(token: Option<&str>, project_gid: Option<String>, cache_ttl_secs: u64) -> Self {
         let client = token.and_then(|tok| AsanaClient::new(tok, project_gid).ok());
-        Self { client }
+        Self {
+            client,
+            cached_tasks: Cache::new(cache_ttl_secs),
+        }
     }
 
     pub fn is_configured(&self) -> bool {
@@ -458,17 +498,35 @@ impl OptionalAsanaClient {
     }
 
     pub async fn get_project_tasks_with_subtasks(&self) -> Result<Vec<AsanaTaskSummary>> {
-        match &self.client {
-            Some(c) => c.get_project_tasks_with_subtasks().await,
-            None => anyhow::bail!("Asana not configured"),
+        if let Some(tasks) = self.cached_tasks.get().await {
+            tracing::debug!("Asana cache hit: returning {} cached tasks", tasks.len());
+            return Ok(tasks);
         }
+
+        let client = match &self.client {
+            Some(c) => c,
+            None => anyhow::bail!("Asana not configured"),
+        };
+        let tasks = client.get_project_tasks_with_subtasks().await?;
+
+        tracing::debug!("Asana cache miss: fetched {} tasks", tasks.len());
+        self.cached_tasks.set(tasks.clone()).await;
+
+        Ok(tasks)
     }
 
     pub async fn complete_task(&self, gid: &str) -> Result<()> {
-        match &self.client {
+        let result = match &self.client {
             Some(c) => c.complete_task(gid).await,
             None => anyhow::bail!("Asana not configured"),
+        };
+
+        if result.is_ok() {
+            self.cached_tasks.invalidate().await;
+            tracing::debug!("Asana cache invalidated after completing task");
         }
+
+        result
     }
 
     pub async fn move_to_in_progress(
@@ -476,17 +534,31 @@ impl OptionalAsanaClient {
         task_gid: &str,
         override_gid: Option<&str>,
     ) -> Result<()> {
-        match &self.client {
+        let result = match &self.client {
             Some(c) => c.move_to_in_progress(task_gid, override_gid).await,
             None => anyhow::bail!("Asana not configured"),
+        };
+
+        if result.is_ok() {
+            self.cached_tasks.invalidate().await;
+            tracing::debug!("Asana cache invalidated after moving task to in progress");
         }
+
+        result
     }
 
     pub async fn move_to_done(&self, task_gid: &str, override_gid: Option<&str>) -> Result<()> {
-        match &self.client {
+        let result = match &self.client {
             Some(c) => c.move_to_done(task_gid, override_gid).await,
             None => anyhow::bail!("Asana not configured"),
+        };
+
+        if result.is_ok() {
+            self.cached_tasks.invalidate().await;
+            tracing::debug!("Asana cache invalidated after moving task to done");
         }
+
+        result
     }
 
     pub async fn move_to_not_started(
@@ -494,16 +566,56 @@ impl OptionalAsanaClient {
         task_gid: &str,
         override_gid: Option<&str>,
     ) -> Result<()> {
-        match &self.client {
+        let result = match &self.client {
             Some(c) => c.move_to_not_started(task_gid, override_gid).await,
+            None => anyhow::bail!("Asana not configured"),
+        };
+
+        if result.is_ok() {
+            self.cached_tasks.invalidate().await;
+            tracing::debug!("Asana cache invalidated after moving task to not started");
+        }
+
+        result
+    }
+
+    pub async fn uncomplete_task(&self, gid: &str) -> Result<()> {
+        let result = match &self.client {
+            Some(c) => c.uncomplete_task(gid).await,
+            None => anyhow::bail!("Asana not configured"),
+        };
+
+        if result.is_ok() {
+            self.cached_tasks.invalidate().await;
+            tracing::debug!("Asana cache invalidated after uncompleting task");
+        }
+
+        result
+    }
+
+    pub async fn get_sections(&self) -> Result<Vec<SectionOption>> {
+        match &self.client {
+            Some(c) => c.get_sections().await,
             None => anyhow::bail!("Asana not configured"),
         }
     }
 
-    pub async fn uncomplete_task(&self, gid: &str) -> Result<()> {
-        match &self.client {
-            Some(c) => c.uncomplete_task(gid).await,
+    pub async fn move_task_to_section(&self, task_gid: &str, section_gid: &str) -> Result<()> {
+        let result = match &self.client {
+            Some(c) => c.move_task_to_section(task_gid, section_gid).await,
             None => anyhow::bail!("Asana not configured"),
+        };
+
+        if result.is_ok() {
+            self.cached_tasks.invalidate().await;
+            tracing::debug!("Asana cache invalidated after moving task to section");
         }
+
+        result
+    }
+
+    pub async fn invalidate_cache(&self) {
+        self.cached_tasks.invalidate().await;
+        tracing::debug!("Asana cache manually invalidated");
     }
 }

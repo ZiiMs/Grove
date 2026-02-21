@@ -157,6 +157,7 @@ impl<'a> TaskListModal<'a> {
                 let (status_icon, status_color) = match &task.status {
                     TaskItemStatus::NotStarted => ("○", Color::Gray),
                     TaskItemStatus::InProgress => ("◐", Color::Yellow),
+                    TaskItemStatus::Completed => ("✓", Color::Green),
                 };
 
                 let is_selected = visible_pos == selected_visible_pos;
@@ -245,6 +246,8 @@ impl<'a> TaskListModal<'a> {
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled("[a] Assign  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[s] Toggle Status  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[r] Refresh  ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 "[←/→] Collapse/Expand  ",
                 Style::default().fg(Color::DarkGray),
