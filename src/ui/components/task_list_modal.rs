@@ -236,7 +236,10 @@ impl<'a> TaskListModal<'a> {
         frame.render_widget(list, chunks[0]);
 
         let help_text = Paragraph::new(Line::from(vec![
-            Span::styled("[j/k] Navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "[↑/k][↓/j] Navigate  ",
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled(
                 "[Enter] Create Agent  ",
                 Style::default().fg(Color::DarkGray),
