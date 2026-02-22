@@ -170,6 +170,11 @@ static GEMINI_ANSWER_QUESTIONS: LazyLock<Regex> =
 static GEMINI_KEYBOARD_HINTS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)enter\s+to\s+select.*esc\s+to\s+cancel").unwrap());
 
+/// Gemini numbered questions - indicates clarification needed (AwaitingInput)
+/// Matches patterns like "   1. Question text?" or "   2. Another question?"
+static GEMINI_NUMBERED_QUESTIONS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*\d+\.\s+.+\?$").unwrap());
+
 /// Gemini running indicator: timer format like "(esc to cancel, 15s)" - NOT keyboard hints
 static GEMINI_ESC_CANCEL_TIMER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\(esc\s+to\s+cancel,?\s*\d+s").unwrap());
@@ -842,6 +847,14 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
     // 4. Check for keyboard hints indicating question panel
     if GEMINI_KEYBOARD_HINTS.is_match(&clean_output) {
         return AgentStatus::AwaitingInput;
+    }
+
+    // 4b. Check for numbered questions (indicates clarification needed)
+    // This catches Gemini's question format like "   1. Target File: Should I...?"
+    for line in lines.iter() {
+        if GEMINI_NUMBERED_QUESTIONS.is_match(line) {
+            return AgentStatus::AwaitingInput;
+        }
     }
 
     // 5. Check for permission/confirmation prompts
