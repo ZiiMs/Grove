@@ -4564,6 +4564,45 @@ async fn process_action(
                             }
                         }
                     });
+                } else if matches!(provider, ProjectMgmtProvider::Linear) {
+                    // Linear: All tasks (parent and subtask) use full status dropdown
+                    if !linear_client.is_configured().await {
+                        state.show_error("Linear not configured. Set LINEAR_TOKEN and team_id.");
+                        return Ok(false);
+                    }
+
+                    let task_id_for_dropdown = task.id.clone();
+                    let task_name_for_dropdown = task.name.clone();
+                    let client = Arc::clone(linear_client);
+                    let tx = action_tx.clone();
+                    state.loading_message = Some("Loading workflow states...".to_string());
+
+                    tokio::spawn(async move {
+                        match client.get_workflow_states().await {
+                            Ok(states) => {
+                                let options: Vec<StatusOption> = states
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.id,
+                                        name: s.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                    task_id: task_id_for_dropdown,
+                                    task_name: task_name_for_dropdown,
+                                    options,
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to load Linear workflow states: {}", e);
+                                let _ = tx.send(Action::SetLoading(None));
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load workflow states: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    });
                 } else if task.is_subtask() {
                     // ClickUp subtasks use the same statuses as parent tasks
                     if matches!(provider, ProjectMgmtProvider::Clickup) {
