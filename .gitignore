@@ -1,6 +1,6 @@
 # Rust build artifacts
 /target
-.flock/
+.grove/
 
 # Editor files
 *.swp
@@ -28,4 +28,4 @@
 # Debug files
 *.log
 *.pdb
-.flock/project.toml
+.grove/project.toml

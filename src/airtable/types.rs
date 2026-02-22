@@ -38,6 +38,16 @@ impl AirtableTaskStatus {
         }
     }
 
+    pub fn format_status_name(&self) -> String {
+        match self {
+            AirtableTaskStatus::None => "—".to_string(),
+            AirtableTaskStatus::NotStarted { name, .. }
+            | AirtableTaskStatus::InProgress { name, .. }
+            | AirtableTaskStatus::Completed { name, .. } => truncate(name, 10),
+            AirtableTaskStatus::Error { .. } => "Error".to_string(),
+        }
+    }
+
     pub fn id(&self) -> Option<&str> {
         match self {
             AirtableTaskStatus::None => None,

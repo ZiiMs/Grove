@@ -41,6 +41,16 @@ impl LinearTaskStatus {
         }
     }
 
+    pub fn format_status_name(&self) -> String {
+        match self {
+            LinearTaskStatus::None => "—".to_string(),
+            LinearTaskStatus::NotStarted { name, .. }
+            | LinearTaskStatus::InProgress { name, .. }
+            | LinearTaskStatus::Completed { name, .. } => truncate(name, 10),
+            LinearTaskStatus::Error { .. } => "Error".to_string(),
+        }
+    }
+
     pub fn id(&self) -> Option<&str> {
         match self {
             LinearTaskStatus::None => None,

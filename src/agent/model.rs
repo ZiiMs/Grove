@@ -47,6 +47,8 @@ impl ProjectMgmtTaskStatus {
             ProjectMgmtTaskStatus::Asana(s) => s.format_status_name(),
             ProjectMgmtTaskStatus::Notion(s) => s.format_status_name(),
             ProjectMgmtTaskStatus::ClickUp(s) => s.format_status_name(),
+            ProjectMgmtTaskStatus::Airtable(s) => s.format_status_name(),
+            ProjectMgmtTaskStatus::Linear(s) => s.format_status_name(),
         }
     }
 
