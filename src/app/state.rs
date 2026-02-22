@@ -163,7 +163,6 @@ pub enum SettingsField {
     KbOpenEditor,
     KbShowTasks,
     KbRefreshTaskList,
-    Version,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,7 +253,6 @@ impl SettingsField {
             | SettingsField::ShowMetrics
             | SettingsField::ShowLogs
             | SettingsField::ShowBanner
-            | SettingsField::Version
             | SettingsField::SummaryPrompt
             | SettingsField::MergePrompt
             | SettingsField::PushPrompt => SettingsTab::General,
@@ -396,10 +394,6 @@ impl SettingsField {
             _ => None,
         }
     }
-
-    pub fn is_readonly(&self) -> bool {
-        matches!(self, SettingsField::Version)
-    }
 }
 
 impl SettingsItem {
@@ -410,7 +404,6 @@ impl SettingsItem {
     ) -> Vec<SettingsItem> {
         match tab {
             SettingsTab::General => vec![
-                SettingsItem::Field(SettingsField::Version),
                 SettingsItem::Category(SettingsCategory::Agent),
                 SettingsItem::Field(SettingsField::AiAgent),
                 SettingsItem::Field(SettingsField::Editor),
@@ -553,9 +546,9 @@ impl SettingsItem {
             .iter()
             .enumerate()
             .filter_map(|(i, item)| match item {
-                SettingsItem::Field(f) if !f.is_readonly() => Some((i, SettingsItem::Field(*f))),
+                SettingsItem::Field(f) => Some((i, SettingsItem::Field(*f))),
                 SettingsItem::ActionButton(b) => Some((i, SettingsItem::ActionButton(*b))),
-                _ => None,
+                SettingsItem::Category(_) => None,
             })
             .collect()
     }

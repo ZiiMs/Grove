@@ -12,7 +12,6 @@ use crate::app::{
     SettingsTab, UiConfig, WorktreeLocation,
 };
 use crate::ui::components::file_browser;
-use crate::version;
 
 pub struct SettingsModal<'a> {
     state: &'a SettingsState,
@@ -785,7 +784,6 @@ impl<'a> SettingsModal<'a> {
                     });
                 ("Push".to_string(), value, false)
             }
-            SettingsField::Version => ("Version".to_string(), version::VERSION.to_string(), false),
             field if field.is_keybind_field() => {
                 let label = field.keybind_name().unwrap_or("Keybind").to_string();
                 let value = self

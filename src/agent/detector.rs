@@ -104,6 +104,11 @@ static QUESTION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // Plan mode
         Regex::new(r"Ready to implement\?").unwrap(),
         Regex::new(r"Proceed with").unwrap(),
+        // Numbered selection with Claude's indicator (❯ 1. Option text)
+        Regex::new(r"❯\s*\d+\.").unwrap(),
+        // Keyboard confirmation hints
+        Regex::new(r"Enter\s+to\s+confirm").unwrap(),
+        Regex::new(r"Esc\s+to\s+cancel").unwrap(),
     ]
 });
 
@@ -484,9 +489,49 @@ pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -
         ForegroundProcess::CodexRunning => detect_status_codex(output, foreground),
         ForegroundProcess::GeminiRunning => detect_status_gemini(output, foreground),
         ForegroundProcess::Shell => detect_status_at_shell(output),
-        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::OtherProcess(_) => detect_status_other_process(output),
         ForegroundProcess::Unknown => detect_status(output),
     }
+}
+
+/// Status detection when a subprocess (cargo, git, etc.) is in the foreground.
+/// Still checks for input prompts since the AI may be waiting for user response.
+fn detect_status_other_process(output: &str) -> AgentStatus {
+    let clean_output = strip_ansi(output);
+    let lines: Vec<&str> = clean_output.lines().collect();
+
+    if lines.is_empty() {
+        return AgentStatus::Running;
+    }
+
+    let last_5_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .cloned()
+        .collect();
+    let last_5_text = last_5_lines.join("\n");
+
+    for pattern in QUESTION_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            return AgentStatus::AwaitingInput;
+        }
+    }
+
+    for pattern in ERROR_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            for line in last_5_lines.iter() {
+                if pattern.is_match(line) {
+                    let msg = line.trim().chars().take(40).collect::<String>();
+                    return AgentStatus::Error(msg);
+                }
+            }
+            return AgentStatus::Error("Error detected".to_string());
+        }
+    }
+
+    AgentStatus::Running
 }
 
 /// Status detection when we know Claude (node/npx) is the foreground process.
@@ -499,8 +544,14 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
         return AgentStatus::Running;
     }
 
-    // Narrow window: last 5 lines for question patterns (reduces false positives)
-    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    // Narrow window: last 5 non-empty lines for question patterns (reduces false positives)
+    let last_5_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .cloned()
+        .collect();
     let last_5_text = last_5_lines.join("\n");
 
     // 1. Check for questions/permission prompts (highest priority)
@@ -523,8 +574,14 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
         }
     }
 
-    // 3. Check last 3 lines for spinners/tool execution → Running
-    let last_3_lines: Vec<&str> = lines.iter().rev().take(3).cloned().collect();
+    // 3. Check last 3 non-empty lines for spinners/tool execution → Running
+    let last_3_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(3)
+        .cloned()
+        .collect();
     let last_3_text = last_3_lines.join("\n");
 
     if SPINNER_CHARS.is_match(&last_3_text) {
@@ -538,27 +595,42 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
     }
 
     // 4. Check for prompt character → Completed or Idle
-    let is_at_prompt = lines.iter().rev().take(5).any(|line| {
-        let trimmed = line.trim().trim_matches('\u{00A0}');
-        if trimmed == ">" || trimmed == "›" || trimmed == "❯" || trimmed == "$" || trimmed == "%"
-        {
-            return true;
-        }
-        if trimmed.len() <= 3
-            && (trimmed.starts_with('>')
-                || trimmed.starts_with('›')
-                || trimmed.starts_with('❯')
-                || trimmed.starts_with('$')
-                || trimmed.starts_with('%'))
-        {
-            return true;
-        }
-        false
-    });
+    let is_at_prompt = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .any(|line| {
+            let trimmed = line.trim().trim_matches('\u{00A0}');
+            if trimmed == ">"
+                || trimmed == "›"
+                || trimmed == "❯"
+                || trimmed == "$"
+                || trimmed == "%"
+            {
+                return true;
+            }
+            if trimmed.len() <= 3
+                && (trimmed.starts_with('>')
+                    || trimmed.starts_with('›')
+                    || trimmed.starts_with('❯')
+                    || trimmed.starts_with('$')
+                    || trimmed.starts_with('%'))
+            {
+                return true;
+            }
+            false
+        });
 
     if is_at_prompt {
-        // Check last 10 lines for completion patterns
-        let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
+        // Check last 10 non-empty lines for completion patterns
+        let last_10_lines: Vec<&str> = lines
+            .iter()
+            .rev()
+            .filter(|l| !l.trim().is_empty())
+            .take(10)
+            .cloned()
+            .collect();
         let last_10_text = last_10_lines.join("\n");
 
         for pattern in COMPLETION_PATTERNS.iter() {
@@ -627,8 +699,14 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
     // Use full output for question/permission detection (these can appear anywhere)
     let full_lower = clean_output.to_lowercase();
 
-    // Also check last 5 lines for working indicators (bottom of screen where status appears)
-    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    // Also check last 5 non-empty lines for working indicators (bottom of screen where status appears)
+    let last_5_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .cloned()
+        .collect();
     let last_5_text = last_5_lines.join("\n").to_lowercase();
 
     // 1. Check for permission panel (highest priority)
@@ -1005,6 +1083,96 @@ mod tests {
     }
 
     #[test]
+    fn test_opencode_idle_with_plan_mode() {
+        let output = r#"  ┃  hints.                                                                                                                                           Claude Code status check refinement:
+  ┃                                                                                                                                                    tmux outputs analysis plan
+  ┃  Looking at the last few non-empty lines:
+  ┃  - The system reminder text (plan mode)                                                                                                           Context
+  ┃  - ❯ (prompt)                                                                                                                                     78,330 tokens
+  ┃  - Separator line                                                                                                                                 38% used
+  ┃  - ⏸ plan mode on (shift+tab to cycle) · esc to interrupt <system-reminder>                                                                       $0.00 spent
+  ┃
+  ┃  The agent is at the prompt (❯) waiting for user input. There's no spinner currently running. The "⏸ plan mode on" is a hint, not an active       LSP
+  ┃  spinner.                                                                                                                                         LSPs will activate as files are read
+  ┃
+  ┃  Actually, wait - there's a spinner ✽ visible: "✽ Julienning…". But looking more carefully, this appears to be historical output - the current    Modified Files
+  ┃   state shows the prompt ❯ at the bottom.                                                                                                         src/agent/detector.rs        +261 -24
+  ┃
+  ┃  The correct status should be Idle because:
+  ┃  1. The agent is at the prompt (❯)
+  ┃  2. No active spinner in the last few lines
+  ┃  3. No question/permission prompt requiring user input
+  ┃  4. Just a plan mode hint, which is informational, not an input requirement
+  ┃
+  ┃  However, there's also consideration for whether plan mode should be a special status. Looking at the existing statuses:
+  ┃  - Running
+  ┃  - AwaitingInput
+  ┃  - Completed
+  ┃  - Idle
+  ┃  - Error
+  ┃  - Stopped
+  ┃  - Paused
+  ┃
+  ┃  There is a Paused status. But plan mode is different from paused - it's a mode where the agent can read but not write. The agent is still
+  ┃  active and waiting for input.
+  ┃
+  ┃  I think Idle is correct here - the agent is at the prompt, ready for input. Plan mode is just a mode, not a state that prevents input.
+
+     Status: Idle
+
+     The agent is at the prompt (❯) with no active spinner, no question requiring input, and no error. Plan mode is just a mode indicator, not an
+     input requirement. The agent is ready for user input.
+
+     ▣  Plan · glm-5 · 1m 4s
+
+  ┃
+  ┃                                                                                                                                                   ~/.grove/worktrees/0718d9772458e2b2/
+  ┃                                                                                                                                                   tidy-up-status-checks
+  ┃  Plan  GLM-5 Z.AI Coding Plan                                                                                                                     
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                                       tab agents  ctrl+p commands    • OpenCode 1.2.10"#;
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle with plan mode footer, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_opencode_running_with_dots_spinner() {
+        let output = r#"  ┃  Let me create the file with varied paragraphs.
+
+     ~ Preparing write...
+
+     ▣  Build · MiniMax-M2.5
+
+  ┃
+  ┃
+  ┃                                                                                                                                                   ~/.grove/worktrees/test/
+  ┃  Build  MiniMax-M2.5 MiniMax Coding Plan                                                                                                          project
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt"#;
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running with dots spinner, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_opencode_running_with_dots_spinner_trailing_newlines() {
+        let output = "  ┃  Let me create the file.\n\n     ~ Preparing write...\n\n     ▣  Build · MiniMax-M2.5\n\n  ┃\n\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt\n\n\n\n\n";
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running with dots spinner and trailing newlines, got {:?}",
+            status
+        );
+    }
+
+    #[test]
     fn test_opencode_checklist_progress() {
         let output = r#"  [✓] Create types.ts with Todo interface
   [✓] Create storage.ts localStorage helpers
@@ -1315,6 +1483,171 @@ mod tests {
         let output = "Some output\n⠋ Reading file...";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(matches!(status, AgentStatus::Running));
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_awaiting_input() {
+        let output = r#"──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude
+
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's
+ in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+
+ Enter to confirm · Esc to cancel"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for trust dialog, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_exact_output() {
+        let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel ";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for exact trust dialog, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_with_trailing_newlines() {
+        let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel\n\n\n\n\n\n";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for trust dialog with trailing newlines, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_unknown_process() {
+        let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel ";
+        let status = detect_status_with_process(output, ForegroundProcess::Unknown);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for trust dialog with Unknown foreground, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_with_ansi() {
+        let output = "\x1b[90m────────────────────────────────────────────────\x1b[0m\n\x1b[1m Accessing workspace:\x1b[0m\n\n /home/ziim/test\n\n\x1b[33m Quick safety check:\x1b[0m\n\n \x1b[36m❯ 1. Yes, I trust this folder\x1b[0m\n   2. No, exit\n\n\x1b[2m Enter to confirm · Esc to cancel\x1b[0m ";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for trust dialog with ANSI codes, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_other_process_with_input_prompt() {
+        let output =
+            "❯ 1. Yes, I trust this folder\n   2. No, exit\n\nEnter to confirm · Esc to cancel";
+        let status = detect_status_with_process(
+            output,
+            ForegroundProcess::OtherProcess("cargo".to_string()),
+        );
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for OtherProcess with input prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_other_process_running() {
+        let output = "Compiling grove v0.1.0\nRunning tests...";
+        let status = detect_status_with_process(
+            output,
+            ForegroundProcess::OtherProcess("cargo".to_string()),
+        );
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for OtherProcess without input prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_other_process_with_error() {
+        let output = "Error: build failed\nSome more output";
+        let status = detect_status_with_process(
+            output,
+            ForegroundProcess::OtherProcess("cargo".to_string()),
+        );
+        assert!(
+            matches!(status, AgentStatus::Error(_)),
+            "Expected Error for OtherProcess with error, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_numbered_selection_awaiting_input() {
+        let output = "❯ 1. First option\n  2. Second option\n  3. Third option";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for numbered selection, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_keyboard_hints_awaiting_input() {
+        let output = "Some prompt\nEnter to confirm · Esc to cancel";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for keyboard hints, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_welcome_screen_idle() {
+        let output = r#"╭─── Claude Code v2.1.50 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                                              │
+│                 Welcome back ZiiM!                 │ Run /init to create a CLAUDE.md file with instructions for Claude                                                                     │
+│                                                    │ ─────────────────────────────────────────────────────────────────                                                                     │
+│                                                    │ Recent activity                                                                                                                       │
+│                                                    │ No recent activity                                                                                                                    │
+│                          ✻                         │                                                                                                                                       │
+│                          |                         │                                                                                                                                       │
+│                         ▟█▙                        │                                                                                                                                       │
+│                       ▐▛███▜▌                      │                                                                                                                                       │
+│                      ▝▜█████▛▘                     │                                                                                                                                       │
+│                        ▘▘ ▝▝                       │                                                                                                                                       │
+│              Sonnet 4.6 · Claude API               │                                                                                                                                       │
+│   ~/.grove/worktrees/d0fd05c68b028185/testclaude   │                                                                                                                                       │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts  "#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle for welcome screen at prompt, got {:?}",
+            status
+        );
     }
 
     // --- Codex tests ---

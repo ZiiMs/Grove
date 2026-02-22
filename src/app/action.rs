@@ -150,7 +150,7 @@ pub enum Action {
     CreateAgentFromSelectedTask,
     AssignSelectedTaskToAgent,
     ToggleTaskExpand,
-    SelectTaskListStatus,
+    ToggleSubtaskStatus,
 
     SubtaskStatusDropdownNext,
     SubtaskStatusDropdownPrev,
