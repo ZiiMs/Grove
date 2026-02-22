@@ -10,17 +10,20 @@ pub enum AsanaTaskStatus {
         name: String,
         url: String,
         is_subtask: bool,
+        status_name: String,
     },
     InProgress {
         gid: String,
         name: String,
         url: String,
         is_subtask: bool,
+        status_name: String,
     },
     Completed {
         gid: String,
         name: String,
         is_subtask: bool,
+        status_name: String,
     },
     Error {
         gid: String,
@@ -29,7 +32,7 @@ pub enum AsanaTaskStatus {
 }
 
 impl AsanaTaskStatus {
-    /// Short display string for the agent list column.
+    /// Short display string for the agent list column (task name).
     pub fn format_short(&self) -> String {
         match self {
             AsanaTaskStatus::None => "—".to_string(),
@@ -37,6 +40,17 @@ impl AsanaTaskStatus {
             AsanaTaskStatus::InProgress { name, .. } => truncate(name, 14),
             AsanaTaskStatus::Completed { name, .. } => truncate(name, 14),
             AsanaTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
+        }
+    }
+
+    /// Display string for the status name column.
+    pub fn format_status_name(&self) -> String {
+        match self {
+            AsanaTaskStatus::None => "—".to_string(),
+            AsanaTaskStatus::NotStarted { status_name, .. }
+            | AsanaTaskStatus::InProgress { status_name, .. }
+            | AsanaTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
+            AsanaTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
 

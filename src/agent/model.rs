@@ -34,6 +34,16 @@ impl ProjectMgmtTaskStatus {
         }
     }
 
+    /// Display string for the status name column.
+    pub fn format_status_name(&self) -> String {
+        match self {
+            ProjectMgmtTaskStatus::None => "—".to_string(),
+            ProjectMgmtTaskStatus::Asana(s) => s.format_status_name(),
+            ProjectMgmtTaskStatus::Notion(s) => s.format_status_name(),
+            ProjectMgmtTaskStatus::ClickUp(s) => s.format_status_name(),
+        }
+    }
+
     pub fn is_linked(&self) -> bool {
         !matches!(self, ProjectMgmtTaskStatus::None)
     }

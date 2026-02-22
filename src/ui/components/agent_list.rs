@@ -58,13 +58,12 @@ impl<'a> AgentListWidget<'a> {
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let header_cells = [
             "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Server",
-            "PM Task", "Note",
+            "PM Task", "PM St", "Note",
         ]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
         let header = Row::new(header_cells).height(1);
 
-        // Build rows with separators between agents
         let rows: Vec<Row> = self
             .agents
             .iter()
@@ -73,7 +72,6 @@ impl<'a> AgentListWidget<'a> {
                 let is_selected = i == self.selected;
                 let is_last = i == self.agents.len() - 1;
 
-                // Apply background highlight to selected row
                 let mut agent_row = self.render_agent_row(agent, is_selected);
                 if is_selected {
                     agent_row = agent_row.style(Style::default().bg(Color::Rgb(40, 44, 52)));
@@ -82,7 +80,6 @@ impl<'a> AgentListWidget<'a> {
                 if is_last {
                     vec![agent_row]
                 } else {
-                    // Add separator row after each agent (except the last)
                     let separator = Row::new(vec![
                         Cell::from("──"),
                         Cell::from("──"),
@@ -95,6 +92,7 @@ impl<'a> AgentListWidget<'a> {
                         Cell::from("──────────"),
                         Cell::from("────────"),
                         Cell::from("────────────────"),
+                        Cell::from("──────────"),
                         Cell::from("──────────"),
                     ])
                     .style(Style::default().fg(Color::DarkGray));
@@ -116,7 +114,8 @@ impl<'a> AgentListWidget<'a> {
                 Constraint::Length(10), // MR
                 Constraint::Length(10), // Pipeline
                 Constraint::Length(10), // Server
-                Constraint::Length(16), // Asana
+                Constraint::Length(16), // PM Task
+                Constraint::Length(10), // PM Status
                 Constraint::Min(10),    // Note (fills remaining)
             ],
         )
@@ -128,7 +127,6 @@ impl<'a> AgentListWidget<'a> {
                 .border_style(Style::default().fg(Color::White)),
         );
 
-        // Render without stateful selection (we handle highlighting manually)
         frame.render_widget(table, area);
     }
 
@@ -194,9 +192,13 @@ impl<'a> AgentListWidget<'a> {
         let (server_text, server_style) = self.format_devserver_status(agent);
         let server_cell = Cell::from(server_text).style(server_style);
 
-        // PM Task column
-        let (pm_text, pm_style) = self.format_pm_status(agent);
+        // PM Task column (task name)
+        let (pm_text, pm_style) = self.format_pm_task_name(agent);
         let pm_cell = Cell::from(pm_text).style(pm_style);
+
+        // PM Status column (status name)
+        let (pm_status_text, pm_status_style) = self.format_pm_status_name(agent);
+        let pm_status_cell = Cell::from(pm_status_text).style(pm_status_style);
 
         // Note column
         let note = agent.custom_note.as_deref().unwrap_or("");
@@ -222,6 +224,7 @@ impl<'a> AgentListWidget<'a> {
             pipeline_cell,
             server_cell,
             pm_cell,
+            pm_status_cell,
             note_cell,
         ])
     }
@@ -377,8 +380,37 @@ impl<'a> AgentListWidget<'a> {
         }
     }
 
-    fn format_pm_status(&self, agent: &Agent) -> (String, Style) {
+    fn format_pm_task_name(&self, agent: &Agent) -> (String, Style) {
         let text = agent.pm_task_status.format_short();
+        let style = match &agent.pm_task_status {
+            ProjectMgmtTaskStatus::None => Style::default().fg(Color::DarkGray),
+            ProjectMgmtTaskStatus::Asana(s) => match s {
+                AsanaTaskStatus::None => Style::default().fg(Color::DarkGray),
+                AsanaTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                AsanaTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                AsanaTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                AsanaTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
+            ProjectMgmtTaskStatus::Notion(s) => match s {
+                NotionTaskStatus::None => Style::default().fg(Color::DarkGray),
+                NotionTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                NotionTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                NotionTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                NotionTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
+            ProjectMgmtTaskStatus::ClickUp(s) => match s {
+                ClickUpTaskStatus::None => Style::default().fg(Color::DarkGray),
+                ClickUpTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                ClickUpTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                ClickUpTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                ClickUpTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
+        };
+        (text, style)
+    }
+
+    fn format_pm_status_name(&self, agent: &Agent) -> (String, Style) {
+        let text = agent.pm_task_status.format_status_name();
         let style = match &agent.pm_task_status {
             ProjectMgmtTaskStatus::None => Style::default().fg(Color::DarkGray),
             ProjectMgmtTaskStatus::Asana(s) => match s {
