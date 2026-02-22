@@ -58,7 +58,7 @@ impl<'a> AgentListWidget<'a> {
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let header_cells = [
             "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Server",
-            "PM Task", "PM St", "Note",
+            "Task", "Task St", "Note",
         ]
         .iter()
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
