@@ -39,19 +39,13 @@ impl LinearTaskStatus {
             LinearTaskStatus::None => "—".to_string(),
             LinearTaskStatus::NotStarted {
                 identifier, name, ..
-            } => {
-                format!("{} {}", identifier, name)
-            }
+            } => truncate(&format!("{} {}", identifier, name), 24),
             LinearTaskStatus::InProgress {
                 identifier, name, ..
-            } => {
-                format!("{} {}", identifier, name)
-            }
+            } => truncate(&format!("{} {}", identifier, name), 24),
             LinearTaskStatus::Completed {
                 identifier, name, ..
-            } => {
-                format!("{} {}", identifier, name)
-            }
+            } => truncate(&format!("{} {}", identifier, name), 24),
             LinearTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
         }
     }
