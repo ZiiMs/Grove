@@ -189,8 +189,13 @@ pub struct LinearIssueParent {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ChildIssueData {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ChildrenConnection {
-    pub nodes: Vec<LinearIssueData>,
+    pub nodes: Vec<ChildIssueData>,
 }
 
 #[derive(Debug, Deserialize)]
