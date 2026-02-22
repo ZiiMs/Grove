@@ -217,12 +217,12 @@ impl NotionClient {
 
         let mut sorted_pages = Vec::new();
         for parent in parent_pages {
-            if !exclude_done || !parent.is_completed {
+            if !exclude_done || !parent.is_completed() {
                 sorted_pages.push(parent.clone());
             }
             if let Some(children) = children_by_parent.get(&parent.id) {
                 for child in children {
-                    if !exclude_done || !child.is_completed {
+                    if !exclude_done || !child.is_completed() {
                         sorted_pages.push(child.clone());
                     }
                 }

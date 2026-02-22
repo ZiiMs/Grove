@@ -96,13 +96,6 @@ impl ProjectMgmtTaskStatus {
         )
     }
 
-    pub fn is_notion_not_started(&self) -> bool {
-        matches!(
-            self,
-            ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted { .. })
-        )
-    }
-
     pub fn is_clickup_not_started(&self) -> bool {
         matches!(
             self,
