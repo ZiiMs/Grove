@@ -4444,7 +4444,7 @@ async fn process_action(
                                         let has_children = parent_ids.contains(&i.id);
                                         TaskListItem {
                                             id: i.id,
-                                            name: format!("{} {}", i.identifier, i.title),
+                                            name: i.title,
                                             status,
                                             status_name: i.state_name,
                                             url: i.url,
