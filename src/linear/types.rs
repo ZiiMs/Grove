@@ -8,6 +8,7 @@ pub enum LinearTaskStatus {
         id: String,
         identifier: String,
         name: String,
+        status_name: String,
         url: String,
         is_subtask: bool,
     },
@@ -15,6 +16,7 @@ pub enum LinearTaskStatus {
         id: String,
         identifier: String,
         name: String,
+        status_name: String,
         url: String,
         is_subtask: bool,
     },
@@ -22,6 +24,7 @@ pub enum LinearTaskStatus {
         id: String,
         identifier: String,
         name: String,
+        status_name: String,
         is_subtask: bool,
     },
     Error {
@@ -44,9 +47,9 @@ impl LinearTaskStatus {
     pub fn format_status_name(&self) -> String {
         match self {
             LinearTaskStatus::None => "—".to_string(),
-            LinearTaskStatus::NotStarted { name, .. }
-            | LinearTaskStatus::InProgress { name, .. }
-            | LinearTaskStatus::Completed { name, .. } => truncate(name, 10),
+            LinearTaskStatus::NotStarted { status_name, .. }
+            | LinearTaskStatus::InProgress { status_name, .. }
+            | LinearTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
             LinearTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
