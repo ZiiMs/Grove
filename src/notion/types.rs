@@ -9,16 +9,19 @@ pub enum NotionTaskStatus {
         name: String,
         url: String,
         status_option_id: String,
+        status_name: String,
     },
     InProgress {
         page_id: String,
         name: String,
         url: String,
         status_option_id: String,
+        status_name: String,
     },
     Completed {
         page_id: String,
         name: String,
+        status_name: String,
     },
     Error {
         page_id: String,
@@ -34,6 +37,17 @@ impl NotionTaskStatus {
             NotionTaskStatus::InProgress { name, .. } => truncate(name, 14),
             NotionTaskStatus::Completed { name, .. } => truncate(name, 14),
             NotionTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
+        }
+    }
+
+    /// Display string for the status name column.
+    pub fn format_status_name(&self) -> String {
+        match self {
+            NotionTaskStatus::None => "—".to_string(),
+            NotionTaskStatus::NotStarted { status_name, .. }
+            | NotionTaskStatus::InProgress { status_name, .. }
+            | NotionTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
+            NotionTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
 
