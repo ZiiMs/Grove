@@ -214,7 +214,19 @@ pub struct IssueUpdateData {
 #[derive(Debug, Deserialize)]
 pub struct IssueUpdateResult {
     pub success: bool,
-    pub issue: Option<LinearIssueData>,
+    pub issue: Option<IssueUpdateIssueData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IssueUpdateIssueData {
+    pub id: String,
+    pub state: IssueUpdateStateData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IssueUpdateStateData {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]
