@@ -8,6 +8,7 @@ pub enum LinearTaskStatus {
         id: String,
         identifier: String,
         name: String,
+        status_name: String,
         url: String,
         is_subtask: bool,
     },
@@ -15,6 +16,7 @@ pub enum LinearTaskStatus {
         id: String,
         identifier: String,
         name: String,
+        status_name: String,
         url: String,
         is_subtask: bool,
     },
@@ -22,6 +24,7 @@ pub enum LinearTaskStatus {
         id: String,
         identifier: String,
         name: String,
+        status_name: String,
         is_subtask: bool,
     },
     Error {
@@ -34,9 +37,9 @@ impl LinearTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             LinearTaskStatus::None => "—".to_string(),
-            LinearTaskStatus::NotStarted { identifier, .. } => truncate(identifier, 14),
-            LinearTaskStatus::InProgress { identifier, .. } => truncate(identifier, 14),
-            LinearTaskStatus::Completed { identifier, .. } => truncate(identifier, 14),
+            LinearTaskStatus::NotStarted { name, .. } => truncate(name, 24),
+            LinearTaskStatus::InProgress { name, .. } => truncate(name, 24),
+            LinearTaskStatus::Completed { name, .. } => truncate(name, 24),
             LinearTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
         }
     }
@@ -44,9 +47,9 @@ impl LinearTaskStatus {
     pub fn format_status_name(&self) -> String {
         match self {
             LinearTaskStatus::None => "—".to_string(),
-            LinearTaskStatus::NotStarted { name, .. }
-            | LinearTaskStatus::InProgress { name, .. }
-            | LinearTaskStatus::Completed { name, .. } => truncate(name, 10),
+            LinearTaskStatus::NotStarted { status_name, .. }
+            | LinearTaskStatus::InProgress { status_name, .. }
+            | LinearTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
             LinearTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
@@ -175,7 +178,7 @@ pub struct LinearIssueData {
 pub struct LinearStateData {
     pub id: String,
     pub name: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub state_type: String,
     pub color: Option<String>,
 }
@@ -186,8 +189,13 @@ pub struct LinearIssueParent {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ChildIssueData {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ChildrenConnection {
-    pub nodes: Vec<LinearIssueData>,
+    pub nodes: Vec<ChildIssueData>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -214,7 +222,19 @@ pub struct IssueUpdateData {
 #[derive(Debug, Deserialize)]
 pub struct IssueUpdateResult {
     pub success: bool,
-    pub issue: Option<LinearIssueData>,
+    pub issue: Option<IssueUpdateIssueData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IssueUpdateIssueData {
+    pub id: String,
+    pub state: IssueUpdateStateData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IssueUpdateStateData {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]

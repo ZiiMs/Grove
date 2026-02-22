@@ -1628,6 +1628,7 @@ async fn process_action(
                                     id: task_item.id.clone(),
                                     identifier,
                                     name: task_item.name.clone(),
+                                    status_name: task_item.status_name.clone(),
                                     url: task_item.url.clone(),
                                     is_subtask: task_item.is_subtask(),
                                 })
@@ -2538,12 +2539,14 @@ async fn process_action(
                                         id: issue.id,
                                         identifier: issue.identifier,
                                         name: issue.title,
+                                        status_name: issue.state_name,
                                         is_subtask,
                                     },
                                     "started" => LinearTaskStatus::InProgress {
                                         id: issue.id,
                                         identifier: issue.identifier,
                                         name: issue.title,
+                                        status_name: issue.state_name,
                                         url: issue.url,
                                         is_subtask,
                                     },
@@ -2551,6 +2554,7 @@ async fn process_action(
                                         id: issue.id,
                                         identifier: issue.identifier,
                                         name: issue.title,
+                                        status_name: issue.state_name,
                                         url: issue.url,
                                         is_subtask,
                                     },
@@ -3136,6 +3140,7 @@ async fn process_action(
                             name,
                             url,
                             is_subtask,
+                            ..
                         } => {
                             let issue_id = issue_id.clone();
                             let identifier = identifier.clone();
@@ -3149,6 +3154,7 @@ async fn process_action(
                                         id: issue_id.clone(),
                                         identifier: identifier.clone(),
                                         name: name.clone(),
+                                        status_name: "In Progress".to_string(),
                                         url: url.clone(),
                                         is_subtask,
                                     });
@@ -3201,6 +3207,7 @@ async fn process_action(
                                         id: issue_id.clone(),
                                         identifier: identifier.clone(),
                                         name: name.clone(),
+                                        status_name: "Done".to_string(),
                                         is_subtask,
                                     });
                             }
@@ -3236,6 +3243,7 @@ async fn process_action(
                             identifier,
                             name,
                             is_subtask,
+                            ..
                         } => {
                             let issue_id = issue_id.clone();
                             let identifier = identifier.clone();
@@ -3248,6 +3256,7 @@ async fn process_action(
                                         id: issue_id.clone(),
                                         identifier: identifier.clone(),
                                         name: name.clone(),
+                                        status_name: "Todo".to_string(),
                                         url: String::new(),
                                         is_subtask,
                                     });
@@ -4015,6 +4024,9 @@ async fn process_action(
                                     let issue_id = issue_id.to_string();
                                     let identifier =
                                         linear_status.identifier().unwrap_or("Task").to_string();
+                                    let name = linear_status.name().unwrap_or("").to_string();
+                                    let url = linear_status.url().unwrap_or("").to_string();
+                                    let is_subtask = linear_status.is_subtask();
                                     let client = Arc::clone(linear_client);
                                     let agent_id_clone = agent_id;
                                     let state_id = option_id.clone();
@@ -4026,17 +4038,19 @@ async fn process_action(
                                         ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Completed {
                                             id: issue_id.clone(),
                                             identifier: identifier.clone(),
-                                            name: String::new(),
-                                            is_subtask: false,
+                                            name: name.clone(),
+                                            status_name: option_name.clone(),
+                                            is_subtask,
                                         })
                                     } else if option_name.to_lowercase().contains("progress") {
                                         ProjectMgmtTaskStatus::Linear(
                                             LinearTaskStatus::InProgress {
                                                 id: issue_id.clone(),
                                                 identifier: identifier.clone(),
-                                                name: String::new(),
-                                                url: String::new(),
-                                                is_subtask: false,
+                                                name: name.clone(),
+                                                status_name: option_name.clone(),
+                                                url: url.clone(),
+                                                is_subtask,
                                             },
                                         )
                                     } else {
@@ -4044,9 +4058,10 @@ async fn process_action(
                                             LinearTaskStatus::NotStarted {
                                                 id: issue_id.clone(),
                                                 identifier: identifier.clone(),
-                                                name: String::new(),
-                                                url: String::new(),
-                                                is_subtask: false,
+                                                name: name.clone(),
+                                                status_name: option_name.clone(),
+                                                url: url.clone(),
+                                                is_subtask,
                                             },
                                         )
                                     };
@@ -4432,7 +4447,7 @@ async fn process_action(
                                         let has_children = parent_ids.contains(&i.id);
                                         TaskListItem {
                                             id: i.id,
-                                            name: format!("{} {}", i.identifier, i.title),
+                                            name: i.title,
                                             status,
                                             status_name: i.state_name,
                                             url: i.url,
@@ -4943,6 +4958,7 @@ async fn process_action(
                                         id: task.id.clone(),
                                         identifier,
                                         name: task.name.clone(),
+                                        status_name: task.status_name.clone(),
                                         url: task.url.clone(),
                                         is_subtask: task.is_subtask(),
                                     })
@@ -5445,12 +5461,14 @@ async fn process_action(
                                             id: issue.id,
                                             identifier: issue.identifier,
                                             name: issue.title,
+                                            status_name: issue.state_name,
                                             is_subtask,
                                         },
                                         "started" => LinearTaskStatus::InProgress {
                                             id: issue.id,
                                             identifier: issue.identifier,
                                             name: issue.title,
+                                            status_name: issue.state_name,
                                             url: issue.url,
                                             is_subtask,
                                         },
@@ -5458,6 +5476,7 @@ async fn process_action(
                                             id: issue.id,
                                             identifier: issue.identifier,
                                             name: issue.title,
+                                            status_name: issue.state_name,
                                             url: issue.url,
                                             is_subtask,
                                         },
@@ -7935,6 +7954,7 @@ async fn poll_linear_tasks(
                                 id: issue.id,
                                 identifier: issue.identifier,
                                 name: issue.title,
+                                status_name: issue.state_name,
                                 is_subtask,
                             })
                         }
@@ -7942,6 +7962,7 @@ async fn poll_linear_tasks(
                             id: issue.id,
                             identifier: issue.identifier,
                             name: issue.title,
+                            status_name: issue.state_name,
                             url: issue.url,
                             is_subtask,
                         }),
@@ -7949,6 +7970,7 @@ async fn poll_linear_tasks(
                             id: issue.id,
                             identifier: issue.identifier,
                             name: issue.title,
+                            status_name: issue.state_name,
                             url: issue.url,
                             is_subtask,
                         }),

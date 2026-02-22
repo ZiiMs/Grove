@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
@@ -76,8 +76,17 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<TeamsQueryData> = serde_json::from_str(&response_text)
-            .context("Failed to parse Linear teams response")?;
+        let data: GraphQLResponse<TeamsQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse Linear teams response: {} - body: {}",
+                    e,
+                    response_text
+                );
+                bail!("Failed to parse Linear teams response: {}", e);
+            }
+        };
 
         Ok(data
             .data
@@ -139,8 +148,17 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<IssueQueryData> = serde_json::from_str(&response_text)
-            .context("Failed to parse Linear issue response")?;
+        let data: GraphQLResponse<IssueQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse Linear issue response: {} - body: {}",
+                    e,
+                    response_text
+                );
+                bail!("Failed to parse Linear issue response: {}", e);
+            }
+        };
 
         let issue = data.data.issue.context("Issue not found")?;
 
@@ -234,8 +252,18 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<TeamIssuesQueryData> = serde_json::from_str(&response_text)
-            .context("Failed to parse Linear team issues response")?;
+        let data: GraphQLResponse<TeamIssuesQueryData> = match serde_json::from_str(&response_text)
+        {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse Linear team issues response: {} - body: {}",
+                    e,
+                    response_text
+                );
+                bail!("Failed to parse Linear team issues response: {}", e);
+            }
+        };
 
         let team = data.data.team.context("Team not found")?;
 
@@ -274,43 +302,10 @@ impl LinearClient {
             .cloned()
             .collect();
 
-        let parent_states: HashMap<String, (String, String, String)> = issues
-            .iter()
-            .filter(|i| parent_ids.contains(&i.id))
-            .map(|i| {
-                (
-                    i.id.clone(),
-                    (
-                        i.state_id.clone(),
-                        i.state_name.clone(),
-                        i.state_type.clone(),
-                    ),
-                )
-            })
-            .collect();
-
-        tracing::debug!(
-            "Linear inheritance: {} parent states collected for {} issues",
-            parent_states.len(),
-            issues.len()
-        );
-
         let enriched: Vec<LinearIssueSummary> = issues
             .into_iter()
             .map(|mut i| {
                 i.has_children = parent_ids.contains(&i.id) || i.has_children;
-                if let Some(parent_id) = &i.parent_id {
-                    if let Some((state_id, state_name, state_type)) = parent_states.get(parent_id) {
-                        tracing::debug!(
-                            "Linear subtask {} inheriting status '{}' from parent",
-                            i.identifier,
-                            state_name
-                        );
-                        i.state_id = state_id.clone();
-                        i.state_name = state_name.clone();
-                        i.state_type = state_type.clone();
-                    }
-                }
                 i
             })
             .collect();
@@ -370,8 +365,18 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<TeamStatesQueryData> = serde_json::from_str(&response_text)
-            .context("Failed to parse Linear workflow states response")?;
+        let data: GraphQLResponse<TeamStatesQueryData> = match serde_json::from_str(&response_text)
+        {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse Linear workflow states response: {} - body: {}",
+                    e,
+                    response_text
+                );
+                bail!("Failed to parse Linear workflow states response: {}", e);
+            }
+        };
 
         let team = data.data.team.context("Team not found")?;
 
@@ -444,8 +449,17 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<IssueUpdateData> = serde_json::from_str(&response_text)
-            .context("Failed to parse Linear issue update response")?;
+        let data: GraphQLResponse<IssueUpdateData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse Linear issue update response: {} - body: {}",
+                    e,
+                    response_text
+                );
+                bail!("Failed to parse Linear issue update response: {}", e);
+            }
+        };
 
         if !data.data.issue_update.success {
             bail!("Linear issue update failed");
