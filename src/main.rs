@@ -4024,6 +4024,9 @@ async fn process_action(
                                     let issue_id = issue_id.to_string();
                                     let identifier =
                                         linear_status.identifier().unwrap_or("Task").to_string();
+                                    let name = linear_status.name().unwrap_or("").to_string();
+                                    let url = linear_status.url().unwrap_or("").to_string();
+                                    let is_subtask = linear_status.is_subtask();
                                     let client = Arc::clone(linear_client);
                                     let agent_id_clone = agent_id;
                                     let state_id = option_id.clone();
@@ -4035,19 +4038,19 @@ async fn process_action(
                                         ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Completed {
                                             id: issue_id.clone(),
                                             identifier: identifier.clone(),
-                                            name: String::new(),
+                                            name: name.clone(),
                                             status_name: option_name.clone(),
-                                            is_subtask: false,
+                                            is_subtask,
                                         })
                                     } else if option_name.to_lowercase().contains("progress") {
                                         ProjectMgmtTaskStatus::Linear(
                                             LinearTaskStatus::InProgress {
                                                 id: issue_id.clone(),
                                                 identifier: identifier.clone(),
-                                                name: String::new(),
+                                                name: name.clone(),
                                                 status_name: option_name.clone(),
-                                                url: String::new(),
-                                                is_subtask: false,
+                                                url: url.clone(),
+                                                is_subtask,
                                             },
                                         )
                                     } else {
@@ -4055,10 +4058,10 @@ async fn process_action(
                                             LinearTaskStatus::NotStarted {
                                                 id: issue_id.clone(),
                                                 identifier: identifier.clone(),
-                                                name: String::new(),
+                                                name: name.clone(),
                                                 status_name: option_name.clone(),
-                                                url: String::new(),
-                                                is_subtask: false,
+                                                url: url.clone(),
+                                                is_subtask,
                                             },
                                         )
                                     };
