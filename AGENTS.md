@@ -288,7 +288,46 @@ if matches_keybind(key, &kb.my_new_action) {
 
 ### 10. Update visual displays
 
-- `src/ui/components/help_overlay.rs` - Add to help text using `kb.my_new_action.display_short()`
-- `src/ui/components/status_bar.rs` - Add to status bar shortcuts if applicable
+Add the new keybind to the help overlay and optionally the status bar:
+
+**Help overlay (`src/ui/components/help_overlay.rs`):**
+
+```rust
+Line::from(format!(
+    "  {:8} Description of action",
+    kb.my_new_action.display_short()
+)),
+```
+
+- Use `kb.my_new_action.display_short()` for the key display
+- Group by category: Navigation, Agent Management, Git Operations, View Controls, External Services, Project Mgmt, Dev Server, Other
+- Include a brief description of what the action does
+- If help content grows, adjust `centered_rect(60, 80, area)` to show more
+
+**Status bar (`src/ui/components/status_bar.rs`):**
+
+Only add commonly-used global actions to the status bar shortcuts array.
+
+### 11. Document non-configurable keybinds
+
+Some keybinds are hardcoded (not user-customizable). These include:
+
+- `Tab` / `Shift+Tab` - Switch preview tabs
+- `Ctrl+c` - Force quit
+- `j`/`k` or arrows in dropdowns/menus
+- `y`/`n` in confirmation dialogs
+- Dev server controls: `Ctrl+s` (start), `Ctrl+Shift+s` (restart), `C` (clear), `O` (open)
+
+When adding a non-configurable keybind:
+- Document it in `help_overlay.rs` with the hardcoded key (e.g., `"  Tab      Switch preview tab"`)
+- Add a code comment explaining why it's not configurable
+
+### 12. Test the changes
+
+```bash
+cargo build && cargo run -- /path/to/test/repo
+```
+
+Press `?` to verify the new keybind appears correctly in the help overlay.
 
 
