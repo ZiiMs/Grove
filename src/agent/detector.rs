@@ -159,9 +159,17 @@ static GEMINI_CONFIRMATION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     ]
 });
 
-/// Gemini running indicator: "esc to cancel" text at bottom
-static GEMINI_ESC_CANCEL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)esc\s+to\s+cancel").unwrap());
+/// Gemini question/answer dialog panel (shows "Answer Questions" title)
+static GEMINI_ANSWER_QUESTIONS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)answer\s+questions").unwrap());
+
+/// Gemini keyboard hints in question panel (indicates AwaitingInput)
+static GEMINI_KEYBOARD_HINTS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)enter\s+to\s+select.*esc\s+to\s+cancel").unwrap());
+
+/// Gemini running indicator: timer format like "(esc to cancel, 15s)" - NOT keyboard hints
+static GEMINI_ESC_CANCEL_TIMER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(esc\s+to\s+cancel,?\s*\d+s").unwrap());
 
 /// Gemini dots spinner (animated square dots pattern)
 static GEMINI_DOTS_SPINNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[⠁⠃⠇⡇⡏⡟⡿⣿]").unwrap());
@@ -716,22 +724,32 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         return AgentStatus::AwaitingInput;
     }
 
-    // 3. Check for permission/confirmation prompts
+    // 3. Check for "Answer Questions" panel (Gemini's question dialog)
+    if GEMINI_ANSWER_QUESTIONS.is_match(&clean_output) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 4. Check for keyboard hints indicating question panel
+    if GEMINI_KEYBOARD_HINTS.is_match(&clean_output) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 5. Check for permission/confirmation prompts
     for pattern in GEMINI_CONFIRMATION_PATTERNS.iter() {
         if pattern.is_match(&last_5_text) {
             return AgentStatus::AwaitingInput;
         }
     }
 
-    // 4. Check for standard question patterns (y/n, [Y/n], etc.)
+    // 6. Check for standard question patterns (y/n, [Y/n], etc.)
     for pattern in QUESTION_PATTERNS.iter() {
         if pattern.is_match(&last_5_text) {
             return AgentStatus::AwaitingInput;
         }
     }
 
-    // 5. Check for running indicator ("esc to cancel" or spinner)
-    if GEMINI_ESC_CANCEL.is_match(&last_5_text) {
+    // 7. Check for running indicator (timer format only, not keyboard hints)
+    if GEMINI_ESC_CANCEL_TIMER.is_match(&clean_output) {
         return AgentStatus::Running;
     }
 
@@ -745,7 +763,7 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         return AgentStatus::Running;
     }
 
-    // 6. Check for errors
+    // 8. Check for errors
     for pattern in ERROR_PATTERNS.iter() {
         if pattern.is_match(&clean_output) {
             for line in lines.iter().rev().take(15) {
@@ -758,14 +776,14 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         }
     }
 
-    // 7. Check for completion patterns
+    // 9. Check for completion patterns
     for pattern in COMPLETION_PATTERNS.iter() {
         if pattern.is_match(&clean_output) {
             return AgentStatus::Completed;
         }
     }
 
-    // 8. Check for shell prompt (indicates AI has exited)
+    // 10. Check for shell prompt (indicates AI has exited)
     let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
     let is_shell_prompt = last_line.len() <= 50
         && (last_line.ends_with('$')
@@ -777,7 +795,7 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         return AgentStatus::Stopped;
     }
 
-    // 9. Process-based fallback
+    // 11. Process-based fallback
     match foreground {
         ForegroundProcess::GeminiRunning => AgentStatus::Idle,
         ForegroundProcess::Shell => AgentStatus::Stopped,
@@ -1264,5 +1282,39 @@ mod tests {
     #[test]
     fn test_gemini_is_agent_running() {
         assert!(ForegroundProcess::GeminiRunning.is_agent_running());
+    }
+
+    #[test]
+    fn test_gemini_answer_questions_awaiting_input() {
+        let output = "╭────────────────────────────────────────────────────╮\n│ Answer Questions                                   │\n╰────────────────────────────────────────────────────╯";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Answer Questions panel, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_keyboard_hints_awaiting_input() {
+        let output = "Enter to select · ←/→ to switch questions · Esc to cancel";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for keyboard hints, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_idle_at_prompt() {
+        // At idle prompt with input bar - should be Idle, not Running
+        let output = "Type your message\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n>   Type your message or @path/to/file";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle at Gemini prompt, got {:?}",
+            status
+        );
     }
 }
