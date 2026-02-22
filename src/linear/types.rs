@@ -37,9 +37,21 @@ impl LinearTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             LinearTaskStatus::None => "—".to_string(),
-            LinearTaskStatus::NotStarted { identifier, .. } => truncate(identifier, 14),
-            LinearTaskStatus::InProgress { identifier, .. } => truncate(identifier, 14),
-            LinearTaskStatus::Completed { identifier, .. } => truncate(identifier, 14),
+            LinearTaskStatus::NotStarted {
+                identifier, name, ..
+            } => {
+                format!("{} {}", identifier, name)
+            }
+            LinearTaskStatus::InProgress {
+                identifier, name, ..
+            } => {
+                format!("{} {}", identifier, name)
+            }
+            LinearTaskStatus::Completed {
+                identifier, name, ..
+            } => {
+                format!("{} {}", identifier, name)
+            }
             LinearTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
         }
     }
@@ -49,7 +61,7 @@ impl LinearTaskStatus {
             LinearTaskStatus::None => "—".to_string(),
             LinearTaskStatus::NotStarted { status_name, .. }
             | LinearTaskStatus::InProgress { status_name, .. }
-            | LinearTaskStatus::Completed { status_name, .. } => status_name.clone(),
+            | LinearTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
             LinearTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
