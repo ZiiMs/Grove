@@ -1266,7 +1266,7 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectTaskNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
             KeyCode::Char('a') => Some(Action::AssignSelectedTaskToAgent),
-            KeyCode::Char('s') => Some(Action::ToggleSubtaskStatus),
+            KeyCode::Char('s') => Some(Action::SelectTaskListStatus),
             KeyCode::Char('r') => Some(Action::RefreshTaskList),
             KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
             KeyCode::Left | KeyCode::Right => Some(Action::ToggleTaskExpand),
@@ -3596,40 +3596,214 @@ async fn process_action(
                     let option_id = selected_option.id.clone();
                     let option_name = selected_option.name.clone();
 
-                    // Check if this is a ClickUp subtask from the task list (nil UUID)
+                    // Check if this is a task from the task list (nil UUID)
                     if agent_id == Uuid::nil() {
-                        if let Some(subtask) = subtask_dropdown {
-                            let task_id = subtask.task_id.clone();
+                        if let Some(task_info) = subtask_dropdown {
+                            let task_id = task_info.task_id.clone();
+                            let option_id = option_id.clone();
                             let status_name = option_name.clone();
-                            let task_id_for_spawn = task_id.clone();
-                            let status_name_for_spawn = status_name.clone();
+                            let provider = state.settings.repo_config.project_mgmt.provider;
 
-                            let client = Arc::clone(clickup_client);
-                            let tx = action_tx.clone();
-                            state.loading_message = Some("Updating subtask status...".to_string());
+                            match provider {
+                                ProjectMgmtProvider::Clickup => {
+                                    let client = Arc::clone(clickup_client);
+                                    let tx = action_tx.clone();
+                                    let task_id_for_spawn = task_id.clone();
+                                    let status_name_for_spawn = status_name.clone();
+                                    state.loading_message = Some("Updating status...".to_string());
 
-                            tokio::spawn(async move {
-                                match client
-                                    .update_task_status(&task_id_for_spawn, &status_name_for_spawn)
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        let _ = tx.send(Action::SetLoading(None));
-                                        let _ = tx.send(Action::ShowToast {
-                                            message: format!("Subtask → {}", status_name_for_spawn),
-                                            level: ToastLevel::Success,
-                                        });
-                                        let _ = tx.send(Action::RefreshTaskList);
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(Action::SetLoading(None));
-                                        let _ = tx.send(Action::ShowError(format!(
-                                            "Failed to update subtask: {}",
-                                            e
-                                        )));
-                                    }
+                                    tokio::spawn(async move {
+                                        match client
+                                            .update_task_status(
+                                                &task_id_for_spawn,
+                                                &status_name_for_spawn,
+                                            )
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowToast {
+                                                    message: format!(
+                                                        "Task → {}",
+                                                        status_name_for_spawn
+                                                    ),
+                                                    level: ToastLevel::Success,
+                                                });
+                                                let _ = tx.send(Action::RefreshTaskList);
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowError(format!(
+                                                    "Failed to update task: {}",
+                                                    e
+                                                )));
+                                            }
+                                        }
+                                    });
                                 }
-                            });
+                                ProjectMgmtProvider::Asana => {
+                                    let client = Arc::clone(asana_client);
+                                    let tx = action_tx.clone();
+                                    let task_id_for_spawn = task_id.clone();
+                                    let section_gid = option_id.clone();
+                                    let status_name_for_spawn = status_name.clone();
+                                    let is_done = status_name.to_lowercase().contains("done")
+                                        || status_name.to_lowercase().contains("complete");
+                                    state.loading_message = Some("Updating status...".to_string());
+
+                                    tokio::spawn(async move {
+                                        if is_done {
+                                            let _ = client.complete_task(&task_id_for_spawn).await;
+                                        } else {
+                                            let _ =
+                                                client.uncomplete_task(&task_id_for_spawn).await;
+                                        }
+                                        match client
+                                            .move_task_to_section(&task_id_for_spawn, &section_gid)
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowToast {
+                                                    message: format!(
+                                                        "Task → {}",
+                                                        status_name_for_spawn
+                                                    ),
+                                                    level: ToastLevel::Success,
+                                                });
+                                                let _ = tx.send(Action::RefreshTaskList);
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowError(format!(
+                                                    "Failed to update task: {}",
+                                                    e
+                                                )));
+                                            }
+                                        }
+                                    });
+                                }
+                                ProjectMgmtProvider::Notion => {
+                                    let client = Arc::clone(notion_client);
+                                    let tx = action_tx.clone();
+                                    let task_id_for_spawn = task_id.clone();
+                                    let option_id_for_spawn = option_id.clone();
+                                    let status_name_for_spawn = status_name.clone();
+                                    let status_prop_name = state
+                                        .settings
+                                        .repo_config
+                                        .project_mgmt
+                                        .notion
+                                        .status_property_name
+                                        .clone();
+                                    state.loading_message = Some("Updating status...".to_string());
+
+                                    tokio::spawn(async move {
+                                        let prop_name = status_prop_name
+                                            .unwrap_or_else(|| "Status".to_string());
+                                        match client
+                                            .update_page_status(
+                                                &task_id_for_spawn,
+                                                &prop_name,
+                                                &option_id_for_spawn,
+                                            )
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowToast {
+                                                    message: format!(
+                                                        "Task → {}",
+                                                        status_name_for_spawn
+                                                    ),
+                                                    level: ToastLevel::Success,
+                                                });
+                                                let _ = tx.send(Action::RefreshTaskList);
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowError(format!(
+                                                    "Failed to update task: {}",
+                                                    e
+                                                )));
+                                            }
+                                        }
+                                    });
+                                }
+                                ProjectMgmtProvider::Airtable => {
+                                    let client = Arc::clone(airtable_client);
+                                    let tx = action_tx.clone();
+                                    let task_id_for_spawn = task_id.clone();
+                                    let status_name_for_spawn = status_name.clone();
+                                    state.loading_message = Some("Updating status...".to_string());
+
+                                    tokio::spawn(async move {
+                                        match client
+                                            .update_record_status(
+                                                &task_id_for_spawn,
+                                                &status_name_for_spawn,
+                                            )
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowToast {
+                                                    message: format!(
+                                                        "Task → {}",
+                                                        status_name_for_spawn
+                                                    ),
+                                                    level: ToastLevel::Success,
+                                                });
+                                                let _ = tx.send(Action::RefreshTaskList);
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowError(format!(
+                                                    "Failed to update task: {}",
+                                                    e
+                                                )));
+                                            }
+                                        }
+                                    });
+                                }
+                                ProjectMgmtProvider::Linear => {
+                                    let client = Arc::clone(linear_client);
+                                    let tx = action_tx.clone();
+                                    let task_id_for_spawn = task_id.clone();
+                                    let state_id_for_spawn = option_id.clone();
+                                    let status_name_for_spawn = status_name.clone();
+                                    state.loading_message = Some("Updating status...".to_string());
+
+                                    tokio::spawn(async move {
+                                        match client
+                                            .update_issue_status(
+                                                &task_id_for_spawn,
+                                                &state_id_for_spawn,
+                                            )
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowToast {
+                                                    message: format!(
+                                                        "Task → {}",
+                                                        status_name_for_spawn
+                                                    ),
+                                                    level: ToastLevel::Success,
+                                                });
+                                                let _ = tx.send(Action::RefreshTaskList);
+                                            }
+                                            Err(e) => {
+                                                let _ = tx.send(Action::SetLoading(None));
+                                                let _ = tx.send(Action::ShowError(format!(
+                                                    "Failed to update task: {}",
+                                                    e
+                                                )));
+                                            }
+                                        }
+                                    });
+                                }
+                            }
 
                             // Update local state
                             if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id)
@@ -3650,7 +3824,7 @@ async fn process_action(
                                     TaskItemStatus::NotStarted
                                 };
                             }
-                            state.show_success(format!("Subtask → {}", status_name));
+                            state.show_success(format!("Task → {}", status_name));
                         }
                         return Ok(false);
                     }
@@ -4419,12 +4593,12 @@ async fn process_action(
             }
         }
 
-        Action::ToggleSubtaskStatus => {
+        Action::SelectTaskListStatus => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
-                if task.is_subtask() {
-                    let provider = state.settings.repo_config.project_mgmt.provider;
+                let provider = state.settings.repo_config.project_mgmt.provider;
 
-                    // ClickUp subtasks use the same statuses as parent tasks
+                if task.is_subtask() {
+                    // Subtask handling
                     if matches!(provider, ProjectMgmtProvider::Clickup) {
                         if !clickup_client.is_configured().await {
                             state.show_error(
@@ -4433,7 +4607,6 @@ async fn process_action(
                             return Ok(false);
                         }
 
-                        // Store the task info temporarily and load statuses
                         let task_id_for_dropdown = task.id.clone();
                         let client = Arc::clone(clickup_client);
                         let tx = action_tx.clone();
@@ -4476,7 +4649,215 @@ async fn process_action(
                         state.input_mode = Some(InputMode::SelectSubtaskStatus);
                     }
                 } else {
-                    state.show_warning("Status toggle only available for subtasks");
+                    // Parent task handling - show full status dropdown
+                    match provider {
+                        ProjectMgmtProvider::Asana => {
+                            if !asana_client.is_configured().await {
+                                state.show_error(
+                                    "Asana not configured. Set ASANA_TOKEN and project_gid.",
+                                );
+                                return Ok(false);
+                            }
+
+                            let task_id = task.id.clone();
+                            let task_name = task.name.clone();
+                            let client = Arc::clone(asana_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Loading sections...".to_string());
+
+                            tokio::spawn(async move {
+                                match client.get_sections().await {
+                                    Ok(sections) => {
+                                        let options: Vec<StatusOption> = sections
+                                            .into_iter()
+                                            .map(|s| StatusOption {
+                                                id: s.gid,
+                                                name: s.name,
+                                            })
+                                            .collect();
+                                        let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                            task_id,
+                                            task_name,
+                                            options,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load Asana sections: {}", e);
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to load sections: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                        ProjectMgmtProvider::Notion => {
+                            if !notion_client.is_configured().await {
+                                state.show_error(
+                                    "Notion not configured. Set NOTION_TOKEN and database_id.",
+                                );
+                                return Ok(false);
+                            }
+
+                            let task_id = task.id.clone();
+                            let task_name = task.name.clone();
+                            let client = Arc::clone(notion_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Loading status options...".to_string());
+
+                            tokio::spawn(async move {
+                                match client.get_status_options().await {
+                                    Ok(opts) => {
+                                        let options: Vec<StatusOption> = opts
+                                            .all_options
+                                            .into_iter()
+                                            .map(|o| StatusOption {
+                                                id: o.id,
+                                                name: o.name,
+                                            })
+                                            .collect();
+                                        let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                            task_id,
+                                            task_name,
+                                            options,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load Notion statuses: {}", e);
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to load status options: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                        ProjectMgmtProvider::Clickup => {
+                            if !clickup_client.is_configured().await {
+                                state.show_error(
+                                    "ClickUp not configured. Set CLICKUP_TOKEN and list_id.",
+                                );
+                                return Ok(false);
+                            }
+
+                            let task_id = task.id.clone();
+                            let task_name = task.name.clone();
+                            let client = Arc::clone(clickup_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Loading statuses...".to_string());
+
+                            tokio::spawn(async move {
+                                match client.get_statuses().await {
+                                    Ok(statuses) => {
+                                        let options: Vec<StatusOption> = statuses
+                                            .into_iter()
+                                            .map(|s| StatusOption {
+                                                id: s.status.clone(),
+                                                name: s.status,
+                                            })
+                                            .collect();
+                                        let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                            task_id,
+                                            task_name,
+                                            options,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load ClickUp statuses: {}", e);
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to load statuses: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                        ProjectMgmtProvider::Airtable => {
+                            if !airtable_client.is_configured().await {
+                                state.show_error(
+                                    "Airtable not configured. Set AIRTABLE_TOKEN, base_id, and table_name.",
+                                );
+                                return Ok(false);
+                            }
+
+                            let task_id = task.id.clone();
+                            let task_name = task.name.clone();
+                            let client = Arc::clone(airtable_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Loading statuses...".to_string());
+
+                            tokio::spawn(async move {
+                                match client.get_status_options().await {
+                                    Ok(options) => {
+                                        let status_options: Vec<StatusOption> = options
+                                            .into_iter()
+                                            .map(|o| StatusOption {
+                                                id: o.name.clone(),
+                                                name: o.name,
+                                            })
+                                            .collect();
+                                        let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                            task_id,
+                                            task_name,
+                                            options: status_options,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load Airtable statuses: {}", e);
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to load statuses: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                        ProjectMgmtProvider::Linear => {
+                            if !linear_client.is_configured().await {
+                                state.show_error(
+                                    "Linear not configured. Set LINEAR_TOKEN and team_id.",
+                                );
+                                return Ok(false);
+                            }
+
+                            let task_id = task.id.clone();
+                            let task_name = task.name.clone();
+                            let client = Arc::clone(linear_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Loading statuses...".to_string());
+
+                            tokio::spawn(async move {
+                                match client.get_workflow_states().await {
+                                    Ok(states) => {
+                                        let options: Vec<StatusOption> = states
+                                            .into_iter()
+                                            .map(|s| StatusOption {
+                                                id: s.id,
+                                                name: s.name,
+                                            })
+                                            .collect();
+                                        let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                            task_id,
+                                            task_name,
+                                            options,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to load Linear statuses: {}", e);
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to load statuses: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+                        }
+                    }
                 }
             }
         }
