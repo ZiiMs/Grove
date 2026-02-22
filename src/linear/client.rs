@@ -181,7 +181,20 @@ impl LinearClient {
                             }
                             parent { id }
                             children(first: 50) {
-                                nodes { id }
+                                nodes {
+                                    id
+                                    identifier
+                                    title
+                                    url
+                                    state {
+                                        id
+                                        name
+                                        type
+                                        color
+                                    }
+                                    parent { id }
+                                    children(first: 1) { nodes { id } }
+                                }
                             }
                         }
                     }
