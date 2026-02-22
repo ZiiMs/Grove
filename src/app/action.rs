@@ -263,6 +263,13 @@ pub enum Action {
     FileBrowserEnterDir,
     FileBrowserGoParent,
 
+    // Settings Reset
+    SettingsRequestReset {
+        reset_type: crate::app::state::ResetType,
+    },
+    SettingsConfirmReset,
+    SettingsCancelReset,
+
     // Global Setup Wizard
     GlobalSetupNextStep,
     GlobalSetupPrevStep,

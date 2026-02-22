@@ -40,6 +40,17 @@ impl ClickUpTaskStatus {
         }
     }
 
+    /// Display string for the status name column.
+    pub fn format_status_name(&self) -> String {
+        match self {
+            ClickUpTaskStatus::None => "—".to_string(),
+            ClickUpTaskStatus::NotStarted { status, .. }
+            | ClickUpTaskStatus::InProgress { status, .. } => truncate(status, 10),
+            ClickUpTaskStatus::Completed { .. } => "Done".to_string(),
+            ClickUpTaskStatus::Error { .. } => "Error".to_string(),
+        }
+    }
+
     pub fn id(&self) -> Option<&str> {
         match self {
             ClickUpTaskStatus::None => None,

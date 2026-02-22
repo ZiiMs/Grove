@@ -15,6 +15,8 @@ pub enum ForegroundProcess {
     OpencodeRunning,
     /// Codex is alive (codex)
     CodexRunning,
+    /// Gemini is alive (node, gemini)
+    GeminiRunning,
     /// At a shell prompt (bash, zsh, sh, fish, dash)
     Shell,
     /// AI agent spawned a subprocess (cargo, git, python, etc.)
@@ -35,7 +37,7 @@ impl ForegroundProcess {
                 AiAgent::ClaudeCode => ForegroundProcess::ClaudeRunning,
                 AiAgent::Opencode => ForegroundProcess::OpencodeRunning,
                 AiAgent::Codex => ForegroundProcess::CodexRunning,
-                AiAgent::Gemini => ForegroundProcess::OtherProcess(binary.to_string()),
+                AiAgent::Gemini => ForegroundProcess::GeminiRunning,
             };
         }
 
@@ -58,6 +60,7 @@ impl ForegroundProcess {
             ForegroundProcess::ClaudeRunning
                 | ForegroundProcess::OpencodeRunning
                 | ForegroundProcess::CodexRunning
+                | ForegroundProcess::GeminiRunning
         )
     }
 }
@@ -137,6 +140,42 @@ static OPENCODE_PROGRESS_PATTERN: LazyLock<Regex> =
 /// Braille spinner characters (used by various AI tools including OpenCode)
 static OPENCODE_SPINNER_CHARS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[⣾⣽⣻⢿⡿⣟⣯⣷⠁⠃⠇⡇⡏⡟⡿⣿⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]").unwrap());
+
+// Gemini-specific patterns
+
+/// Gemini CLI shows "Action Required" for needs input
+static GEMINI_ACTION_REQUIRED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)action\s+required").unwrap());
+
+/// Gemini shows "Waiting for confirmation" dialogs
+static GEMINI_WAITING_CONFIRMATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)waiting\s+for\s+confirmation").unwrap());
+
+/// Gemini permission/confirmation prompts with standard patterns
+static GEMINI_CONFIRMATION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
+        Regex::new(r"(?i)proceed\??").unwrap(),
+        Regex::new(r"(?i)allow\s+this\??").unwrap(),
+        Regex::new(r"(?i)confirm\s*\??").unwrap(),
+        Regex::new(r"(?i)would\s+you\s+like\s+to").unwrap(),
+        Regex::new(r"(?i)do\s+you\s+want\s+to").unwrap(),
+    ]
+});
+
+/// Gemini question/answer dialog panel (shows "Answer Questions" title)
+static GEMINI_ANSWER_QUESTIONS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)answer\s+questions").unwrap());
+
+/// Gemini keyboard hints in question panel (indicates AwaitingInput)
+static GEMINI_KEYBOARD_HINTS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)enter\s+to\s+select.*esc\s+to\s+cancel").unwrap());
+
+/// Gemini running indicator: timer format like "(esc to cancel, 15s)" - NOT keyboard hints
+static GEMINI_ESC_CANCEL_TIMER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\(esc\s+to\s+cancel,?\s*\d+s").unwrap());
+
+/// Gemini dots spinner (animated square dots pattern)
+static GEMINI_DOTS_SPINNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[⠁⠃⠇⡇⡏⡟⡿⣿]").unwrap());
 
 /// Detect GitLab MR URL in tmux output and return MergeRequestStatus if found.
 pub fn detect_mr_url(output: &str) -> Option<MergeRequestStatus> {
@@ -433,6 +472,7 @@ pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -
         ForegroundProcess::ClaudeRunning => detect_status_claude_running(output),
         ForegroundProcess::OpencodeRunning => detect_status_opencode(output, foreground),
         ForegroundProcess::CodexRunning => detect_status_codex(output, foreground),
+        ForegroundProcess::GeminiRunning => detect_status_gemini(output, foreground),
         ForegroundProcess::Shell => detect_status_at_shell(output),
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown => detect_status(output),
@@ -560,7 +600,7 @@ pub fn detect_status_for_agent(
         AiAgent::ClaudeCode => detect_status_with_process(output, foreground),
         AiAgent::Opencode => detect_status_opencode(output, foreground),
         AiAgent::Codex => detect_status_codex(output, foreground),
-        AiAgent::Gemini => detect_status_with_process(output, foreground),
+        AiAgent::Gemini => detect_status_gemini(output, foreground),
     }
 }
 
@@ -655,7 +695,8 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown
         | ForegroundProcess::ClaudeRunning
-        | ForegroundProcess::CodexRunning => {
+        | ForegroundProcess::CodexRunning
+        | ForegroundProcess::GeminiRunning => {
             if clean_output.trim().is_empty() {
                 AgentStatus::Stopped
             } else {
@@ -757,7 +798,120 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown
         | ForegroundProcess::ClaudeRunning
-        | ForegroundProcess::OpencodeRunning => {
+        | ForegroundProcess::OpencodeRunning
+        | ForegroundProcess::GeminiRunning => {
+            if clean_output.trim().is_empty() {
+                AgentStatus::Stopped
+            } else {
+                AgentStatus::Idle
+            }
+        }
+    }
+}
+
+/// Status detection for Gemini agent.
+/// Detection: "Action Required" = AwaitingInput, "esc to cancel" = Running, else Idle
+fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+    let clean_output = strip_ansi(output);
+    let lines: Vec<&str> = clean_output.lines().collect();
+
+    if lines.is_empty() {
+        return AgentStatus::Stopped;
+    }
+
+    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    let last_5_text = last_5_lines.join("\n").to_lowercase();
+
+    // 1. Check for "Action Required" banner (highest priority for AwaitingInput)
+    if GEMINI_ACTION_REQUIRED.is_match(&clean_output) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 2. Check for "Waiting for confirmation" dialog
+    if GEMINI_WAITING_CONFIRMATION.is_match(&clean_output) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 3. Check for "Answer Questions" panel (Gemini's question dialog)
+    if GEMINI_ANSWER_QUESTIONS.is_match(&clean_output) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 4. Check for keyboard hints indicating question panel
+    if GEMINI_KEYBOARD_HINTS.is_match(&clean_output) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 5. Check for permission/confirmation prompts
+    for pattern in GEMINI_CONFIRMATION_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            return AgentStatus::AwaitingInput;
+        }
+    }
+
+    // 6. Check for standard question patterns (y/n, [Y/n], etc.)
+    for pattern in QUESTION_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            return AgentStatus::AwaitingInput;
+        }
+    }
+
+    // 7. Check for running indicator (timer format only, not keyboard hints)
+    if GEMINI_ESC_CANCEL_TIMER.is_match(&clean_output) {
+        return AgentStatus::Running;
+    }
+
+    // Check for Gemini dots spinner
+    if GEMINI_DOTS_SPINNER.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // Check for braille spinner characters (shared with other tools)
+    if SPINNER_CHARS.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // 8. Check for errors
+    for pattern in ERROR_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            for line in lines.iter().rev().take(15) {
+                if pattern.is_match(line) {
+                    let msg = line.trim().chars().take(40).collect::<String>();
+                    return AgentStatus::Error(msg);
+                }
+            }
+            return AgentStatus::Error("Error detected".to_string());
+        }
+    }
+
+    // 9. Check for completion patterns
+    for pattern in COMPLETION_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            return AgentStatus::Completed;
+        }
+    }
+
+    // 10. Check for shell prompt (indicates AI has exited)
+    let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
+    let is_shell_prompt = last_line.len() <= 50
+        && (last_line.ends_with('$')
+            || last_line.ends_with('#')
+            || last_line == ">"
+            || last_line.starts_with("➜"));
+
+    if is_shell_prompt && foreground != ForegroundProcess::GeminiRunning {
+        return AgentStatus::Stopped;
+    }
+
+    // 11. Process-based fallback
+    match foreground {
+        ForegroundProcess::GeminiRunning => AgentStatus::Idle,
+        ForegroundProcess::Shell => AgentStatus::Stopped,
+        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::Unknown
+        | ForegroundProcess::ClaudeRunning
+        | ForegroundProcess::OpencodeRunning
+        | ForegroundProcess::CodexRunning => {
             if clean_output.trim().is_empty() {
                 AgentStatus::Stopped
             } else {
@@ -1096,7 +1250,7 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_running_prompt_idle() {
+    fn test_claude_running_blind_thinking_stays_running() {
         // At prompt without completion patterns → Idle
         let output = "Some regular output\n❯";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
@@ -1245,6 +1399,228 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::Running),
             "Expected Running for Working indicator, got {:?}",
+            status
+        );
+    }
+
+    // --- Gemini tests ---
+
+    #[test]
+    fn test_gemini_action_required_awaiting_input() {
+        let output = "Analyzing code...\n\nAction Required\nPlease confirm to proceed";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Action Required, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_waiting_for_confirmation() {
+        let output = "Tool execution\nWaiting for confirmation\n(y/n)";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Waiting for confirmation, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_esc_cancel_running() {
+        let output = "Analyzing...\nWorking on task\n(esc to cancel, 15s)";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for esc to cancel, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_dots_spinner_running() {
+        let output = "Processing...\n⠁ \nThinking";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for dots spinner, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_braille_spinner_running() {
+        let output = "Processing...\n⠋ Working...";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for braille spinner, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_permission_prompt_awaiting_input() {
+        let output = "Tool: Bash\nAllow this? [Y/n]";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for permission prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_completion() {
+        let output = "✓ Task completed successfully\n>";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Completed),
+            "Expected Completed, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_error() {
+        let output = "Error: file not found\n>";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Error(_)),
+            "Expected Error, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_shell_stopped() {
+        let output = "Session ended\n$ ";
+        let status = detect_status_gemini(output, ForegroundProcess::Shell);
+        assert!(
+            matches!(status, AgentStatus::Stopped),
+            "Expected Stopped when at shell, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_running_idle() {
+        let output = "Ready for input\n❯";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle when Gemini running at prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_foreground_process_detection() {
+        assert_eq!(
+            ForegroundProcess::from_command_for_agent("node", AiAgent::Gemini),
+            ForegroundProcess::GeminiRunning
+        );
+        assert_eq!(
+            ForegroundProcess::from_command_for_agent("gemini", AiAgent::Gemini),
+            ForegroundProcess::GeminiRunning
+        );
+    }
+
+    #[test]
+    fn test_gemini_is_agent_running() {
+        assert!(ForegroundProcess::GeminiRunning.is_agent_running());
+    }
+
+    #[test]
+    fn test_gemini_answer_questions_awaiting_input() {
+        let output = "╭────────────────────────────────────────────────────╮\n│ Answer Questions                                   │\n╰────────────────────────────────────────────────────╯";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Answer Questions panel, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_keyboard_hints_awaiting_input() {
+        let output = "Enter to select · ←/→ to switch questions · Esc to cancel";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for keyboard hints, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_idle_at_prompt() {
+        // At idle prompt with input bar - should be Idle, not Running
+        let output = "Type your message\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n>   Type your message or @path/to/file";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle at Gemini prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_real_answer_questions_panel() {
+        // Full output from real Gemini CLI with Answer Questions panel
+        let output = r#" ███            █████████  ██████████ ██████   ██████ █████ ██████   █████ █████
+░░░███         ███░░░░░███░░███░░░░░█░░██████ ██████ ░░███ ░░██████ ░░███ ░░███
+Logged in with Google: alextede8899@gmail.com /auth
+Plan: Gemini Code Assist for individuals
+Tips for getting started:
+1. Ask questions, edit files, or run commands.
+2. Be specific for the best results.
+3. /help for more information.
+
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ > Write me a nice two hundred paragraph text document
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+ℹ No background shells are currently active.
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Answer Questions                                                                                                                                                                           │
+│                                                                                                                                                                                            │
+│ ← □ Topic │ □ Filename │ ≡ Review →                                                                                                                                                        │
+│                                                                                                                                                                                            │
+│ What should be the topic or content of the 200 paragraphs?                                                                                                                                 │
+│                                                                                                                                                                                            │
+│ ▲                                                                                                                                                                                          │
+│ ● 1.  Lorem Ipsum                                                                                                                                                                          │
+│       Standard placeholder text                                                                                                                                                            │
+│   2.  Story                                                                                                                                                                                │
+│       A creative fictional story                                                                                                                                                           │
+│ ▼                                                                                                                                                                                          │
+│                                                                                                                                                                                            │
+│ Enter to select · ←/→ to switch questions · Esc to cancel                                                                                                                                  │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ shift+tab to accept edits                                                                                                                                                   1 GEMINI.md file
+ ~/dev/todo-testapp/.worktrees/gemini (gemini*)                                                 no sandbox (see /docs)                                                 /model Auto (Gemini 3)"#;
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Answer Questions panel, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_real_answer_questions_with_unknown_process() {
+        // Same output but with Unknown foreground - should still detect AwaitingInput
+        let output = r#"Answer Questions
+│
+│ Enter to select · ←/→ to switch questions · Esc to cancel"#;
+        let status = detect_status_gemini(output, ForegroundProcess::Unknown);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput with Unknown foreground, got {:?}",
             status
         );
     }
