@@ -3649,8 +3649,7 @@ async fn process_action(
                             } else if matches!(provider, ProjectMgmtProvider::Linear) {
                                 let client = Arc::clone(linear_client);
                                 let tx = action_tx.clone();
-                                state.loading_message =
-                                    Some("Updating task status...".to_string());
+                                state.loading_message = Some("Updating task status...".to_string());
 
                                 let task_id_for_spawn = task_id.clone();
                                 let status_name_for_spawn = status_name.clone();
@@ -4696,9 +4695,7 @@ async fn process_action(
                 } else if matches!(provider, ProjectMgmtProvider::Clickup) {
                     // ClickUp parent tasks also support status dropdown
                     if !clickup_client.is_configured().await {
-                        state.show_error(
-                            "ClickUp not configured. Set CLICKUP_TOKEN and list_id.",
-                        );
+                        state.show_error("ClickUp not configured. Set CLICKUP_TOKEN and list_id.");
                         return Ok(false);
                     }
 
