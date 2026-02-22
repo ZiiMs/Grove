@@ -340,7 +340,7 @@ async fn main() -> Result<()> {
     });
 
     // Start GitLab polling task (if configured)
-    if gitlab_client.is_configured() {
+    if gitlab_client.is_configured().await {
         let gitlab_poll_tx = action_tx.clone();
         let gitlab_client_clone = Arc::clone(&gitlab_client);
         let gitlab_refresh_secs = config.performance.gitlab_refresh_secs;
@@ -360,7 +360,7 @@ async fn main() -> Result<()> {
     }
 
     // Start GitHub polling task (if configured)
-    if github_client.is_configured() {
+    if github_client.is_configured().await {
         let github_poll_tx = action_tx.clone();
         let github_client_clone = Arc::clone(&github_client);
         let github_refresh_secs = config.performance.github_refresh_secs;
@@ -386,7 +386,7 @@ async fn main() -> Result<()> {
     }
 
     // Start Codeberg polling task (if configured)
-    if codeberg_client.is_configured() {
+    if codeberg_client.is_configured().await {
         let codeberg_poll_tx = action_tx.clone();
         let codeberg_client_clone = Arc::clone(&codeberg_client);
         let codeberg_refresh_secs = config.performance.codeberg_refresh_secs;
@@ -490,7 +490,7 @@ async fn main() -> Result<()> {
         .collect();
     let (notion_watch_tx, notion_watch_rx) = watch::channel(initial_notion_tasks);
 
-    if asana_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Asana) {
+    if asana_client.is_configured().await && matches!(pm_provider, ProjectMgmtProvider::Asana) {
         let asana_poll_tx = action_tx.clone();
         let asana_client_clone = Arc::clone(&asana_client);
         let refresh_secs = config.asana.refresh_secs;
@@ -508,7 +508,7 @@ async fn main() -> Result<()> {
         state.log_debug("Asana not configured (set ASANA_TOKEN)".to_string());
     }
 
-    if notion_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Notion) {
+    if notion_client.is_configured().await && matches!(pm_provider, ProjectMgmtProvider::Notion) {
         let notion_poll_tx = action_tx.clone();
         let notion_client_clone = Arc::clone(&notion_client);
         let refresh_secs = config.notion.refresh_secs;
@@ -537,7 +537,7 @@ async fn main() -> Result<()> {
         .collect();
     let (clickup_watch_tx, clickup_watch_rx) = watch::channel(initial_clickup_tasks);
 
-    if clickup_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Clickup) {
+    if clickup_client.is_configured().await && matches!(pm_provider, ProjectMgmtProvider::Clickup) {
         let clickup_poll_tx = action_tx.clone();
         let clickup_client_clone = Arc::clone(&clickup_client);
         let refresh_secs = config.clickup.refresh_secs;
@@ -566,7 +566,8 @@ async fn main() -> Result<()> {
         .collect();
     let (airtable_watch_tx, airtable_watch_rx) = watch::channel(initial_airtable_tasks);
 
-    if airtable_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Airtable) {
+    if airtable_client.is_configured().await && matches!(pm_provider, ProjectMgmtProvider::Airtable)
+    {
         let airtable_poll_tx = action_tx.clone();
         let airtable_client_clone = Arc::clone(&airtable_client);
         let refresh_secs = config.airtable.refresh_secs;
@@ -2991,7 +2992,7 @@ async fn process_action(
                 tracing::info!("Agent found, pm_task_status: {:?}", agent.pm_task_status);
                 match &agent.pm_task_status {
                     ProjectMgmtTaskStatus::Notion(notion_status) => {
-                        if !notion_client.is_configured() {
+                        if !notion_client.is_configured().await {
                             state.show_error(
                                 "Notion not configured. Set NOTION_TOKEN and database_id.",
                             );
@@ -3036,7 +3037,7 @@ async fn process_action(
                         });
                     }
                     ProjectMgmtTaskStatus::Asana(asana_status) => {
-                        if !asana_client.is_configured() {
+                        if !asana_client.is_configured().await {
                             state.show_error(
                                 "Asana not configured. Set ASANA_TOKEN and project_gid.",
                             );
@@ -3092,7 +3093,7 @@ async fn process_action(
                         }
                     }
                     ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
-                        if !clickup_client.is_configured() {
+                        if !clickup_client.is_configured().await {
                             state.show_error(
                                 "ClickUp not configured. Set CLICKUP_TOKEN and list_id.",
                             );
@@ -3135,7 +3136,7 @@ async fn process_action(
                         });
                     }
                     ProjectMgmtTaskStatus::Airtable(airtable_status) => {
-                        if !airtable_client.is_configured() {
+                        if !airtable_client.is_configured().await {
                             state.show_error(
                                 "Airtable not configured. Set AIRTABLE_TOKEN, base_id, and table_name.",
                             );
@@ -3959,7 +3960,7 @@ async fn process_action(
 
                     // ClickUp subtasks use the same statuses as parent tasks
                     if matches!(provider, ProjectMgmtProvider::Clickup) {
-                        if !clickup_client.is_configured() {
+                        if !clickup_client.is_configured().await {
                             state.show_error(
                                 "ClickUp not configured. Set CLICKUP_TOKEN and list_id.",
                             );
@@ -4237,14 +4238,14 @@ async fn process_action(
                                         is_subtask: task.is_subtask(),
                                     })
                                 }
-                                ProjectMgmtProvider::Airtable => {
-                                    ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::NotStarted {
+                                ProjectMgmtProvider::Airtable => ProjectMgmtTaskStatus::Airtable(
+                                    AirtableTaskStatus::NotStarted {
                                         id: task.id.clone(),
                                         name: task.name.clone(),
                                         url: task.url.clone(),
                                         is_subtask: task.is_subtask(),
-                                    })
-                                }
+                                    },
+                                ),
                             };
                             agent.pm_task_status = pm_status;
                             state.log_info(format!("Linked task '{}' to agent", task.name));
@@ -5373,39 +5374,96 @@ async fn process_action(
                     grove::app::SettingsField::GitLabProjectId => {
                         state.settings.repo_config.git.gitlab.project_id =
                             state.settings.text_buffer.parse().ok();
+                        gitlab_client.reconfigure(
+                            &state.settings.repo_config.git.gitlab.base_url,
+                            state.settings.repo_config.git.gitlab.project_id,
+                            grove::app::Config::gitlab_token().as_deref(),
+                        );
                     }
                     grove::app::SettingsField::GitLabBaseUrl => {
                         state.settings.repo_config.git.gitlab.base_url =
                             state.settings.text_buffer.clone();
+                        gitlab_client.reconfigure(
+                            &state.settings.repo_config.git.gitlab.base_url,
+                            state.settings.repo_config.git.gitlab.project_id,
+                            grove::app::Config::gitlab_token().as_deref(),
+                        );
                     }
                     grove::app::SettingsField::GitHubOwner => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.git.github.owner =
                             if val.is_empty() { None } else { Some(val) };
+                        github_client.reconfigure(
+                            state.settings.repo_config.git.github.owner.as_deref(),
+                            state.settings.repo_config.git.github.repo.as_deref(),
+                            grove::app::Config::github_token().as_deref(),
+                        );
                     }
                     grove::app::SettingsField::GitHubRepo => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.git.github.repo =
                             if val.is_empty() { None } else { Some(val) };
+                        github_client.reconfigure(
+                            state.settings.repo_config.git.github.owner.as_deref(),
+                            state.settings.repo_config.git.github.repo.as_deref(),
+                            grove::app::Config::github_token().as_deref(),
+                        );
                     }
                     grove::app::SettingsField::CodebergOwner => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.git.codeberg.owner =
                             if val.is_empty() { None } else { Some(val) };
+                        codeberg_client.reconfigure(
+                            state.settings.repo_config.git.codeberg.owner.as_deref(),
+                            state.settings.repo_config.git.codeberg.repo.as_deref(),
+                            Some(&state.settings.repo_config.git.codeberg.base_url),
+                            grove::app::Config::codeberg_token().as_deref(),
+                            state.settings.repo_config.git.codeberg.ci_provider,
+                            grove::app::Config::woodpecker_token().as_deref(),
+                            state.settings.repo_config.git.codeberg.woodpecker_repo_id,
+                        );
                     }
                     grove::app::SettingsField::CodebergRepo => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.git.codeberg.repo =
                             if val.is_empty() { None } else { Some(val) };
+                        codeberg_client.reconfigure(
+                            state.settings.repo_config.git.codeberg.owner.as_deref(),
+                            state.settings.repo_config.git.codeberg.repo.as_deref(),
+                            Some(&state.settings.repo_config.git.codeberg.base_url),
+                            grove::app::Config::codeberg_token().as_deref(),
+                            state.settings.repo_config.git.codeberg.ci_provider,
+                            grove::app::Config::woodpecker_token().as_deref(),
+                            state.settings.repo_config.git.codeberg.woodpecker_repo_id,
+                        );
                     }
                     grove::app::SettingsField::CodebergBaseUrl => {
                         state.settings.repo_config.git.codeberg.base_url =
                             state.settings.text_buffer.clone();
+                        codeberg_client.reconfigure(
+                            state.settings.repo_config.git.codeberg.owner.as_deref(),
+                            state.settings.repo_config.git.codeberg.repo.as_deref(),
+                            Some(&state.settings.repo_config.git.codeberg.base_url),
+                            grove::app::Config::codeberg_token().as_deref(),
+                            state.settings.repo_config.git.codeberg.ci_provider,
+                            grove::app::Config::woodpecker_token().as_deref(),
+                            state.settings.repo_config.git.codeberg.woodpecker_repo_id,
+                        );
                     }
                     grove::app::SettingsField::AsanaProjectGid => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.asana.project_gid =
                             if val.is_empty() { None } else { Some(val) };
+                        asana_client.reconfigure(
+                            grove::app::Config::asana_token().as_deref(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .project_gid
+                                .clone(),
+                        );
                     }
                     grove::app::SettingsField::AsanaInProgressGid => {
                         let val = state.settings.text_buffer.clone();
@@ -5480,6 +5538,23 @@ async fn process_action(
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.notion.database_id =
                             if val.is_empty() { None } else { Some(val) };
+                        notion_client.reconfigure(
+                            grove::app::Config::notion_token().as_deref(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .database_id
+                                .clone(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone(),
+                        );
                     }
                     grove::app::SettingsField::NotionStatusProperty => {
                         let val = state.settings.text_buffer.clone();
@@ -5489,6 +5564,23 @@ async fn process_action(
                             .project_mgmt
                             .notion
                             .status_property_name = if val.is_empty() { None } else { Some(val) };
+                        notion_client.reconfigure(
+                            grove::app::Config::notion_token().as_deref(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .database_id
+                                .clone(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone(),
+                        );
                     }
                     grove::app::SettingsField::NotionInProgressOption => {
                         let val = state.settings.text_buffer.clone();
@@ -5508,6 +5600,16 @@ async fn process_action(
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.clickup.list_id =
                             if val.is_empty() { None } else { Some(val) };
+                        clickup_client.reconfigure(
+                            grove::app::Config::clickup_token().as_deref(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .clickup
+                                .list_id
+                                .clone(),
+                        );
                     }
                     grove::app::SettingsField::ClickUpInProgressStatus => {
                         let val = state.settings.text_buffer.clone();
@@ -5527,16 +5629,92 @@ async fn process_action(
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.airtable.base_id =
                             if val.is_empty() { None } else { Some(val) };
+                        airtable_client.reconfigure(
+                            grove::app::Config::airtable_token().as_deref(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .base_id
+                                .clone(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .table_name
+                                .clone(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .status_field_name
+                                .clone(),
+                        );
                     }
                     grove::app::SettingsField::AirtableTableName => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.airtable.table_name =
                             if val.is_empty() { None } else { Some(val) };
+                        airtable_client.reconfigure(
+                            grove::app::Config::airtable_token().as_deref(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .base_id
+                                .clone(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .table_name
+                                .clone(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .status_field_name
+                                .clone(),
+                        );
                     }
                     grove::app::SettingsField::AirtableStatusField => {
                         let val = state.settings.text_buffer.clone();
-                        state.settings.repo_config.project_mgmt.airtable.status_field_name =
-                            if val.is_empty() { None } else { Some(val) };
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .airtable
+                            .status_field_name = if val.is_empty() { None } else { Some(val) };
+                        airtable_client.reconfigure(
+                            grove::app::Config::airtable_token().as_deref(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .base_id
+                                .clone(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .table_name
+                                .clone(),
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .status_field_name
+                                .clone(),
+                        );
                     }
                     grove::app::SettingsField::AirtableInProgressOption => {
                         let val = state.settings.text_buffer.clone();

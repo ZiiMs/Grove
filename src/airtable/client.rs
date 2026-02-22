@@ -1,10 +1,9 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
-    AirtableRecord, AirtableRecordsResponse, AirtableTableSchema, AirtableTaskSummary,
-    StatusOption,
+    AirtableRecord, AirtableRecordsResponse, AirtableTableSchema, AirtableTaskSummary, StatusOption,
 };
 use crate::cache::Cache;
 
@@ -368,7 +367,7 @@ impl AirtableClient {
 }
 
 pub struct OptionalAirtableClient {
-    client: Option<AirtableClient>,
+    client: RwLock<Option<AirtableClient>>,
     cached_tasks: Cache<Vec<AirtableTaskSummary>>,
 }
 
@@ -386,17 +385,35 @@ impl OptionalAirtableClient {
             })
         });
         Self {
-            client,
+            client: RwLock::new(client),
             cached_tasks: Cache::new(cache_ttl_secs),
         }
     }
 
-    pub fn is_configured(&self) -> bool {
-        self.client.is_some()
+    pub fn reconfigure(
+        &self,
+        token: Option<&str>,
+        base_id: Option<String>,
+        table_name: Option<String>,
+        status_field_name: Option<String>,
+    ) {
+        let new_client = token.and_then(|tok| {
+            base_id.and_then(|bid| {
+                table_name.and_then(|tn| AirtableClient::new(tok, bid, tn, status_field_name).ok())
+            })
+        });
+        if let Ok(mut guard) = self.client.try_write() {
+            *guard = new_client;
+        }
+    }
+
+    pub async fn is_configured(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     pub async fn get_record(&self, record_id: &str) -> Result<AirtableTaskSummary> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_record(record_id).await,
             None => bail!("Airtable not configured"),
         }
@@ -408,8 +425,8 @@ impl OptionalAirtableClient {
             return Ok(tasks);
         }
 
-        let client = self
-            .client
+        let guard = self.client.read().await;
+        let client = guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Airtable not configured"))?;
         let tasks = client.list_records_with_children().await?;
@@ -421,14 +438,16 @@ impl OptionalAirtableClient {
     }
 
     pub async fn get_status_options(&self) -> Result<Vec<StatusOption>> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_status_options().await,
             None => bail!("Airtable not configured"),
         }
     }
 
     pub async fn update_record_status(&self, record_id: &str, status_value: &str) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.update_record_status(record_id, status_value).await,
             None => bail!("Airtable not configured"),
         };
@@ -446,7 +465,8 @@ impl OptionalAirtableClient {
         record_id: &str,
         override_value: Option<&str>,
     ) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_in_progress(record_id, override_value).await,
             None => bail!("Airtable not configured"),
         };
@@ -460,7 +480,8 @@ impl OptionalAirtableClient {
     }
 
     pub async fn move_to_done(&self, record_id: &str, override_value: Option<&str>) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_done(record_id, override_value).await,
             None => bail!("Airtable not configured"),
         };
@@ -478,7 +499,8 @@ impl OptionalAirtableClient {
         record_id: &str,
         override_value: Option<&str>,
     ) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_not_started(record_id, override_value).await,
             None => bail!("Airtable not configured"),
         };

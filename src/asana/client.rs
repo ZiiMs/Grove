@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
     AsanaSectionsResponse, AsanaTaskData, AsanaTaskListResponse, AsanaTaskResponse,
@@ -466,7 +466,7 @@ use crate::cache::Cache;
 
 /// Optional Asana client wrapper — mirrors `OptionalGitLabClient` pattern.
 pub struct OptionalAsanaClient {
-    client: Option<AsanaClient>,
+    client: RwLock<Option<AsanaClient>>,
     cached_tasks: Cache<Vec<AsanaTaskSummary>>,
 }
 
@@ -474,24 +474,33 @@ impl OptionalAsanaClient {
     pub fn new(token: Option<&str>, project_gid: Option<String>, cache_ttl_secs: u64) -> Self {
         let client = token.and_then(|tok| AsanaClient::new(tok, project_gid).ok());
         Self {
-            client,
+            client: RwLock::new(client),
             cached_tasks: Cache::new(cache_ttl_secs),
         }
     }
 
-    pub fn is_configured(&self) -> bool {
-        self.client.is_some()
+    pub fn reconfigure(&self, token: Option<&str>, project_gid: Option<String>) {
+        let new_client = token.and_then(|tok| AsanaClient::new(tok, project_gid).ok());
+        if let Ok(mut guard) = self.client.try_write() {
+            *guard = new_client;
+        }
+    }
+
+    pub async fn is_configured(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     pub async fn get_task(&self, gid: &str) -> Result<AsanaTaskData> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_task(gid).await,
             None => anyhow::bail!("Asana not configured"),
         }
     }
 
     pub async fn get_project_tasks(&self) -> Result<Vec<AsanaTaskSummary>> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_project_tasks().await,
             None => anyhow::bail!("Asana not configured"),
         }
@@ -503,7 +512,8 @@ impl OptionalAsanaClient {
             return Ok(tasks);
         }
 
-        let client = match &self.client {
+        let guard = self.client.read().await;
+        let client = match &*guard {
             Some(c) => c,
             None => anyhow::bail!("Asana not configured"),
         };
@@ -516,7 +526,8 @@ impl OptionalAsanaClient {
     }
 
     pub async fn complete_task(&self, gid: &str) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.complete_task(gid).await,
             None => anyhow::bail!("Asana not configured"),
         };
@@ -534,7 +545,8 @@ impl OptionalAsanaClient {
         task_gid: &str,
         override_gid: Option<&str>,
     ) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_in_progress(task_gid, override_gid).await,
             None => anyhow::bail!("Asana not configured"),
         };
@@ -548,7 +560,8 @@ impl OptionalAsanaClient {
     }
 
     pub async fn move_to_done(&self, task_gid: &str, override_gid: Option<&str>) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_done(task_gid, override_gid).await,
             None => anyhow::bail!("Asana not configured"),
         };
@@ -566,7 +579,8 @@ impl OptionalAsanaClient {
         task_gid: &str,
         override_gid: Option<&str>,
     ) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_not_started(task_gid, override_gid).await,
             None => anyhow::bail!("Asana not configured"),
         };
@@ -580,7 +594,8 @@ impl OptionalAsanaClient {
     }
 
     pub async fn uncomplete_task(&self, gid: &str) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.uncomplete_task(gid).await,
             None => anyhow::bail!("Asana not configured"),
         };
@@ -594,14 +609,16 @@ impl OptionalAsanaClient {
     }
 
     pub async fn get_sections(&self) -> Result<Vec<SectionOption>> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_sections().await,
             None => anyhow::bail!("Asana not configured"),
         }
     }
 
     pub async fn move_task_to_section(&self, task_gid: &str, section_gid: &str) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_task_to_section(task_gid, section_gid).await,
             None => anyhow::bail!("Asana not configured"),
         };

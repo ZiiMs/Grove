@@ -1,5 +1,5 @@
 pub mod client;
 pub mod types;
 
-pub use client::{OptionalAirtableClient, parse_airtable_record_id};
+pub use client::{parse_airtable_record_id, OptionalAirtableClient};
 pub use types::{AirtableTaskStatus, StatusOption};

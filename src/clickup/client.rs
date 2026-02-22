@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use std::collections::HashSet;
+use tokio::sync::RwLock;
 
 use super::types::{
     ClickUpListResponse, ClickUpTaskData, ClickUpTaskListResponse, ClickUpTaskSummary, StatusOption,
@@ -297,7 +298,7 @@ impl ClickUpClient {
 use crate::cache::Cache;
 
 pub struct OptionalClickUpClient {
-    client: Option<ClickUpClient>,
+    client: RwLock<Option<ClickUpClient>>,
     cached_tasks: Cache<Vec<ClickUpTaskSummary>>,
 }
 
@@ -305,24 +306,34 @@ impl OptionalClickUpClient {
     pub fn new(token: Option<&str>, list_id: Option<String>, cache_ttl_secs: u64) -> Self {
         let client = token.and_then(|tok| list_id.and_then(|id| ClickUpClient::new(tok, id).ok()));
         Self {
-            client,
+            client: RwLock::new(client),
             cached_tasks: Cache::new(cache_ttl_secs),
         }
     }
 
-    pub fn is_configured(&self) -> bool {
-        self.client.is_some()
+    pub fn reconfigure(&self, token: Option<&str>, list_id: Option<String>) {
+        let new_client =
+            token.and_then(|tok| list_id.and_then(|id| ClickUpClient::new(tok, id).ok()));
+        if let Ok(mut guard) = self.client.try_write() {
+            *guard = new_client;
+        }
+    }
+
+    pub async fn is_configured(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     pub async fn get_task(&self, task_id: &str) -> Result<ClickUpTaskData> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_task(task_id).await,
             None => bail!("ClickUp not configured"),
         }
     }
 
     pub async fn get_list_tasks(&self) -> Result<Vec<ClickUpTaskSummary>> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_list_tasks().await,
             None => bail!("ClickUp not configured"),
         }
@@ -334,8 +345,8 @@ impl OptionalClickUpClient {
             return Ok(tasks);
         }
 
-        let client = self
-            .client
+        let guard = self.client.read().await;
+        let client = guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("ClickUp not configured"))?;
         let tasks = client.get_list_tasks_with_subtasks().await?;
@@ -347,7 +358,8 @@ impl OptionalClickUpClient {
     }
 
     pub async fn update_task_status(&self, task_id: &str, new_status: &str) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.update_task_status(task_id, new_status).await,
             None => bail!("ClickUp not configured"),
         };
@@ -365,7 +377,8 @@ impl OptionalClickUpClient {
         task_id: &str,
         override_status: Option<&str>,
     ) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_in_progress(task_id, override_status).await,
             None => bail!("ClickUp not configured"),
         };
@@ -379,7 +392,8 @@ impl OptionalClickUpClient {
     }
 
     pub async fn move_to_done(&self, task_id: &str, override_status: Option<&str>) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_done(task_id, override_status).await,
             None => bail!("ClickUp not configured"),
         };
@@ -397,7 +411,8 @@ impl OptionalClickUpClient {
         task_id: &str,
         override_status: Option<&str>,
     ) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => c.move_to_not_started(task_id, override_status).await,
             None => bail!("ClickUp not configured"),
         };
@@ -411,7 +426,8 @@ impl OptionalClickUpClient {
     }
 
     pub async fn get_statuses(&self) -> Result<Vec<StatusOption>> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_statuses().await,
             None => bail!("ClickUp not configured"),
         }

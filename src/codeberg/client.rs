@@ -273,7 +273,7 @@ impl CodebergClient {
 }
 
 pub struct OptionalCodebergClient {
-    client: Option<CodebergClient>,
+    client: RwLock<Option<CodebergClient>>,
 }
 
 impl OptionalCodebergClient {
@@ -304,15 +304,50 @@ impl OptionalCodebergClient {
             _ => None,
         };
 
-        Self { client }
+        Self {
+            client: RwLock::new(client),
+        }
     }
 
-    pub fn is_configured(&self) -> bool {
-        self.client.is_some()
+    #[allow(clippy::too_many_arguments)]
+    pub fn reconfigure(
+        &self,
+        owner: Option<&str>,
+        repo: Option<&str>,
+        base_url: Option<&str>,
+        token: Option<&str>,
+        ci_provider: CodebergCiProvider,
+        woodpecker_token: Option<&str>,
+        woodpecker_repo_id: Option<u64>,
+    ) {
+        let new_client = match (owner, repo, token) {
+            (Some(o), Some(r), Some(t)) => {
+                let url = base_url.unwrap_or(DEFAULT_CODEBERG_URL);
+                CodebergClient::new(
+                    t,
+                    o,
+                    r,
+                    url,
+                    ci_provider,
+                    woodpecker_token,
+                    woodpecker_repo_id,
+                )
+                .ok()
+            }
+            _ => None,
+        };
+        if let Ok(mut guard) = self.client.try_write() {
+            *guard = new_client;
+        }
+    }
+
+    pub async fn is_configured(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     pub async fn get_pr_for_branch(&self, branch: &str) -> PullRequestStatus {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c
                 .get_pr_for_branch(branch)
                 .await
@@ -325,7 +360,8 @@ impl OptionalCodebergClient {
         &self,
         branches: &[String],
     ) -> Vec<(String, PullRequestStatus)> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_prs_for_branches(branches).await.unwrap_or_default(),
             None => branches
                 .iter()
@@ -334,7 +370,8 @@ impl OptionalCodebergClient {
         }
     }
 
-    pub fn get_cached_woodpecker_repo_id(&self) -> Option<u64> {
-        self.client.as_ref()?.get_cached_woodpecker_repo_id()
+    pub async fn get_cached_woodpecker_repo_id(&self) -> Option<u64> {
+        let guard = self.client.read().await;
+        guard.as_ref()?.get_cached_woodpecker_repo_id()
     }
 }

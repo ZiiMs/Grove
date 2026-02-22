@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
+use tokio::sync::RwLock;
 use tracing::warn;
 
 use super::types::{MergeRequestListItem, MergeRequestResponse, MergeRequestStatus};
@@ -169,7 +170,7 @@ impl GitLabClient {
 
 /// Optional GitLab client - may not be configured.
 pub struct OptionalGitLabClient {
-    client: Option<GitLabClient>,
+    client: RwLock<Option<GitLabClient>>,
 }
 
 impl OptionalGitLabClient {
@@ -179,15 +180,28 @@ impl OptionalGitLabClient {
             _ => None,
         };
 
-        Self { client }
+        Self {
+            client: RwLock::new(client),
+        }
     }
 
-    pub fn is_configured(&self) -> bool {
-        self.client.is_some()
+    pub fn reconfigure(&self, base_url: &str, project_id: Option<u64>, token: Option<&str>) {
+        let new_client = match (project_id, token) {
+            (Some(pid), Some(tok)) => GitLabClient::new(base_url, pid, tok).ok(),
+            _ => None,
+        };
+        if let Ok(mut guard) = self.client.try_write() {
+            *guard = new_client;
+        }
+    }
+
+    pub async fn is_configured(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     pub async fn get_mr_for_branch(&self, branch: &str) -> MergeRequestStatus {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c
                 .get_mr_for_branch(branch)
                 .await
@@ -200,7 +214,8 @@ impl OptionalGitLabClient {
         &self,
         branches: &[String],
     ) -> Vec<(String, MergeRequestStatus)> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_mrs_for_branches(branches).await.unwrap_or_default(),
             None => branches
                 .iter()
