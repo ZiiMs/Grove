@@ -104,6 +104,11 @@ static QUESTION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // Plan mode
         Regex::new(r"Ready to implement\?").unwrap(),
         Regex::new(r"Proceed with").unwrap(),
+        // Numbered selection with Claude's indicator (❯ 1. Option text)
+        Regex::new(r"❯\s*\d+\.").unwrap(),
+        // Keyboard confirmation hints
+        Regex::new(r"Enter\s+to\s+confirm").unwrap(),
+        Regex::new(r"Esc\s+to\s+cancel").unwrap(),
     ]
 });
 
@@ -1315,6 +1320,48 @@ mod tests {
         let output = "Some output\n⠋ Reading file...";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(matches!(status, AgentStatus::Running));
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_awaiting_input() {
+        let output = r#" Accessing workspace:
+
+ /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude
+
+ Quick safety check: Is this a project you created or one you trust?
+
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+
+ Enter to confirm · Esc to cancel"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for trust dialog, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_numbered_selection_awaiting_input() {
+        let output = "❯ 1. First option\n  2. Second option\n  3. Third option";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for numbered selection, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_keyboard_hints_awaiting_input() {
+        let output = "Some prompt\nEnter to confirm · Esc to cancel";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for keyboard hints, got {:?}",
+            status
+        );
     }
 
     // --- Codex tests ---
