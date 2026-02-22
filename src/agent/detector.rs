@@ -1077,6 +1077,63 @@ mod tests {
     }
 
     #[test]
+    fn test_opencode_idle_with_plan_mode() {
+        let output = r#"  ┃  hints.                                                                                                                                           Claude Code status check refinement:
+  ┃                                                                                                                                                    tmux outputs analysis plan
+  ┃  Looking at the last few non-empty lines:
+  ┃  - The system reminder text (plan mode)                                                                                                           Context
+  ┃  - ❯ (prompt)                                                                                                                                     78,330 tokens
+  ┃  - Separator line                                                                                                                                 38% used
+  ┃  - ⏸ plan mode on (shift+tab to cycle) · esc to interrupt <system-reminder>                                                                       $0.00 spent
+  ┃
+  ┃  The agent is at the prompt (❯) waiting for user input. There's no spinner currently running. The "⏸ plan mode on" is a hint, not an active       LSP
+  ┃  spinner.                                                                                                                                         LSPs will activate as files are read
+  ┃
+  ┃  Actually, wait - there's a spinner ✽ visible: "✽ Julienning…". But looking more carefully, this appears to be historical output - the current    Modified Files
+  ┃   state shows the prompt ❯ at the bottom.                                                                                                         src/agent/detector.rs        +261 -24
+  ┃
+  ┃  The correct status should be Idle because:
+  ┃  1. The agent is at the prompt (❯)
+  ┃  2. No active spinner in the last few lines
+  ┃  3. No question/permission prompt requiring user input
+  ┃  4. Just a plan mode hint, which is informational, not an input requirement
+  ┃
+  ┃  However, there's also consideration for whether plan mode should be a special status. Looking at the existing statuses:
+  ┃  - Running
+  ┃  - AwaitingInput
+  ┃  - Completed
+  ┃  - Idle
+  ┃  - Error
+  ┃  - Stopped
+  ┃  - Paused
+  ┃
+  ┃  There is a Paused status. But plan mode is different from paused - it's a mode where the agent can read but not write. The agent is still
+  ┃  active and waiting for input.
+  ┃
+  ┃  I think Idle is correct here - the agent is at the prompt, ready for input. Plan mode is just a mode, not a state that prevents input.
+
+     Status: Idle
+
+     The agent is at the prompt (❯) with no active spinner, no question requiring input, and no error. Plan mode is just a mode indicator, not an
+     input requirement. The agent is ready for user input.
+
+     ▣  Plan · glm-5 · 1m 4s
+
+  ┃
+  ┃                                                                                                                                                   ~/.grove/worktrees/0718d9772458e2b2/
+  ┃                                                                                                                                                   tidy-up-status-checks
+  ┃  Plan  GLM-5 Z.AI Coding Plan                                                                                                                     
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                                                                                       tab agents  ctrl+p commands    • OpenCode 1.2.10"#;
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle with plan mode footer, got {:?}",
+            status
+        );
+    }
+
+    #[test]
     fn test_opencode_checklist_progress() {
         let output = r#"  [✓] Create types.ts with Todo interface
   [✓] Create storage.ts localStorage helpers
