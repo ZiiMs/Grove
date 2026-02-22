@@ -504,10 +504,10 @@ pub struct Keybinds {
 }
 
 fn default_nav_down() -> Keybind {
-    Keybind::new("j")
+    Keybind::new("Down")
 }
 fn default_nav_up() -> Keybind {
-    Keybind::new("k")
+    Keybind::new("Up")
 }
 fn default_nav_first() -> Keybind {
     Keybind::new("g")

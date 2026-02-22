@@ -5162,17 +5162,52 @@ async fn process_action(
                 match reset_type {
                     grove::app::ResetType::CurrentTab => {
                         state.settings.reset_current_tab();
-                        state.show_success(format!(
+                    }
+                    grove::app::ResetType::AllSettings => {
+                        state.settings.reset_all();
+                    }
+                }
+                state.settings.reset_confirmation = None;
+
+                let old_provider = state.settings.repo_config.project_mgmt.provider;
+
+                state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
+                state.config.global.editor = state.settings.pending_editor.clone();
+                state.config.global.log_level = state.settings.pending_log_level;
+                state.config.global.worktree_location = state.settings.pending_worktree_location;
+                state.config.ui = state.settings.pending_ui.clone();
+                state.config.keybinds = state.settings.pending_keybinds.clone();
+
+                if let Err(e) = state.config.save() {
+                    state.log_error(format!("Failed to save config: {}", e));
+                }
+
+                if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                    state.log_error(format!("Failed to save repo config: {}", e));
+                }
+
+                let new_provider = state.settings.repo_config.project_mgmt.provider;
+                if old_provider != new_provider {
+                    state.task_list.clear();
+                    state.task_list_loading = true;
+                    let _ = action_tx.send(Action::FetchTaskList);
+                }
+
+                state.show_logs = state.config.ui.show_logs;
+                state.worktree_base = state.config.worktree_base_path(&state.repo_path);
+                state.settings.active = false;
+
+                match reset_type {
+                    grove::app::ResetType::CurrentTab => {
+                        state.log_info(format!(
                             "{} settings reset to defaults",
                             state.settings.tab.display_name()
                         ));
                     }
                     grove::app::ResetType::AllSettings => {
-                        state.settings.reset_all();
-                        state.show_success("All settings reset to defaults");
+                        state.log_info("All settings reset to defaults");
                     }
                 }
-                state.settings.reset_confirmation = None;
             }
         }
 
