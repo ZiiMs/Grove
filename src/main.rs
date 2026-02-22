@@ -4547,6 +4547,39 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                grove::app::SettingsField::ClickUpListId => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .clickup
+                        .list_id
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::ClickUpInProgressStatus => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .clickup
+                        .in_progress_status
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::ClickUpDoneStatus => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .clickup
+                        .done_status
+                        .clone()
+                        .unwrap_or_default();
+                }
                 grove::app::SettingsField::DevServerCommand => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
@@ -4740,6 +4773,25 @@ async fn process_action(
                     grove::app::SettingsField::NotionDoneOption => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.notion.done_option =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::ClickUpListId => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.clickup.list_id =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::ClickUpInProgressStatus => {
+                        let val = state.settings.text_buffer.clone();
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .clickup
+                            .in_progress_status = if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::ClickUpDoneStatus => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.clickup.done_status =
                             if val.is_empty() { None } else { Some(val) };
                     }
                     grove::app::SettingsField::Editor => {

@@ -546,6 +546,39 @@ impl<'a> SettingsModal<'a> {
                     .unwrap_or_else(|| "(auto-detect)".to_string()),
                 false,
             ),
+            SettingsField::ClickUpListId => (
+                "List ID".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .clickup
+                    .list_id
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::ClickUpInProgressStatus => (
+                "In Progress".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .clickup
+                    .in_progress_status
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
+            SettingsField::ClickUpDoneStatus => (
+                "Done".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .clickup
+                    .done_status
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
             SettingsField::DevServerCommand => (
                 "Command".to_string(),
                 self.state
