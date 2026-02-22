@@ -803,9 +803,10 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
         return AgentStatus::Stopped;
     }
 
-    // 7. Process-based fallback - default to Running when process is active
+    // 7. Process-based fallback
+    // If we got here with CodexRunning but no working indicator, agent is idle
     match foreground {
-        ForegroundProcess::CodexRunning => AgentStatus::Running,
+        ForegroundProcess::CodexRunning => AgentStatus::Idle,
         ForegroundProcess::Shell => AgentStatus::Stopped,
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown
@@ -954,9 +955,10 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         return AgentStatus::Stopped;
     }
 
-    // 11. Process-based fallback - default to Running when process is active
+    // 11. Process-based fallback
+    // If we got here with GeminiRunning but no spinner/timer, agent is idle (quiet state)
     match foreground {
-        ForegroundProcess::GeminiRunning => AgentStatus::Running,
+        ForegroundProcess::GeminiRunning => AgentStatus::Idle,
         ForegroundProcess::Shell => AgentStatus::Stopped,
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown
@@ -1613,6 +1615,24 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::Idle),
             "Expected Idle at Gemini prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_quiet_state_is_idle() {
+        // No spinner, no timer, no questions - agent is in quiet/idle state
+        // This happens when agent is waiting but not actively working
+        let output = r#"Logged in with Google: user@example.com /auth
+Plan: Gemini Code Assist for individuals
+
+ > Okay, lets create a plan to add 200 paragraphs
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ~/.grove/worktrees/test, (test,*)                           /model Auto (Gemini 3)"#;
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle in quiet state (no spinner/timer), got {:?}",
             status
         );
     }
