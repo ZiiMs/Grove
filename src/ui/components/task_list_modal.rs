@@ -250,7 +250,7 @@ impl<'a> TaskListModal<'a> {
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled("[a] Assign  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[s] Set Status  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[s] Toggle Status  ", Style::default().fg(Color::DarkGray)),
             Span::styled("[r] Refresh  ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 "[←/→] Collapse/Expand  ",

@@ -16,4 +16,3 @@ pub mod storage;
 pub mod tmux;
 pub mod ui;
 pub mod util;
-pub mod version;
