@@ -5254,6 +5254,61 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                grove::app::SettingsField::AirtableBaseId => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .airtable
+                        .base_id
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::AirtableTableName => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .airtable
+                        .table_name
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::AirtableStatusField => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .airtable
+                        .status_field_name
+                        .clone()
+                        .unwrap_or_else(|| "Status".to_string());
+                }
+                grove::app::SettingsField::AirtableInProgressOption => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .airtable
+                        .in_progress_option
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::AirtableDoneOption => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .airtable
+                        .done_option
+                        .clone()
+                        .unwrap_or_default();
+                }
                 grove::app::SettingsField::DevServerCommand => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
@@ -5466,6 +5521,35 @@ async fn process_action(
                     grove::app::SettingsField::ClickUpDoneStatus => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.clickup.done_status =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::AirtableBaseId => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.airtable.base_id =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::AirtableTableName => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.airtable.table_name =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::AirtableStatusField => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.airtable.status_field_name =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::AirtableInProgressOption => {
+                        let val = state.settings.text_buffer.clone();
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .airtable
+                            .in_progress_option = if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::AirtableDoneOption => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.airtable.done_option =
                             if val.is_empty() { None } else { Some(val) };
                     }
                     grove::app::SettingsField::Editor => {
