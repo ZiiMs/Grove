@@ -13,6 +13,8 @@ pub enum ForegroundProcess {
     ClaudeRunning,
     /// Opencode is alive (node, opencode, npx)
     OpencodeRunning,
+    /// Gemini is alive (node, gemini)
+    GeminiRunning,
     /// At a shell prompt (bash, zsh, sh, fish, dash)
     Shell,
     /// AI agent spawned a subprocess (cargo, git, python, etc.)
@@ -32,9 +34,8 @@ impl ForegroundProcess {
             return match agent_type {
                 AiAgent::ClaudeCode => ForegroundProcess::ClaudeRunning,
                 AiAgent::Opencode => ForegroundProcess::OpencodeRunning,
-                AiAgent::Codex | AiAgent::Gemini => {
-                    ForegroundProcess::OtherProcess(binary.to_string())
-                }
+                AiAgent::Gemini => ForegroundProcess::GeminiRunning,
+                AiAgent::Codex => ForegroundProcess::OtherProcess(binary.to_string()),
             };
         }
 
@@ -54,7 +55,9 @@ impl ForegroundProcess {
     pub fn is_agent_running(&self) -> bool {
         matches!(
             self,
-            ForegroundProcess::ClaudeRunning | ForegroundProcess::OpencodeRunning
+            ForegroundProcess::ClaudeRunning
+                | ForegroundProcess::OpencodeRunning
+                | ForegroundProcess::GeminiRunning
         )
     }
 }
@@ -134,6 +137,34 @@ static OPENCODE_PROGRESS_PATTERN: LazyLock<Regex> =
 /// Braille spinner characters (used by various AI tools including OpenCode)
 static OPENCODE_SPINNER_CHARS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[⣾⣽⣻⢿⡿⣟⣯⣷⠁⠃⠇⡇⡏⡟⡿⣿⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]").unwrap());
+
+// Gemini-specific patterns
+
+/// Gemini CLI shows "Action Required" for needs input
+static GEMINI_ACTION_REQUIRED: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)action\s+required").unwrap());
+
+/// Gemini shows "Waiting for confirmation" dialogs
+static GEMINI_WAITING_CONFIRMATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)waiting\s+for\s+confirmation").unwrap());
+
+/// Gemini permission/confirmation prompts with standard patterns
+static GEMINI_CONFIRMATION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
+        Regex::new(r"(?i)proceed\??").unwrap(),
+        Regex::new(r"(?i)allow\s+this\??").unwrap(),
+        Regex::new(r"(?i)confirm\s*\??").unwrap(),
+        Regex::new(r"(?i)would\s+you\s+like\s+to").unwrap(),
+        Regex::new(r"(?i)do\s+you\s+want\s+to").unwrap(),
+    ]
+});
+
+/// Gemini running indicator: "esc to cancel" text at bottom
+static GEMINI_ESC_CANCEL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)esc\s+to\s+cancel").unwrap());
+
+/// Gemini dots spinner (animated square dots pattern)
+static GEMINI_DOTS_SPINNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[⠁⠃⠇⡇⡏⡟⡿⣿]").unwrap());
 
 /// Detect GitLab MR URL in tmux output and return MergeRequestStatus if found.
 pub fn detect_mr_url(output: &str) -> Option<MergeRequestStatus> {
@@ -429,6 +460,7 @@ pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -
     match foreground {
         ForegroundProcess::ClaudeRunning => detect_status_claude_running(output),
         ForegroundProcess::OpencodeRunning => detect_status_opencode(output, foreground),
+        ForegroundProcess::GeminiRunning => detect_status_gemini(output, foreground),
         ForegroundProcess::Shell => detect_status_at_shell(output),
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown => detect_status(output),
@@ -555,7 +587,8 @@ pub fn detect_status_for_agent(
     match agent_type {
         AiAgent::ClaudeCode => detect_status_with_process(output, foreground),
         AiAgent::Opencode => detect_status_opencode(output, foreground),
-        AiAgent::Codex | AiAgent::Gemini => detect_status_with_process(output, foreground),
+        AiAgent::Gemini => detect_status_gemini(output, foreground),
+        AiAgent::Codex => detect_status_with_process(output, foreground),
     }
 }
 
@@ -648,7 +681,110 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
         ForegroundProcess::OpencodeRunning => AgentStatus::Idle,
         ForegroundProcess::Shell => AgentStatus::Stopped,
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
-        ForegroundProcess::Unknown | ForegroundProcess::ClaudeRunning => {
+        ForegroundProcess::Unknown
+        | ForegroundProcess::ClaudeRunning
+        | ForegroundProcess::GeminiRunning => {
+            if clean_output.trim().is_empty() {
+                AgentStatus::Stopped
+            } else {
+                AgentStatus::Idle
+            }
+        }
+    }
+}
+
+/// Status detection for Gemini agent.
+/// Detection: "Action Required" = AwaitingInput, "esc to cancel" = Running, else Idle
+fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+    let clean_output = strip_ansi(output);
+    let lines: Vec<&str> = clean_output.lines().collect();
+
+    if lines.is_empty() {
+        return AgentStatus::Stopped;
+    }
+
+    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    let last_5_text = last_5_lines.join("\n").to_lowercase();
+
+    // 1. Check for "Action Required" banner (highest priority for AwaitingInput)
+    if GEMINI_ACTION_REQUIRED.is_match(&clean_output) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 2. Check for "Waiting for confirmation" dialog
+    if GEMINI_WAITING_CONFIRMATION.is_match(&clean_output) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 3. Check for permission/confirmation prompts
+    for pattern in GEMINI_CONFIRMATION_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            return AgentStatus::AwaitingInput;
+        }
+    }
+
+    // 4. Check for standard question patterns (y/n, [Y/n], etc.)
+    for pattern in QUESTION_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            return AgentStatus::AwaitingInput;
+        }
+    }
+
+    // 5. Check for running indicator ("esc to cancel" or spinner)
+    if GEMINI_ESC_CANCEL.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // Check for Gemini dots spinner
+    if GEMINI_DOTS_SPINNER.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // Check for braille spinner characters (shared with other tools)
+    if SPINNER_CHARS.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // 6. Check for errors
+    for pattern in ERROR_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            for line in lines.iter().rev().take(15) {
+                if pattern.is_match(line) {
+                    let msg = line.trim().chars().take(40).collect::<String>();
+                    return AgentStatus::Error(msg);
+                }
+            }
+            return AgentStatus::Error("Error detected".to_string());
+        }
+    }
+
+    // 7. Check for completion patterns
+    for pattern in COMPLETION_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            return AgentStatus::Completed;
+        }
+    }
+
+    // 8. Check for shell prompt (indicates AI has exited)
+    let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
+    let is_shell_prompt = last_line.len() <= 50
+        && (last_line.ends_with('$')
+            || last_line.ends_with('#')
+            || last_line == ">"
+            || last_line.starts_with("➜"));
+
+    if is_shell_prompt && foreground != ForegroundProcess::GeminiRunning {
+        return AgentStatus::Stopped;
+    }
+
+    // 9. Process-based fallback
+    match foreground {
+        ForegroundProcess::GeminiRunning => AgentStatus::Idle,
+        ForegroundProcess::Shell => AgentStatus::Stopped,
+        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::Unknown
+        | ForegroundProcess::ClaudeRunning
+        | ForegroundProcess::OpencodeRunning => {
             if clean_output.trim().is_empty() {
                 AgentStatus::Stopped
             } else {
@@ -999,5 +1135,134 @@ mod tests {
         let output = "Some output\n⠋ Reading file...";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(matches!(status, AgentStatus::Running));
+    }
+
+    // --- Gemini tests ---
+
+    #[test]
+    fn test_gemini_action_required_awaiting_input() {
+        let output = "Analyzing code...\n\nAction Required\nPlease confirm to proceed";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Action Required, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_waiting_for_confirmation() {
+        let output = "Tool execution\nWaiting for confirmation\n(y/n)";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Waiting for confirmation, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_esc_cancel_running() {
+        let output = "Analyzing...\nWorking on task\n(esc to cancel, 15s)";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for esc to cancel, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_dots_spinner_running() {
+        let output = "Processing...\n⠁ \nThinking";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for dots spinner, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_braille_spinner_running() {
+        let output = "Processing...\n⠋ Working...";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for braille spinner, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_permission_prompt_awaiting_input() {
+        let output = "Tool: Bash\nAllow this? [Y/n]";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for permission prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_completion() {
+        let output = "✓ Task completed successfully\n>";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Completed),
+            "Expected Completed, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_error() {
+        let output = "Error: file not found\n>";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Error(_)),
+            "Expected Error, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_shell_stopped() {
+        let output = "Session ended\n$ ";
+        let status = detect_status_gemini(output, ForegroundProcess::Shell);
+        assert!(
+            matches!(status, AgentStatus::Stopped),
+            "Expected Stopped when at shell, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_running_idle() {
+        let output = "Ready for input\n❯";
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle when Gemini running at prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_foreground_process_detection() {
+        assert_eq!(
+            ForegroundProcess::from_command_for_agent("node", AiAgent::Gemini),
+            ForegroundProcess::GeminiRunning
+        );
+        assert_eq!(
+            ForegroundProcess::from_command_for_agent("gemini", AiAgent::Gemini),
+            ForegroundProcess::GeminiRunning
+        );
+    }
+
+    #[test]
+    fn test_gemini_is_agent_running() {
+        assert!(ForegroundProcess::GeminiRunning.is_agent_running());
     }
 }
