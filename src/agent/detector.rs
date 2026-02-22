@@ -489,9 +489,43 @@ pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -
         ForegroundProcess::CodexRunning => detect_status_codex(output, foreground),
         ForegroundProcess::GeminiRunning => detect_status_gemini(output, foreground),
         ForegroundProcess::Shell => detect_status_at_shell(output),
-        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::OtherProcess(_) => detect_status_other_process(output),
         ForegroundProcess::Unknown => detect_status(output),
     }
+}
+
+/// Status detection when a subprocess (cargo, git, etc.) is in the foreground.
+/// Still checks for input prompts since the AI may be waiting for user response.
+fn detect_status_other_process(output: &str) -> AgentStatus {
+    let clean_output = strip_ansi(output);
+    let lines: Vec<&str> = clean_output.lines().collect();
+
+    if lines.is_empty() {
+        return AgentStatus::Running;
+    }
+
+    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    let last_5_text = last_5_lines.join("\n");
+
+    for pattern in QUESTION_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            return AgentStatus::AwaitingInput;
+        }
+    }
+
+    for pattern in ERROR_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            for line in last_5_lines.iter() {
+                if pattern.is_match(line) {
+                    let msg = line.trim().chars().take(40).collect::<String>();
+                    return AgentStatus::Error(msg);
+                }
+            }
+            return AgentStatus::Error("Error detected".to_string());
+        }
+    }
+
+    AgentStatus::Running
 }
 
 /// Status detection when we know Claude (node/npx) is the foreground process.
@@ -1324,11 +1358,17 @@ mod tests {
 
     #[test]
     fn test_claude_trust_dialog_awaiting_input() {
-        let output = r#" Accessing workspace:
+        let output = r#"──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
 
  /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude
 
- Quick safety check: Is this a project you created or one you trust?
+ Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's
+ in this folder first.
+
+ Claude Code'll be able to read, edit, and execute files here.
+
+ Security guide
 
  ❯ 1. Yes, I trust this folder
    2. No, exit
@@ -1338,6 +1378,82 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for trust dialog, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_exact_output() {
+        let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel ";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for exact trust dialog, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_unknown_process() {
+        let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel ";
+        let status = detect_status_with_process(output, ForegroundProcess::Unknown);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for trust dialog with Unknown foreground, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_with_ansi() {
+        let output = "\x1b[90m────────────────────────────────────────────────\x1b[0m\n\x1b[1m Accessing workspace:\x1b[0m\n\n /home/ziim/test\n\n\x1b[33m Quick safety check:\x1b[0m\n\n \x1b[36m❯ 1. Yes, I trust this folder\x1b[0m\n   2. No, exit\n\n\x1b[2m Enter to confirm · Esc to cancel\x1b[0m ";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for trust dialog with ANSI codes, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_other_process_with_input_prompt() {
+        let output =
+            "❯ 1. Yes, I trust this folder\n   2. No, exit\n\nEnter to confirm · Esc to cancel";
+        let status = detect_status_with_process(
+            output,
+            ForegroundProcess::OtherProcess("cargo".to_string()),
+        );
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for OtherProcess with input prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_other_process_running() {
+        let output = "Compiling grove v0.1.0\nRunning tests...";
+        let status = detect_status_with_process(
+            output,
+            ForegroundProcess::OtherProcess("cargo".to_string()),
+        );
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for OtherProcess without input prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_other_process_with_error() {
+        let output = "Error: build failed\nSome more output";
+        let status = detect_status_with_process(
+            output,
+            ForegroundProcess::OtherProcess("cargo".to_string()),
+        );
+        assert!(
+            matches!(status, AgentStatus::Error(_)),
+            "Expected Error for OtherProcess with error, got {:?}",
             status
         );
     }
