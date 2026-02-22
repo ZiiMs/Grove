@@ -280,7 +280,11 @@ impl LinearClient {
             .map(|i| {
                 (
                     i.id.clone(),
-                    (i.state_id.clone(), i.state_name.clone(), i.state_type.clone()),
+                    (
+                        i.state_id.clone(),
+                        i.state_name.clone(),
+                        i.state_type.clone(),
+                    ),
                 )
             })
             .collect();
@@ -296,8 +300,7 @@ impl LinearClient {
             .map(|mut i| {
                 i.has_children = parent_ids.contains(&i.id) || i.has_children;
                 if let Some(parent_id) = &i.parent_id {
-                    if let Some((state_id, state_name, state_type)) = parent_states.get(parent_id)
-                    {
+                    if let Some((state_id, state_name, state_type)) = parent_states.get(parent_id) {
                         tracing::debug!(
                             "Linear subtask {} inheriting status '{}' from parent",
                             i.identifier,
