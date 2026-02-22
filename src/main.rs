@@ -1232,6 +1232,15 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
 fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
     use grove::app::DropdownState;
 
+    // Handle reset confirmation mode
+    if state.settings.reset_confirmation.is_some() {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCancelReset),
+            KeyCode::Enter => Some(Action::SettingsConfirmReset),
+            _ => None,
+        };
+    }
+
     // Handle prompt editing mode (multi-line text editor)
     if state.settings.editing_prompt {
         return match key.code {
@@ -1362,11 +1371,20 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
         KeyCode::Enter => {
-            let field = state.settings.current_field();
-            if field.is_keybind_field() {
-                Some(Action::SettingsStartKeybindCapture)
+            if let Some(btn) = state.settings.current_action_button() {
+                use grove::app::ActionButtonType;
+                let reset_type = match btn {
+                    ActionButtonType::ResetTab => grove::app::ResetType::CurrentTab,
+                    ActionButtonType::ResetAll => grove::app::ResetType::AllSettings,
+                };
+                Some(Action::SettingsRequestReset { reset_type })
             } else {
-                Some(Action::SettingsSelectField)
+                let field = state.settings.current_field();
+                if field.is_keybind_field() {
+                    Some(Action::SettingsStartKeybindCapture)
+                } else {
+                    Some(Action::SettingsSelectField)
+                }
             }
         }
         _ => None,
@@ -5133,6 +5151,33 @@ async fn process_action(
 
         Action::SettingsCancelKeybindCapture => {
             state.settings.capturing_keybind = None;
+        }
+
+        Action::SettingsRequestReset { reset_type } => {
+            state.settings.reset_confirmation = Some(reset_type);
+        }
+
+        Action::SettingsConfirmReset => {
+            if let Some(reset_type) = state.settings.reset_confirmation {
+                match reset_type {
+                    grove::app::ResetType::CurrentTab => {
+                        state.settings.reset_current_tab();
+                        state.show_success(format!(
+                            "{} settings reset to defaults",
+                            state.settings.tab.display_name()
+                        ));
+                    }
+                    grove::app::ResetType::AllSettings => {
+                        state.settings.reset_all();
+                        state.show_success("All settings reset to defaults");
+                    }
+                }
+                state.settings.reset_confirmation = None;
+            }
+        }
+
+        Action::SettingsCancelReset => {
+            state.settings.reset_confirmation = None;
         }
 
         // File Browser Actions
