@@ -3,6 +3,7 @@ pub mod app;
 pub mod asana;
 pub mod cache;
 pub mod ci;
+pub mod clickup;
 pub mod codeberg;
 pub mod devserver;
 pub mod git;

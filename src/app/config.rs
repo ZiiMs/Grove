@@ -129,6 +129,7 @@ pub enum ProjectMgmtProvider {
     #[default]
     Asana,
     Notion,
+    Clickup,
 }
 
 impl ProjectMgmtProvider {
@@ -136,11 +137,16 @@ impl ProjectMgmtProvider {
         match self {
             ProjectMgmtProvider::Asana => "Asana",
             ProjectMgmtProvider::Notion => "Notion",
+            ProjectMgmtProvider::Clickup => "ClickUp",
         }
     }
 
     pub fn all() -> &'static [ProjectMgmtProvider] {
-        &[ProjectMgmtProvider::Asana, ProjectMgmtProvider::Notion]
+        &[
+            ProjectMgmtProvider::Asana,
+            ProjectMgmtProvider::Notion,
+            ProjectMgmtProvider::Clickup,
+        ]
     }
 }
 
@@ -229,6 +235,8 @@ pub struct Config {
     #[serde(default)]
     pub notion: NotionConfig,
     #[serde(default)]
+    pub clickup: ClickUpConfig,
+    #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
     pub performance: PerformanceConfig,
@@ -282,6 +290,31 @@ impl Default for NotionConfig {
         Self {
             refresh_secs: default_notion_refresh(),
             cache_ttl_secs: default_notion_cache_ttl(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClickUpConfig {
+    #[serde(default = "default_clickup_refresh")]
+    pub refresh_secs: u64,
+    #[serde(default = "default_clickup_cache_ttl")]
+    pub cache_ttl_secs: u64,
+}
+
+fn default_clickup_refresh() -> u64 {
+    120
+}
+
+fn default_clickup_cache_ttl() -> u64 {
+    60
+}
+
+impl Default for ClickUpConfig {
+    fn default() -> Self {
+        Self {
+            refresh_secs: default_clickup_refresh(),
+            cache_ttl_secs: default_clickup_cache_ttl(),
         }
     }
 }
@@ -736,6 +769,10 @@ impl Config {
         std::env::var("NOTION_TOKEN").ok()
     }
 
+    pub fn clickup_token() -> Option<String> {
+        std::env::var("CLICKUP_TOKEN").ok()
+    }
+
     pub fn codeberg_token() -> Option<String> {
         std::env::var("CODEBERG_TOKEN").ok()
     }
@@ -788,6 +825,8 @@ pub struct RepoProjectMgmtConfig {
     pub asana: RepoAsanaConfig,
     #[serde(default)]
     pub notion: RepoNotionConfig,
+    #[serde(default)]
+    pub clickup: RepoClickUpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -796,6 +835,13 @@ pub struct RepoNotionConfig {
     pub status_property_name: Option<String>,
     pub in_progress_option: Option<String>,
     pub done_option: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoClickUpConfig {
+    pub list_id: Option<String>,
+    pub in_progress_status: Option<String>,
+    pub done_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1004,6 +1050,7 @@ impl RepoConfig {
                         provider: ProjectMgmtProvider::Asana,
                         asana: legacy.asana,
                         notion: RepoNotionConfig::default(),
+                        clickup: RepoClickUpConfig::default(),
                     },
                     prompts: legacy.prompts,
                     dev_server: DevServerConfig::default(),

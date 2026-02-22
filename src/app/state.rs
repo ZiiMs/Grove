@@ -117,6 +117,9 @@ pub enum SettingsField {
     NotionStatusProperty,
     NotionInProgressOption,
     NotionDoneOption,
+    ClickUpListId,
+    ClickUpInProgressStatus,
+    ClickUpDoneStatus,
     SummaryPrompt,
     MergePrompt,
     PushPrompt,
@@ -165,6 +168,7 @@ pub enum SettingsCategory {
     ProjectMgmt,
     Asana,
     Notion,
+    Clickup,
     Prompts,
     DevServer,
     KeybindNav,
@@ -186,6 +190,7 @@ impl SettingsCategory {
             SettingsCategory::ProjectMgmt => "Project Mgmt",
             SettingsCategory::Asana => "Asana",
             SettingsCategory::Notion => "Notion",
+            SettingsCategory::Clickup => "ClickUp",
             SettingsCategory::Prompts => "Prompts",
             SettingsCategory::DevServer => "Dev Server",
             SettingsCategory::KeybindNav => "Navigation",
@@ -235,7 +240,10 @@ impl SettingsField {
             | SettingsField::NotionDatabaseId
             | SettingsField::NotionStatusProperty
             | SettingsField::NotionInProgressOption
-            | SettingsField::NotionDoneOption => SettingsTab::ProjectMgmt,
+            | SettingsField::NotionDoneOption
+            | SettingsField::ClickUpListId
+            | SettingsField::ClickUpInProgressStatus
+            | SettingsField::ClickUpDoneStatus => SettingsTab::ProjectMgmt,
             SettingsField::DevServerCommand
             | SettingsField::DevServerRunBefore
             | SettingsField::DevServerWorkingDir
@@ -415,6 +423,12 @@ impl SettingsItem {
                         items.push(SettingsItem::Field(SettingsField::NotionStatusProperty));
                         items.push(SettingsItem::Field(SettingsField::NotionInProgressOption));
                         items.push(SettingsItem::Field(SettingsField::NotionDoneOption));
+                    }
+                    ProjectMgmtProvider::Clickup => {
+                        items.push(SettingsItem::Category(SettingsCategory::Clickup));
+                        items.push(SettingsItem::Field(SettingsField::ClickUpListId));
+                        items.push(SettingsItem::Field(SettingsField::ClickUpInProgressStatus));
+                        items.push(SettingsItem::Field(SettingsField::ClickUpDoneStatus));
                     }
                 }
                 items

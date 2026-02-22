@@ -181,6 +181,12 @@ impl<'a> SettingsModal<'a> {
                                     Config::notion_token().is_some(),
                                 ));
                             }
+                            ProjectMgmtProvider::Clickup => {
+                                lines.push(Self::render_token_status_line(
+                                    "CLICKUP_TOKEN",
+                                    Config::clickup_token().is_some(),
+                                ));
+                            }
                         }
                     }
                 }
