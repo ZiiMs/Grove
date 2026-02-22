@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
@@ -181,7 +181,20 @@ impl LinearClient {
                             }
                             parent { id }
                             children(first: 50) {
-                                nodes { id }
+                                nodes {
+                                    id
+                                    identifier
+                                    title
+                                    url
+                                    state {
+                                        id
+                                        name
+                                        type
+                                        color
+                                    }
+                                    parent { id }
+                                    children(first: 1) { nodes { id } }
+                                }
                             }
                         }
                     }
@@ -261,10 +274,43 @@ impl LinearClient {
             .cloned()
             .collect();
 
+        let parent_states: HashMap<String, (String, String, String)> = issues
+            .iter()
+            .filter(|i| parent_ids.contains(&i.id))
+            .map(|i| {
+                (
+                    i.id.clone(),
+                    (
+                        i.state_id.clone(),
+                        i.state_name.clone(),
+                        i.state_type.clone(),
+                    ),
+                )
+            })
+            .collect();
+
+        tracing::debug!(
+            "Linear inheritance: {} parent states collected for {} issues",
+            parent_states.len(),
+            issues.len()
+        );
+
         let enriched: Vec<LinearIssueSummary> = issues
             .into_iter()
             .map(|mut i| {
                 i.has_children = parent_ids.contains(&i.id) || i.has_children;
+                if let Some(parent_id) = &i.parent_id {
+                    if let Some((state_id, state_name, state_type)) = parent_states.get(parent_id) {
+                        tracing::debug!(
+                            "Linear subtask {} inheriting status '{}' from parent",
+                            i.identifier,
+                            state_name
+                        );
+                        i.state_id = state_id.clone();
+                        i.state_name = state_name.clone();
+                        i.state_type = state_type.clone();
+                    }
+                }
                 i
             })
             .collect();

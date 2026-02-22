@@ -3646,6 +3646,65 @@ async fn process_action(
                                     };
                                 }
                                 state.show_success(format!("Task → {}", status_name));
+                            } else if matches!(provider, ProjectMgmtProvider::Linear) {
+                                let client = Arc::clone(linear_client);
+                                let tx = action_tx.clone();
+                                state.loading_message = Some("Updating task status...".to_string());
+
+                                let task_id_for_spawn = task_id.clone();
+                                let status_name_for_spawn = status_name.clone();
+                                let state_id_for_spawn = option_id.clone();
+                                tokio::spawn(async move {
+                                    match client
+                                        .update_issue_status(
+                                            &task_id_for_spawn,
+                                            &state_id_for_spawn,
+                                        )
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowToast {
+                                                message: format!(
+                                                    "Task → {}",
+                                                    status_name_for_spawn
+                                                ),
+                                                level: ToastLevel::Success,
+                                            });
+                                            let _ = tx.send(Action::RefreshTaskList);
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Failed to update task: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                });
+
+                                if let Some(task) =
+                                    state.task_list.iter_mut().find(|t| t.id == task_id)
+                                {
+                                    let lower = status_name.to_lowercase();
+                                    task.status_name = status_name.clone();
+                                    task.status = if lower.contains("done")
+                                        || lower.contains("complete")
+                                        || lower.contains("cancelled")
+                                    {
+                                        task.completed = true;
+                                        TaskItemStatus::Completed
+                                    } else if lower.contains("progress")
+                                        || lower.contains("started")
+                                    {
+                                        task.completed = false;
+                                        TaskItemStatus::InProgress
+                                    } else {
+                                        task.completed = false;
+                                        TaskItemStatus::NotStarted
+                                    };
+                                }
+                                state.show_success(format!("Task → {}", status_name));
                             } else {
                                 let client = Arc::clone(clickup_client);
                                 let tx = action_tx.clone();
@@ -4342,6 +4401,17 @@ async fn process_action(
                     ProjectMgmtProvider::Linear => {
                         match linear_client.get_team_issues_with_children().await {
                             Ok(issues) => {
+                                tracing::debug!("Linear issues before building task list:");
+                                for i in &issues {
+                                    tracing::debug!(
+                                        "  {} - state_name: {}, state_type: {}, parent_id: {:?}",
+                                        i.identifier,
+                                        i.state_name,
+                                        i.state_type,
+                                        i.parent_id
+                                    );
+                                }
+
                                 let parent_ids: std::collections::HashSet<String> = issues
                                     .iter()
                                     .filter_map(|i| i.parent_id.as_ref())
@@ -4493,6 +4563,45 @@ async fn process_action(
                             }
                         }
                     });
+                } else if matches!(provider, ProjectMgmtProvider::Linear) {
+                    // Linear: All tasks (parent and subtask) use full status dropdown
+                    if !linear_client.is_configured().await {
+                        state.show_error("Linear not configured. Set LINEAR_TOKEN and team_id.");
+                        return Ok(false);
+                    }
+
+                    let task_id_for_dropdown = task.id.clone();
+                    let task_name_for_dropdown = task.name.clone();
+                    let client = Arc::clone(linear_client);
+                    let tx = action_tx.clone();
+                    state.loading_message = Some("Loading workflow states...".to_string());
+
+                    tokio::spawn(async move {
+                        match client.get_workflow_states().await {
+                            Ok(states) => {
+                                let options: Vec<StatusOption> = states
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.id,
+                                        name: s.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                    task_id: task_id_for_dropdown,
+                                    task_name: task_name_for_dropdown,
+                                    options,
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to load Linear workflow states: {}", e);
+                                let _ = tx.send(Action::SetLoading(None));
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load workflow states: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    });
                 } else if task.is_subtask() {
                     // ClickUp subtasks use the same statuses as parent tasks
                     if matches!(provider, ProjectMgmtProvider::Clickup) {
@@ -4544,6 +4653,83 @@ async fn process_action(
                         });
                         state.input_mode = Some(InputMode::SelectSubtaskStatus);
                     }
+                } else if matches!(provider, ProjectMgmtProvider::Linear) {
+                    // Linear: All tasks (parent and subtask) use full status dropdown
+                    if !linear_client.is_configured().await {
+                        state.show_error("Linear not configured. Set LINEAR_TOKEN and team_id.");
+                        return Ok(false);
+                    }
+
+                    let task_id_for_dropdown = task.id.clone();
+                    let task_name_for_dropdown = task.name.clone();
+                    let client = Arc::clone(linear_client);
+                    let tx = action_tx.clone();
+                    state.loading_message = Some("Loading workflow states...".to_string());
+
+                    tokio::spawn(async move {
+                        match client.get_workflow_states().await {
+                            Ok(states) => {
+                                let options: Vec<StatusOption> = states
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.id,
+                                        name: s.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                    task_id: task_id_for_dropdown,
+                                    task_name: task_name_for_dropdown,
+                                    options,
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to load Linear workflow states: {}", e);
+                                let _ = tx.send(Action::SetLoading(None));
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load workflow states: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    });
+                } else if matches!(provider, ProjectMgmtProvider::Clickup) {
+                    // ClickUp parent tasks also support status dropdown
+                    if !clickup_client.is_configured().await {
+                        state.show_error("ClickUp not configured. Set CLICKUP_TOKEN and list_id.");
+                        return Ok(false);
+                    }
+
+                    let task_id_for_dropdown = task.id.clone();
+                    let client = Arc::clone(clickup_client);
+                    let tx = action_tx.clone();
+                    state.loading_message = Some("Loading statuses...".to_string());
+
+                    tokio::spawn(async move {
+                        match client.get_statuses().await {
+                            Ok(statuses) => {
+                                let options: Vec<StatusOption> = statuses
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.status.clone(),
+                                        name: s.status,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                    task_id: task_id_for_dropdown,
+                                    task_name: task.name.clone(),
+                                    options,
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to load ClickUp statuses: {}", e);
+                                let _ = tx.send(Action::SetLoading(None));
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    });
                 } else {
                     state.show_warning("Status toggle only available for subtasks");
                 }
