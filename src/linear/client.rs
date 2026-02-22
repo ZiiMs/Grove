@@ -285,6 +285,12 @@ impl LinearClient {
             })
             .collect();
 
+        tracing::debug!(
+            "Linear inheritance: {} parent states collected for {} issues",
+            parent_states.len(),
+            issues.len()
+        );
+
         let enriched: Vec<LinearIssueSummary> = issues
             .into_iter()
             .map(|mut i| {
@@ -292,6 +298,11 @@ impl LinearClient {
                 if let Some(parent_id) = &i.parent_id {
                     if let Some((state_id, state_name, state_type)) = parent_states.get(parent_id)
                     {
+                        tracing::debug!(
+                            "Linear subtask {} inheriting status '{}' from parent",
+                            i.identifier,
+                            state_name
+                        );
                         i.state_id = state_id.clone();
                         i.state_name = state_name.clone();
                         i.state_type = state_type.clone();

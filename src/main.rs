@@ -4402,6 +4402,17 @@ async fn process_action(
                     ProjectMgmtProvider::Linear => {
                         match linear_client.get_team_issues_with_children().await {
                             Ok(issues) => {
+                                tracing::debug!("Linear issues before building task list:");
+                                for i in &issues {
+                                    tracing::debug!(
+                                        "  {} - state_name: {}, state_type: {}, parent_id: {:?}",
+                                        i.identifier,
+                                        i.state_name,
+                                        i.state_type,
+                                        i.parent_id
+                                    );
+                                }
+
                                 let parent_ids: std::collections::HashSet<String> = issues
                                     .iter()
                                     .filter_map(|i| i.parent_id.as_ref())
