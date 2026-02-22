@@ -11,6 +11,7 @@ use ratatui::{
 use crate::agent::{Agent, AgentStatus, ProjectMgmtTaskStatus};
 use crate::app::config::GitProvider;
 use crate::asana::AsanaTaskStatus;
+use crate::clickup::ClickUpTaskStatus;
 use crate::devserver::DevServerStatus;
 use crate::github::CheckStatus;
 use crate::gitlab::PipelineStatus;
@@ -393,6 +394,13 @@ impl<'a> AgentListWidget<'a> {
                 NotionTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
                 NotionTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
                 NotionTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
+            ProjectMgmtTaskStatus::ClickUp(s) => match s {
+                ClickUpTaskStatus::None => Style::default().fg(Color::DarkGray),
+                ClickUpTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                ClickUpTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                ClickUpTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                ClickUpTaskStatus::Error { .. } => Style::default().fg(Color::Red),
             },
         };
         (text, style)

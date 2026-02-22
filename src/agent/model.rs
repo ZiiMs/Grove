@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::asana::AsanaTaskStatus;
+use crate::clickup::ClickUpTaskStatus;
 use crate::codeberg::PullRequestStatus as CodebergPullRequestStatus;
 use crate::git::GitSyncStatus;
 use crate::github::PullRequestStatus;
@@ -20,6 +21,7 @@ pub enum ProjectMgmtTaskStatus {
     None,
     Asana(AsanaTaskStatus),
     Notion(NotionTaskStatus),
+    ClickUp(ClickUpTaskStatus),
 }
 
 impl ProjectMgmtTaskStatus {
@@ -28,6 +30,7 @@ impl ProjectMgmtTaskStatus {
             ProjectMgmtTaskStatus::None => "—".to_string(),
             ProjectMgmtTaskStatus::Asana(s) => s.format_short(),
             ProjectMgmtTaskStatus::Notion(s) => s.format_short(),
+            ProjectMgmtTaskStatus::ClickUp(s) => s.format_short(),
         }
     }
 
@@ -39,6 +42,7 @@ impl ProjectMgmtTaskStatus {
         match self {
             ProjectMgmtTaskStatus::Asana(s) => s.gid(),
             ProjectMgmtTaskStatus::Notion(s) => s.page_id(),
+            ProjectMgmtTaskStatus::ClickUp(s) => s.id(),
             ProjectMgmtTaskStatus::None => None,
         }
     }
@@ -47,6 +51,7 @@ impl ProjectMgmtTaskStatus {
         match self {
             ProjectMgmtTaskStatus::Asana(s) => s.name(),
             ProjectMgmtTaskStatus::Notion(s) => s.name(),
+            ProjectMgmtTaskStatus::ClickUp(s) => s.name(),
             ProjectMgmtTaskStatus::None => None,
         }
     }
@@ -55,6 +60,7 @@ impl ProjectMgmtTaskStatus {
         match self {
             ProjectMgmtTaskStatus::Asana(s) => s.url(),
             ProjectMgmtTaskStatus::Notion(s) => s.url(),
+            ProjectMgmtTaskStatus::ClickUp(s) => s.url(),
             ProjectMgmtTaskStatus::None => None,
         }
     }
@@ -73,6 +79,13 @@ impl ProjectMgmtTaskStatus {
         )
     }
 
+    pub fn is_clickup_not_started(&self) -> bool {
+        matches!(
+            self,
+            ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::NotStarted { .. })
+        )
+    }
+
     pub fn as_asana(&self) -> Option<&AsanaTaskStatus> {
         match self {
             ProjectMgmtTaskStatus::Asana(s) => Some(s),
@@ -83,6 +96,13 @@ impl ProjectMgmtTaskStatus {
     pub fn as_notion(&self) -> Option<&NotionTaskStatus> {
         match self {
             ProjectMgmtTaskStatus::Notion(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_clickup(&self) -> Option<&ClickUpTaskStatus> {
+        match self {
+            ProjectMgmtTaskStatus::ClickUp(s) => Some(s),
             _ => None,
         }
     }

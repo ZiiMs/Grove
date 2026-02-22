@@ -27,6 +27,7 @@ use grove::app::{
     ToastLevel,
 };
 use grove::asana::{AsanaTaskStatus, OptionalAsanaClient};
+use grove::clickup::{parse_clickup_task_id, ClickUpTaskStatus, OptionalClickUpClient};
 use grove::codeberg::OptionalCodebergClient;
 use grove::devserver::DevServerManager;
 use grove::git::{GitSync, Worktree};
@@ -422,6 +423,19 @@ async fn main() -> Result<()> {
         config.notion.cache_ttl_secs,
     ));
 
+    let clickup_list_id = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .clickup
+        .list_id
+        .clone();
+    let clickup_client = Arc::new(OptionalClickUpClient::new(
+        Config::clickup_token().as_deref(),
+        clickup_list_id,
+        config.clickup.cache_ttl_secs,
+    ));
+
     let pm_provider = state.settings.repo_config.project_mgmt.provider;
 
     let initial_asana_tasks: Vec<(Uuid, String)> = state
@@ -480,6 +494,35 @@ async fn main() -> Result<()> {
         state.log_info("Notion integration enabled".to_string());
     } else {
         state.log_debug("Notion not configured (set NOTION_TOKEN and database_id)".to_string());
+    }
+
+    let initial_clickup_tasks: Vec<(Uuid, String)> = state
+        .agents
+        .values()
+        .filter_map(|a| {
+            a.pm_task_status
+                .as_clickup()
+                .and_then(|s| s.id().map(|id| (a.id, id.to_string())))
+        })
+        .collect();
+    let (clickup_watch_tx, clickup_watch_rx) = watch::channel(initial_clickup_tasks);
+
+    if clickup_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Clickup) {
+        let clickup_poll_tx = action_tx.clone();
+        let clickup_client_clone = Arc::clone(&clickup_client);
+        let refresh_secs = config.clickup.refresh_secs;
+        tokio::spawn(async move {
+            poll_clickup_tasks(
+                clickup_watch_rx,
+                clickup_client_clone,
+                clickup_poll_tx,
+                refresh_secs,
+            )
+            .await;
+        });
+        state.log_info("ClickUp integration enabled".to_string());
+    } else {
+        state.log_debug("ClickUp not configured (set CLICKUP_TOKEN and list_id)".to_string());
     }
 
     // Main event loop
@@ -682,6 +725,7 @@ async fn main() -> Result<()> {
                 &codeberg_client,
                 &asana_client,
                 &notion_client,
+                &clickup_client,
                 &storage,
                 &action_tx,
                 &agent_watch_tx,
@@ -689,6 +733,7 @@ async fn main() -> Result<()> {
                 &selected_watch_tx,
                 &asana_watch_tx,
                 &notion_watch_tx,
+                &clickup_watch_tx,
                 &devserver_manager,
             )
             .await
@@ -1187,6 +1232,15 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
 fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
     use grove::app::DropdownState;
 
+    // Handle reset confirmation mode
+    if state.settings.reset_confirmation.is_some() {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCancelReset),
+            KeyCode::Enter => Some(Action::SettingsConfirmReset),
+            _ => None,
+        };
+    }
+
     // Handle prompt editing mode (multi-line text editor)
     if state.settings.editing_prompt {
         return match key.code {
@@ -1317,11 +1371,20 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
         KeyCode::Enter => {
-            let field = state.settings.current_field();
-            if field.is_keybind_field() {
-                Some(Action::SettingsStartKeybindCapture)
+            if let Some(btn) = state.settings.current_action_button() {
+                use grove::app::ActionButtonType;
+                let reset_type = match btn {
+                    ActionButtonType::ResetTab => grove::app::ResetType::CurrentTab,
+                    ActionButtonType::ResetAll => grove::app::ResetType::AllSettings,
+                };
+                Some(Action::SettingsRequestReset { reset_type })
             } else {
-                Some(Action::SettingsSelectField)
+                let field = state.settings.current_field();
+                if field.is_keybind_field() {
+                    Some(Action::SettingsStartKeybindCapture)
+                } else {
+                    Some(Action::SettingsSelectField)
+                }
             }
         }
         _ => None,
@@ -1339,6 +1402,7 @@ async fn process_action(
     codeberg_client: &Arc<OptionalCodebergClient>,
     asana_client: &Arc<OptionalAsanaClient>,
     notion_client: &Arc<OptionalNotionClient>,
+    clickup_client: &Arc<OptionalClickUpClient>,
     _storage: &SessionStorage,
     action_tx: &mpsc::UnboundedSender<Action>,
     agent_watch_tx: &watch::Sender<HashSet<Uuid>>,
@@ -1346,6 +1410,7 @@ async fn process_action(
     selected_watch_tx: &watch::Sender<Option<Uuid>>,
     asana_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     notion_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
+    clickup_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     devserver_manager: &Arc<tokio::sync::Mutex<DevServerManager>>,
 ) -> Result<bool> {
     match action {
@@ -1418,6 +1483,15 @@ async fn process_action(
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
                                     status_option_id: String::new(),
+                                })
+                            }
+                            ProjectMgmtProvider::Clickup => {
+                                ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::NotStarted {
+                                    id: task_item.id.clone(),
+                                    name: task_item.name.clone(),
+                                    url: task_item.url.clone(),
+                                    status: task_item.status_name.clone(),
+                                    is_subtask: task_item.is_subtask(),
                                 })
                             }
                         };
@@ -2227,6 +2301,46 @@ async fn process_action(
                         }
                     });
                 }
+                ProjectMgmtProvider::Clickup => {
+                    let task_id = parse_clickup_task_id(&url_or_id);
+                    let client = Arc::clone(clickup_client);
+                    let tx = action_tx.clone();
+                    tokio::spawn(async move {
+                        match client.get_task(&task_id).await {
+                            Ok(task) => {
+                                let url = task.url.clone().unwrap_or_default();
+                                let is_subtask = task.parent.is_some();
+                                let status = if task.status.status_type == "closed" {
+                                    ClickUpTaskStatus::Completed {
+                                        id: task.id,
+                                        name: task.name,
+                                        is_subtask,
+                                    }
+                                } else {
+                                    ClickUpTaskStatus::NotStarted {
+                                        id: task.id,
+                                        name: task.name,
+                                        url,
+                                        status: task.status.status,
+                                        is_subtask,
+                                    }
+                                };
+                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                    id,
+                                    status: ProjectMgmtTaskStatus::ClickUp(status),
+                                });
+                            }
+                            Err(e) => {
+                                let status =
+                                    ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::Error {
+                                        id: task_id,
+                                        message: e.to_string(),
+                                    });
+                                let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                            }
+                        }
+                    });
+                }
             }
         }
 
@@ -2262,6 +2376,21 @@ async fn process_action(
                     }
                     NotionTaskStatus::None => None,
                 },
+                ProjectMgmtTaskStatus::ClickUp(s) => match s {
+                    ClickUpTaskStatus::NotStarted { name, .. } => {
+                        Some(format!("ClickUp task '{}' linked", name))
+                    }
+                    ClickUpTaskStatus::InProgress { name, .. } => {
+                        Some(format!("ClickUp task '{}' in progress", name))
+                    }
+                    ClickUpTaskStatus::Completed { name, .. } => {
+                        Some(format!("ClickUp task '{}' completed", name))
+                    }
+                    ClickUpTaskStatus::Error { message, .. } => {
+                        Some(format!("ClickUp error: {}", message))
+                    }
+                    ClickUpTaskStatus::None => None,
+                },
                 ProjectMgmtTaskStatus::None => None,
             };
             if let Some(agent) = state.agents.get_mut(&id) {
@@ -2291,6 +2420,16 @@ async fn process_action(
                 })
                 .collect();
             let _ = notion_watch_tx.send(notion_tasks);
+            let clickup_tasks: Vec<(Uuid, String)> = state
+                .agents
+                .values()
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_clickup()
+                        .and_then(|s| s.id().map(|id| (a.id, id.to_string())))
+                })
+                .collect();
+            let _ = clickup_watch_tx.send(clickup_tasks);
         }
 
         Action::CycleTaskStatus { id } => {
@@ -2433,6 +2572,145 @@ async fn process_action(
                         }
                         AsanaTaskStatus::Error { .. } | AsanaTaskStatus::None => {}
                     },
+                    ProjectMgmtTaskStatus::ClickUp(clickup_status) => match clickup_status {
+                        ClickUpTaskStatus::NotStarted {
+                            id: task_id,
+                            name,
+                            url,
+                            status,
+                            is_subtask,
+                        } => {
+                            let task_id = task_id.clone();
+                            let name = name.clone();
+                            let url = url.clone();
+                            let status = status.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::InProgress {
+                                        id: task_id.clone(),
+                                        name: name.clone(),
+                                        url: url.clone(),
+                                        status: status.clone(),
+                                        is_subtask,
+                                    });
+                            }
+                            let client = Arc::clone(clickup_client);
+                            let override_status = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .clickup
+                                .in_progress_status
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client
+                                    .move_to_in_progress(&task_id, override_status.as_deref())
+                                    .await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::ClickUp(
+                                            ClickUpTaskStatus::Error {
+                                                id: task_id,
+                                                message: format!(
+                                                    "Failed to move to In Progress: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("ClickUp task '{}' → In Progress", name));
+                        }
+                        ClickUpTaskStatus::InProgress {
+                            id: task_id,
+                            name,
+                            is_subtask,
+                            ..
+                        } => {
+                            let task_id = task_id.clone();
+                            let name = name.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::Completed {
+                                        id: task_id.clone(),
+                                        name: name.clone(),
+                                        is_subtask,
+                                    });
+                            }
+                            let client = Arc::clone(clickup_client);
+                            let done_status = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .clickup
+                                .done_status
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    client.move_to_done(&task_id, done_status.as_deref()).await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::ClickUp(
+                                            ClickUpTaskStatus::Error {
+                                                id: task_id,
+                                                message: format!("Failed to complete task: {}", e),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("ClickUp task '{}' → Done", name));
+                        }
+                        ClickUpTaskStatus::Completed {
+                            id: task_id,
+                            name,
+                            is_subtask,
+                        } => {
+                            let task_id = task_id.clone();
+                            let name = name.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::NotStarted {
+                                        id: task_id.clone(),
+                                        name: name.clone(),
+                                        url: String::new(),
+                                        status: String::new(),
+                                        is_subtask,
+                                    });
+                            }
+                            let client = Arc::clone(clickup_client);
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client.move_to_not_started(&task_id, None).await {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::ClickUp(
+                                            ClickUpTaskStatus::Error {
+                                                id: task_id,
+                                                message: format!(
+                                                    "Failed to uncomplete task: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("ClickUp task '{}' → Not Started", name));
+                        }
+                        ClickUpTaskStatus::Error { .. } | ClickUpTaskStatus::None => {}
+                    },
                     ProjectMgmtTaskStatus::Notion(_) | ProjectMgmtTaskStatus::None => {}
                 }
             }
@@ -2544,6 +2822,49 @@ async fn process_action(
                             });
                         }
                     }
+                    ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
+                        if !clickup_client.is_configured() {
+                            state.show_error(
+                                "ClickUp not configured. Set CLICKUP_TOKEN and list_id.",
+                            );
+                            return Ok(false);
+                        }
+                        if clickup_status.id().is_none() {
+                            state.show_error("No ClickUp task linked to this agent");
+                            return Ok(false);
+                        }
+
+                        // ClickUp subtasks use the same statuses as parent tasks
+                        let agent_id = id;
+                        let client = Arc::clone(clickup_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading statuses...".to_string());
+                        tokio::spawn(async move {
+                            match client.get_statuses().await {
+                                Ok(statuses) => {
+                                    let options: Vec<StatusOption> = statuses
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.status.clone(),
+                                            name: s.status,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                        id: agent_id,
+                                        options,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load ClickUp statuses: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load statuses: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
                     ProjectMgmtTaskStatus::None => {}
                 }
             }
@@ -2604,6 +2925,7 @@ async fn process_action(
         Action::TaskStatusDropdownSelect => {
             tracing::info!("TaskStatusDropdownSelect triggered");
             let dropdown = state.task_status_dropdown.take();
+            let subtask_dropdown = state.subtask_status_dropdown.take();
             state.exit_input_mode();
             if let Some(dropdown) = dropdown {
                 let agent_id = dropdown.agent_id;
@@ -2611,6 +2933,65 @@ async fn process_action(
                 {
                     let option_id = selected_option.id.clone();
                     let option_name = selected_option.name.clone();
+
+                    // Check if this is a ClickUp subtask from the task list (nil UUID)
+                    if agent_id == Uuid::nil() {
+                        if let Some(subtask) = subtask_dropdown {
+                            let task_id = subtask.task_id.clone();
+                            let status_name = option_name.clone();
+                            let task_id_for_spawn = task_id.clone();
+                            let status_name_for_spawn = status_name.clone();
+
+                            let client = Arc::clone(clickup_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Updating subtask status...".to_string());
+
+                            tokio::spawn(async move {
+                                match client
+                                    .update_task_status(&task_id_for_spawn, &status_name_for_spawn)
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowToast {
+                                            message: format!("Subtask → {}", status_name_for_spawn),
+                                            level: ToastLevel::Success,
+                                        });
+                                        let _ = tx.send(Action::RefreshTaskList);
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to update subtask: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+
+                            // Update local state
+                            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id)
+                            {
+                                let lower = status_name.to_lowercase();
+                                task.status_name = status_name.clone();
+                                task.status = if lower.contains("done")
+                                    || lower.contains("complete")
+                                    || lower.contains("closed")
+                                {
+                                    task.completed = true;
+                                    TaskItemStatus::Completed
+                                } else if lower.contains("progress") {
+                                    task.completed = false;
+                                    TaskItemStatus::InProgress
+                                } else {
+                                    task.completed = false;
+                                    TaskItemStatus::NotStarted
+                                };
+                            }
+                            state.show_success(format!("Subtask → {}", status_name));
+                        }
+                        return Ok(false);
+                    }
 
                     if let Some(agent) = state.agents.get(&agent_id) {
                         match &agent.pm_task_status {
@@ -2749,6 +3130,69 @@ async fn process_action(
                                     state.show_success(format!("Task → {}", option_name));
                                 }
                             }
+                            ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
+                                if let Some(task_id_str) = clickup_status.id() {
+                                    let task_id = task_id_str.to_string();
+                                    let task_name = match clickup_status {
+                                        ClickUpTaskStatus::NotStarted { name, .. } => name.clone(),
+                                        ClickUpTaskStatus::InProgress { name, .. } => name.clone(),
+                                        ClickUpTaskStatus::Completed { name, .. } => name.clone(),
+                                        ClickUpTaskStatus::Error { .. } => "Task".to_string(),
+                                        ClickUpTaskStatus::None => "Task".to_string(),
+                                    };
+                                    let is_subtask = clickup_status.is_subtask();
+                                    let client = Arc::clone(clickup_client);
+                                    let agent_id_clone = agent_id;
+                                    let new_status_name = option_name.clone();
+
+                                    let is_done = new_status_name.to_lowercase().contains("done")
+                                        || new_status_name.to_lowercase().contains("complete")
+                                        || new_status_name.to_lowercase().contains("closed");
+                                    let is_in_progress =
+                                        new_status_name.to_lowercase().contains("progress");
+
+                                    let new_status = if is_done {
+                                        ProjectMgmtTaskStatus::ClickUp(
+                                            ClickUpTaskStatus::Completed {
+                                                id: task_id.clone(),
+                                                name: task_name.clone(),
+                                                is_subtask,
+                                            },
+                                        )
+                                    } else if is_in_progress {
+                                        ProjectMgmtTaskStatus::ClickUp(
+                                            ClickUpTaskStatus::InProgress {
+                                                id: task_id.clone(),
+                                                name: task_name.clone(),
+                                                url: String::new(),
+                                                status: new_status_name.clone(),
+                                                is_subtask,
+                                            },
+                                        )
+                                    } else {
+                                        ProjectMgmtTaskStatus::ClickUp(
+                                            ClickUpTaskStatus::NotStarted {
+                                                id: task_id.clone(),
+                                                name: task_name.clone(),
+                                                url: String::new(),
+                                                status: new_status_name.clone(),
+                                                is_subtask,
+                                            },
+                                        )
+                                    };
+
+                                    tokio::spawn(async move {
+                                        let _ = client
+                                            .update_task_status(&task_id, &new_status_name)
+                                            .await;
+                                    });
+
+                                    if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
+                                        agent.pm_task_status = new_status;
+                                    }
+                                    state.show_success(format!("Task → {}", option_name));
+                                }
+                            }
                             ProjectMgmtTaskStatus::None => {}
                         }
                     }
@@ -2822,6 +3266,23 @@ async fn process_action(
                             state.log_info("Moving Notion task to Done".to_string());
                         }
                     }
+                    ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
+                        if let Some(task_id) = clickup_status.id() {
+                            let tid = task_id.to_string();
+                            let client = Arc::clone(clickup_client);
+                            let done_status = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .clickup
+                                .done_status
+                                .clone();
+                            tokio::spawn(async move {
+                                let _ = client.move_to_done(&tid, done_status.as_deref()).await;
+                            });
+                            state.log_info("Moving ClickUp task to Done".to_string());
+                        }
+                    }
                     ProjectMgmtTaskStatus::None => {}
                 }
             }
@@ -2834,6 +3295,7 @@ async fn process_action(
             match provider {
                 ProjectMgmtProvider::Asana => asana_client.invalidate_cache().await,
                 ProjectMgmtProvider::Notion => notion_client.invalidate_cache().await,
+                ProjectMgmtProvider::Clickup => clickup_client.invalidate_cache().await,
             }
             state.task_list_loading = true;
             let _ = action_tx.send(Action::FetchTaskList);
@@ -2843,6 +3305,7 @@ async fn process_action(
             let provider = state.settings.repo_config.project_mgmt.provider;
             let asana_client = Arc::clone(asana_client);
             let notion_client = Arc::clone(notion_client);
+            let clickup_client = Arc::clone(clickup_client);
             let tx = action_tx.clone();
             tokio::spawn(async move {
                 let result = match provider {
@@ -2928,6 +3391,60 @@ async fn process_action(
                             Err(e) => Err(e.to_string()),
                         }
                     }
+                    ProjectMgmtProvider::Clickup => {
+                        match clickup_client.get_list_tasks_with_subtasks().await {
+                            Ok(tasks) => {
+                                let parent_ids: std::collections::HashSet<String> = tasks
+                                    .iter()
+                                    .filter_map(|t| t.parent_id.as_ref())
+                                    .cloned()
+                                    .collect();
+
+                                let mut items: Vec<TaskListItem> = tasks
+                                    .into_iter()
+                                    .filter(|t| {
+                                        if t.parent_id.is_some() {
+                                            true
+                                        } else {
+                                            t.status_type != "closed"
+                                        }
+                                    })
+                                    .map(|t| {
+                                        let status_name = t.status.clone();
+                                        let status =
+                                            if status_name.to_lowercase().contains("progress")
+                                                || status_name.to_lowercase().contains("review")
+                                            {
+                                                TaskItemStatus::InProgress
+                                            } else if status_name.to_lowercase().contains("done")
+                                                || status_name.to_lowercase().contains("complete")
+                                                || status_name.to_lowercase().contains("closed")
+                                            {
+                                                TaskItemStatus::Completed
+                                            } else {
+                                                TaskItemStatus::NotStarted
+                                            };
+                                        let completed =
+                                            t.status_type == "closed" || t.status_type == "done";
+                                        let has_children = parent_ids.contains(&t.id);
+                                        TaskListItem {
+                                            id: t.id,
+                                            name: t.name,
+                                            status,
+                                            status_name,
+                                            url: t.url.unwrap_or_default(),
+                                            parent_id: t.parent_id,
+                                            has_children,
+                                            completed,
+                                        }
+                                    })
+                                    .collect();
+                                sort_tasks_by_parent(&mut items);
+                                Ok(items)
+                            }
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
                 };
                 match result {
                     Ok(tasks) => {
@@ -3002,16 +3519,141 @@ async fn process_action(
         Action::ToggleSubtaskStatus => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
                 if task.is_subtask() {
-                    state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
-                        task_id: task.id.clone(),
-                        task_name: task.name.clone(),
-                        current_completed: task.completed,
-                        selected_index: if task.completed { 1 } else { 0 },
-                    });
-                    state.input_mode = Some(InputMode::SelectSubtaskStatus);
+                    let provider = state.settings.repo_config.project_mgmt.provider;
+
+                    // ClickUp subtasks use the same statuses as parent tasks
+                    if matches!(provider, ProjectMgmtProvider::Clickup) {
+                        if !clickup_client.is_configured() {
+                            state.show_error(
+                                "ClickUp not configured. Set CLICKUP_TOKEN and list_id.",
+                            );
+                            return Ok(false);
+                        }
+
+                        // Store the task info temporarily and load statuses
+                        let task_id_for_dropdown = task.id.clone();
+                        let client = Arc::clone(clickup_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading statuses...".to_string());
+
+                        tokio::spawn(async move {
+                            match client.get_statuses().await {
+                                Ok(statuses) => {
+                                    let options: Vec<StatusOption> = statuses
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.status.clone(),
+                                            name: s.status,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                        task_id: task_id_for_dropdown,
+                                        task_name: task.name.clone(),
+                                        options,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load ClickUp statuses: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load statuses: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    } else {
+                        // Asana/Notion subtasks use simple complete/incomplete toggle
+                        state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
+                            task_id: task.id.clone(),
+                            task_name: task.name.clone(),
+                            current_completed: task.completed,
+                            selected_index: if task.completed { 1 } else { 0 },
+                        });
+                        state.input_mode = Some(InputMode::SelectSubtaskStatus);
+                    }
                 } else {
                     state.show_warning("Status toggle only available for subtasks");
                 }
+            }
+        }
+
+        Action::SubtaskStatusOptionsLoaded {
+            task_id,
+            task_name,
+            options,
+        } => {
+            state.loading_message = None;
+            if !options.is_empty() {
+                state.task_status_dropdown = Some(TaskStatusDropdownState {
+                    agent_id: Uuid::nil(), // Using nil UUID to indicate this is for a subtask
+                    status_options: options,
+                    selected_index: 0,
+                });
+                // Store task info for later use
+                state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
+                    task_id,
+                    task_name,
+                    current_completed: false, // Not used for ClickUp
+                    selected_index: 0,
+                });
+                state.input_mode = Some(InputMode::SelectTaskStatus);
+            } else {
+                state.show_warning("No status options found");
+            }
+        }
+
+        Action::SubtaskStatusOptionSelected {
+            task_id,
+            status_name,
+        } => {
+            let client = Arc::clone(clickup_client);
+            let tx = action_tx.clone();
+            let status_name_for_spawn = status_name.clone();
+            let task_id_for_spawn = task_id.clone();
+            state.loading_message = Some("Updating subtask status...".to_string());
+
+            tokio::spawn(async move {
+                match client
+                    .update_task_status(&task_id_for_spawn, &status_name_for_spawn)
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = tx.send(Action::SetLoading(None));
+                        let _ = tx.send(Action::ShowToast {
+                            message: format!("Subtask → {}", status_name_for_spawn),
+                            level: ToastLevel::Success,
+                        });
+                        // Trigger a refresh of the task list
+                        let _ = tx.send(Action::RefreshTaskList);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Action::SetLoading(None));
+                        let _ = tx.send(Action::ShowError(format!(
+                            "Failed to update subtask: {}",
+                            e
+                        )));
+                    }
+                }
+            });
+
+            // Update local state
+            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id) {
+                let lower = status_name.to_lowercase();
+                task.status_name = status_name.clone();
+                task.status = if lower.contains("done")
+                    || lower.contains("complete")
+                    || lower.contains("closed")
+                {
+                    task.completed = true;
+                    TaskItemStatus::Completed
+                } else if lower.contains("progress") {
+                    task.completed = false;
+                    TaskItemStatus::InProgress
+                } else {
+                    task.completed = false;
+                    TaskItemStatus::NotStarted
+                };
             }
         }
 
@@ -3148,6 +3790,15 @@ async fn process_action(
                                         name: task.name.clone(),
                                         url: task.url.clone(),
                                         status_option_id: String::new(),
+                                    })
+                                }
+                                ProjectMgmtProvider::Clickup => {
+                                    ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::NotStarted {
+                                        id: task.id.clone(),
+                                        name: task.name.clone(),
+                                        url: task.url.clone(),
+                                        status: task.status_name.clone(),
+                                        is_subtask: task.is_subtask(),
                                     })
                                 }
                             };
@@ -3562,6 +4213,38 @@ async fn process_action(
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
                                         id,
                                         status: ProjectMgmtTaskStatus::Notion(status),
+                                    });
+                                }
+                            });
+                        }
+                    }
+                    ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
+                        if let Some(task_id) = clickup_status.id() {
+                            let clickup_client_clone = Arc::clone(clickup_client);
+                            let tx_clone = action_tx.clone();
+                            let tid = task_id.to_string();
+                            tokio::spawn(async move {
+                                if let Ok(task) = clickup_client_clone.get_task(&tid).await {
+                                    let url = task.url.clone().unwrap_or_default();
+                                    let is_subtask = task.parent.is_some();
+                                    let status = if task.status.status_type == "closed" {
+                                        ClickUpTaskStatus::Completed {
+                                            id: task.id,
+                                            name: task.name,
+                                            is_subtask,
+                                        }
+                                    } else {
+                                        ClickUpTaskStatus::InProgress {
+                                            id: task.id,
+                                            name: task.name,
+                                            url,
+                                            status: task.status.status,
+                                            is_subtask,
+                                        }
+                                    };
+                                    let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
+                                        id,
+                                        status: ProjectMgmtTaskStatus::ClickUp(status),
                                     });
                                 }
                             });
@@ -4054,6 +4737,39 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                grove::app::SettingsField::ClickUpListId => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .clickup
+                        .list_id
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::ClickUpInProgressStatus => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .clickup
+                        .in_progress_status
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::ClickUpDoneStatus => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .clickup
+                        .done_status
+                        .clone()
+                        .unwrap_or_default();
+                }
                 grove::app::SettingsField::DevServerCommand => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
@@ -4249,6 +4965,25 @@ async fn process_action(
                         state.settings.repo_config.project_mgmt.notion.done_option =
                             if val.is_empty() { None } else { Some(val) };
                     }
+                    grove::app::SettingsField::ClickUpListId => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.clickup.list_id =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::ClickUpInProgressStatus => {
+                        let val = state.settings.text_buffer.clone();
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .clickup
+                            .in_progress_status = if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::ClickUpDoneStatus => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.clickup.done_status =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
                     grove::app::SettingsField::Editor => {
                         state.settings.pending_editor = state.settings.text_buffer.clone();
                     }
@@ -4416,6 +5151,68 @@ async fn process_action(
 
         Action::SettingsCancelKeybindCapture => {
             state.settings.capturing_keybind = None;
+        }
+
+        Action::SettingsRequestReset { reset_type } => {
+            state.settings.reset_confirmation = Some(reset_type);
+        }
+
+        Action::SettingsConfirmReset => {
+            if let Some(reset_type) = state.settings.reset_confirmation {
+                match reset_type {
+                    grove::app::ResetType::CurrentTab => {
+                        state.settings.reset_current_tab();
+                    }
+                    grove::app::ResetType::AllSettings => {
+                        state.settings.reset_all();
+                    }
+                }
+                state.settings.reset_confirmation = None;
+
+                let old_provider = state.settings.repo_config.project_mgmt.provider;
+
+                state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
+                state.config.global.editor = state.settings.pending_editor.clone();
+                state.config.global.log_level = state.settings.pending_log_level;
+                state.config.global.worktree_location = state.settings.pending_worktree_location;
+                state.config.ui = state.settings.pending_ui.clone();
+                state.config.keybinds = state.settings.pending_keybinds.clone();
+
+                if let Err(e) = state.config.save() {
+                    state.log_error(format!("Failed to save config: {}", e));
+                }
+
+                if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                    state.log_error(format!("Failed to save repo config: {}", e));
+                }
+
+                let new_provider = state.settings.repo_config.project_mgmt.provider;
+                if old_provider != new_provider {
+                    state.task_list.clear();
+                    state.task_list_loading = true;
+                    let _ = action_tx.send(Action::FetchTaskList);
+                }
+
+                state.show_logs = state.config.ui.show_logs;
+                state.worktree_base = state.config.worktree_base_path(&state.repo_path);
+                state.settings.active = false;
+
+                match reset_type {
+                    grove::app::ResetType::CurrentTab => {
+                        state.log_info(format!(
+                            "{} settings reset to defaults",
+                            state.settings.tab.display_name()
+                        ));
+                    }
+                    grove::app::ResetType::AllSettings => {
+                        state.log_info("All settings reset to defaults");
+                    }
+                }
+            }
+        }
+
+        Action::SettingsCancelReset => {
+            state.settings.reset_confirmation = None;
         }
 
         // File Browser Actions
@@ -5492,6 +6289,47 @@ async fn poll_notion_tasks(
                 }
                 Err(e) => {
                     tracing::warn!("Failed to poll Notion page {}: {}", page_id, e);
+                }
+            }
+        }
+    }
+}
+
+/// Background task to poll ClickUp for task status updates.
+async fn poll_clickup_tasks(
+    clickup_rx: watch::Receiver<Vec<(Uuid, String)>>,
+    clickup_client: Arc<OptionalClickUpClient>,
+    tx: mpsc::UnboundedSender<Action>,
+    refresh_secs: u64,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(refresh_secs)).await;
+
+        let tasks = clickup_rx.borrow().clone();
+        for (id, task_id) in tasks {
+            match clickup_client.get_task(&task_id).await {
+                Ok(task) => {
+                    let url = task.url.clone().unwrap_or_default();
+                    let is_subtask = task.parent.is_some();
+                    let status = if task.status.status_type == "closed" {
+                        ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::Completed {
+                            id: task.id,
+                            name: task.name,
+                            is_subtask,
+                        })
+                    } else {
+                        ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::InProgress {
+                            id: task.id,
+                            name: task.name,
+                            url,
+                            status: task.status.status,
+                            is_subtask,
+                        })
+                    };
+                    let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to poll ClickUp task {}: {}", task_id, e);
                 }
             }
         }

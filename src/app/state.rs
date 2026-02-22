@@ -117,6 +117,9 @@ pub enum SettingsField {
     NotionStatusProperty,
     NotionInProgressOption,
     NotionDoneOption,
+    ClickUpListId,
+    ClickUpInProgressStatus,
+    ClickUpDoneStatus,
     SummaryPrompt,
     MergePrompt,
     PushPrompt,
@@ -165,6 +168,7 @@ pub enum SettingsCategory {
     ProjectMgmt,
     Asana,
     Notion,
+    Clickup,
     Prompts,
     DevServer,
     KeybindNav,
@@ -172,6 +176,27 @@ pub enum SettingsCategory {
     KeybindGit,
     KeybindExternal,
     KeybindOther,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionButtonType {
+    ResetTab,
+    ResetAll,
+}
+
+impl ActionButtonType {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ActionButtonType::ResetTab => "Reset Tab to Defaults",
+            ActionButtonType::ResetAll => "Reset All Settings",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResetType {
+    CurrentTab,
+    AllSettings,
 }
 
 impl SettingsCategory {
@@ -186,6 +211,7 @@ impl SettingsCategory {
             SettingsCategory::ProjectMgmt => "Project Mgmt",
             SettingsCategory::Asana => "Asana",
             SettingsCategory::Notion => "Notion",
+            SettingsCategory::Clickup => "ClickUp",
             SettingsCategory::Prompts => "Prompts",
             SettingsCategory::DevServer => "Dev Server",
             SettingsCategory::KeybindNav => "Navigation",
@@ -201,6 +227,7 @@ impl SettingsCategory {
 pub enum SettingsItem {
     Category(SettingsCategory),
     Field(SettingsField),
+    ActionButton(ActionButtonType),
 }
 
 impl SettingsField {
@@ -235,7 +262,10 @@ impl SettingsField {
             | SettingsField::NotionDatabaseId
             | SettingsField::NotionStatusProperty
             | SettingsField::NotionInProgressOption
-            | SettingsField::NotionDoneOption => SettingsTab::ProjectMgmt,
+            | SettingsField::NotionDoneOption
+            | SettingsField::ClickUpListId
+            | SettingsField::ClickUpInProgressStatus
+            | SettingsField::ClickUpDoneStatus => SettingsTab::ProjectMgmt,
             SettingsField::DevServerCommand
             | SettingsField::DevServerRunBefore
             | SettingsField::DevServerWorkingDir
@@ -369,6 +399,8 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::ShowMetrics),
                 SettingsItem::Field(SettingsField::ShowLogs),
                 SettingsItem::Field(SettingsField::ShowBanner),
+                SettingsItem::ActionButton(ActionButtonType::ResetTab),
+                SettingsItem::ActionButton(ActionButtonType::ResetAll),
             ],
             SettingsTab::Git => {
                 let mut items = vec![
@@ -395,6 +427,7 @@ impl SettingsItem {
                 items.push(SettingsItem::Category(SettingsCategory::GitConfig));
                 items.push(SettingsItem::Field(SettingsField::BranchPrefix));
                 items.push(SettingsItem::Field(SettingsField::MainBranch));
+                items.push(SettingsItem::ActionButton(ActionButtonType::ResetTab));
                 items
             }
             SettingsTab::ProjectMgmt => {
@@ -416,7 +449,14 @@ impl SettingsItem {
                         items.push(SettingsItem::Field(SettingsField::NotionInProgressOption));
                         items.push(SettingsItem::Field(SettingsField::NotionDoneOption));
                     }
+                    ProjectMgmtProvider::Clickup => {
+                        items.push(SettingsItem::Category(SettingsCategory::Clickup));
+                        items.push(SettingsItem::Field(SettingsField::ClickUpListId));
+                        items.push(SettingsItem::Field(SettingsField::ClickUpInProgressStatus));
+                        items.push(SettingsItem::Field(SettingsField::ClickUpDoneStatus));
+                    }
                 }
+                items.push(SettingsItem::ActionButton(ActionButtonType::ResetTab));
                 items
             }
             SettingsTab::DevServer => vec![
@@ -427,6 +467,7 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::DevServerPort),
                 SettingsItem::Field(SettingsField::DevServerAutoStart),
                 SettingsItem::Field(SettingsField::WorktreeSymlinks),
+                SettingsItem::ActionButton(ActionButtonType::ResetTab),
             ],
             SettingsTab::Keybinds => vec![
                 SettingsItem::Category(SettingsCategory::KeybindNav),
@@ -461,16 +502,18 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::KbToggleHelp),
                 SettingsItem::Field(SettingsField::KbToggleSettings),
                 SettingsItem::Field(SettingsField::KbQuit),
+                SettingsItem::ActionButton(ActionButtonType::ResetTab),
             ],
         }
     }
 
-    pub fn navigable_items(items: &[SettingsItem]) -> Vec<(usize, SettingsField)> {
+    pub fn navigable_items(items: &[SettingsItem]) -> Vec<(usize, SettingsItem)> {
         items
             .iter()
             .enumerate()
             .filter_map(|(i, item)| match item {
-                SettingsItem::Field(f) => Some((i, *f)),
+                SettingsItem::Field(f) => Some((i, SettingsItem::Field(*f))),
+                SettingsItem::ActionButton(b) => Some((i, SettingsItem::ActionButton(*b))),
                 SettingsItem::Category(_) => None,
             })
             .collect()
@@ -524,6 +567,7 @@ pub struct SettingsState {
     pub capturing_keybind: Option<SettingsField>,
     pub keybind_conflicts: Vec<(String, String)>,
     pub file_browser: FileBrowserState,
+    pub reset_confirmation: Option<ResetType>,
 }
 
 impl Default for SettingsState {
@@ -547,6 +591,7 @@ impl Default for SettingsState {
             capturing_keybind: None,
             keybind_conflicts: Vec::new(),
             file_browser: FileBrowserState::default(),
+            reset_confirmation: None,
         }
     }
 }
@@ -560,16 +605,30 @@ impl SettingsState {
         )
     }
 
-    pub fn navigable_items(&self) -> Vec<(usize, SettingsField)> {
+    pub fn navigable_items(&self) -> Vec<(usize, SettingsItem)> {
         SettingsItem::navigable_items(&self.all_items())
     }
 
-    pub fn current_field(&self) -> SettingsField {
+    pub fn current_item(&self) -> SettingsItem {
         let navigable = self.navigable_items();
         navigable
             .get(self.field_index)
-            .map(|(_, f)| *f)
-            .unwrap_or(SettingsField::AiAgent)
+            .map(|(_, item)| *item)
+            .unwrap_or(SettingsItem::Field(SettingsField::AiAgent))
+    }
+
+    pub fn current_field(&self) -> SettingsField {
+        match self.current_item() {
+            SettingsItem::Field(f) => f,
+            _ => SettingsField::AiAgent,
+        }
+    }
+
+    pub fn current_action_button(&self) -> Option<ActionButtonType> {
+        match self.current_item() {
+            SettingsItem::ActionButton(btn) => Some(btn),
+            _ => None,
+        }
     }
 
     pub fn is_dropdown_open(&self) -> bool {
@@ -685,6 +744,50 @@ impl SettingsState {
 
     pub fn is_file_browser_active(&self) -> bool {
         self.file_browser.active
+    }
+
+    pub fn reset_general_defaults(&mut self) {
+        self.pending_ai_agent = AiAgent::default();
+        self.pending_editor = "code {path}".to_string();
+        self.pending_log_level = ConfigLogLevel::default();
+        self.pending_worktree_location = WorktreeLocation::default();
+        self.pending_ui = UiConfig::default();
+        self.repo_config.prompts = crate::app::config::PromptsConfig::default();
+    }
+
+    pub fn reset_git_defaults(&mut self) {
+        self.repo_config.git = crate::app::config::RepoGitConfig::default();
+    }
+
+    pub fn reset_project_mgmt_defaults(&mut self) {
+        self.repo_config.project_mgmt = crate::app::config::RepoProjectMgmtConfig::default();
+    }
+
+    pub fn reset_dev_server_defaults(&mut self) {
+        self.repo_config.dev_server = crate::app::config::DevServerConfig::default();
+    }
+
+    pub fn reset_keybinds_defaults(&mut self) {
+        self.pending_keybinds = Keybinds::default();
+        self.keybind_conflicts.clear();
+    }
+
+    pub fn reset_current_tab(&mut self) {
+        match self.tab {
+            SettingsTab::General => self.reset_general_defaults(),
+            SettingsTab::Git => self.reset_git_defaults(),
+            SettingsTab::ProjectMgmt => self.reset_project_mgmt_defaults(),
+            SettingsTab::DevServer => self.reset_dev_server_defaults(),
+            SettingsTab::Keybinds => self.reset_keybinds_defaults(),
+        }
+    }
+
+    pub fn reset_all(&mut self) {
+        self.reset_general_defaults();
+        self.reset_git_defaults();
+        self.reset_project_mgmt_defaults();
+        self.reset_dev_server_defaults();
+        self.reset_keybinds_defaults();
     }
 }
 

@@ -161,6 +161,15 @@ pub enum Action {
         task_id: String,
         completed: bool,
     },
+    SubtaskStatusOptionsLoaded {
+        task_id: String,
+        task_name: String,
+        options: Vec<crate::app::StatusOption>,
+    },
+    SubtaskStatusOptionSelected {
+        task_id: String,
+        status_name: String,
+    },
 
     ConfirmTaskReassignment,
     DismissTaskReassignmentWarning,
@@ -253,6 +262,13 @@ pub enum Action {
     FileBrowserSelectPrev,
     FileBrowserEnterDir,
     FileBrowserGoParent,
+
+    // Settings Reset
+    SettingsRequestReset {
+        reset_type: crate::app::state::ResetType,
+    },
+    SettingsConfirmReset,
+    SettingsCancelReset,
 
     // Global Setup Wizard
     GlobalSetupNextStep,
