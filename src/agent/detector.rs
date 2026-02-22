@@ -13,6 +13,8 @@ pub enum ForegroundProcess {
     ClaudeRunning,
     /// Opencode is alive (node, opencode, npx)
     OpencodeRunning,
+    /// Codex is alive (codex)
+    CodexRunning,
     /// At a shell prompt (bash, zsh, sh, fish, dash)
     Shell,
     /// AI agent spawned a subprocess (cargo, git, python, etc.)
@@ -32,9 +34,8 @@ impl ForegroundProcess {
             return match agent_type {
                 AiAgent::ClaudeCode => ForegroundProcess::ClaudeRunning,
                 AiAgent::Opencode => ForegroundProcess::OpencodeRunning,
-                AiAgent::Codex | AiAgent::Gemini => {
-                    ForegroundProcess::OtherProcess(binary.to_string())
-                }
+                AiAgent::Codex => ForegroundProcess::CodexRunning,
+                AiAgent::Gemini => ForegroundProcess::OtherProcess(binary.to_string()),
             };
         }
 
@@ -54,7 +55,9 @@ impl ForegroundProcess {
     pub fn is_agent_running(&self) -> bool {
         matches!(
             self,
-            ForegroundProcess::ClaudeRunning | ForegroundProcess::OpencodeRunning
+            ForegroundProcess::ClaudeRunning
+                | ForegroundProcess::OpencodeRunning
+                | ForegroundProcess::CodexRunning
         )
     }
 }
@@ -429,6 +432,7 @@ pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -
     match foreground {
         ForegroundProcess::ClaudeRunning => detect_status_claude_running(output),
         ForegroundProcess::OpencodeRunning => detect_status_opencode(output, foreground),
+        ForegroundProcess::CodexRunning => detect_status_codex(output, foreground),
         ForegroundProcess::Shell => detect_status_at_shell(output),
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown => detect_status(output),
@@ -555,7 +559,8 @@ pub fn detect_status_for_agent(
     match agent_type {
         AiAgent::ClaudeCode => detect_status_with_process(output, foreground),
         AiAgent::Opencode => detect_status_opencode(output, foreground),
-        AiAgent::Codex | AiAgent::Gemini => detect_status_with_process(output, foreground),
+        AiAgent::Codex => detect_status_codex(output, foreground),
+        AiAgent::Gemini => detect_status_with_process(output, foreground),
     }
 }
 
@@ -648,7 +653,116 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
         ForegroundProcess::OpencodeRunning => AgentStatus::Idle,
         ForegroundProcess::Shell => AgentStatus::Stopped,
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
-        ForegroundProcess::Unknown | ForegroundProcess::ClaudeRunning => {
+        ForegroundProcess::Unknown
+        | ForegroundProcess::ClaudeRunning
+        | ForegroundProcess::CodexRunning => {
+            if clean_output.trim().is_empty() {
+                AgentStatus::Stopped
+            } else {
+                AgentStatus::Idle
+            }
+        }
+    }
+}
+
+/// Pattern for Codex "Working" status line: "Working (Xs • esc to interrupt)"
+static CODEX_WORKING_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"working\s*\(\d+s.*esc\s+to\s+interrupt").unwrap());
+
+/// Pattern for Codex question panel: "Question X/X (X unanswered)"
+static CODEX_QUESTION_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"question\s+\d+/\d+\s*\(\d+\s+unanswered").unwrap());
+
+/// Status detection for Codex agent.
+/// Patterns: "Working (Xs • esc to interrupt)" = Running, "Question X/X (X unanswered)" = AwaitingInput
+fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+    let clean_output = strip_ansi(output);
+    let lines: Vec<&str> = clean_output.lines().collect();
+
+    if lines.is_empty() {
+        return AgentStatus::Stopped;
+    }
+
+    let full_lower = clean_output.to_lowercase();
+
+    // Also check last 10 lines for status indicators
+    let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
+    let last_10_text = last_10_lines.join("\n").to_lowercase();
+
+    // 1. Check for question panel (highest priority)
+    // Pattern: "Question 1/1 (1 unanswered)"
+    if CODEX_QUESTION_PATTERN.is_match(&full_lower) {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 2. Check for working indicator
+    // Pattern: "Working (1s • esc to interrupt)"
+    if CODEX_WORKING_PATTERN.is_match(&last_10_text) {
+        return AgentStatus::Running;
+    }
+
+    // 3. Check for generic "esc to interrupt" indicator
+    if last_10_text.contains("esc") && last_10_text.contains("interrupt") {
+        return AgentStatus::Running;
+    }
+
+    // 4. Check for spinner characters
+    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    let last_5_text = last_5_lines.join("\n");
+    if SPINNER_CHARS.is_match(&last_5_text) || OPENCODE_SPINNER_CHARS.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // 5. Check for errors
+    for pattern in ERROR_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            for line in lines.iter().rev().take(15) {
+                if pattern.is_match(line) {
+                    let msg = line.trim().chars().take(40).collect::<String>();
+                    return AgentStatus::Error(msg);
+                }
+            }
+            return AgentStatus::Error("Error detected".to_string());
+        }
+    }
+
+    // 6. Check for completion patterns
+    for pattern in COMPLETION_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            return AgentStatus::Completed;
+        }
+    }
+
+    // 7. Check for prompt character (› or >)
+    let is_at_prompt = lines.iter().rev().take(5).any(|line| {
+        let trimmed = line.trim();
+        trimmed == "›" || trimmed == ">" || trimmed.starts_with("›")
+    });
+
+    if is_at_prompt {
+        return AgentStatus::Idle;
+    }
+
+    // 8. Check for shell prompt (indicates AI has exited)
+    let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
+    let is_shell_prompt = last_line.len() <= 50
+        && (last_line.ends_with('$')
+            || last_line.ends_with('#')
+            || last_line == ">"
+            || last_line.starts_with("➜"));
+
+    if is_shell_prompt && foreground != ForegroundProcess::CodexRunning {
+        return AgentStatus::Stopped;
+    }
+
+    // 9. Process-based fallback
+    match foreground {
+        ForegroundProcess::CodexRunning => AgentStatus::Idle,
+        ForegroundProcess::Shell => AgentStatus::Stopped,
+        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::Unknown
+        | ForegroundProcess::ClaudeRunning
+        | ForegroundProcess::OpencodeRunning => {
             if clean_output.trim().is_empty() {
                 AgentStatus::Stopped
             } else {
@@ -999,5 +1113,107 @@ mod tests {
         let output = "Some output\n⠋ Reading file...";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(matches!(status, AgentStatus::Running));
+    }
+
+    // --- Codex tests ---
+
+    #[test]
+    fn test_codex_working_status() {
+        let output = "Some output\n\n• Working (1s • esc to interrupt)\n";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_working_longer_duration() {
+        let output = "Processing...\n\n• Working (45s • esc to interrupt)\n";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_question_awaiting_input() {
+        let output = "  Question 1/1 (1 unanswered)\n  How should I proceed?\n";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_multiple_questions() {
+        let output = "  Question 3/5 (2 unanswered)\n  Choose an option:\n";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_prompt_idle() {
+        let output = "Task complete.\n›";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_error() {
+        let output = "Error: something went wrong\n›";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Error(_)),
+            "Expected Error, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_foreground_process() {
+        assert_eq!(
+            ForegroundProcess::from_command_for_agent("codex", AiAgent::Codex),
+            ForegroundProcess::CodexRunning
+        );
+        assert_eq!(
+            ForegroundProcess::from_command_for_agent("/usr/bin/codex", AiAgent::Codex),
+            ForegroundProcess::CodexRunning
+        );
+    }
+
+    #[test]
+    fn test_codex_completion() {
+        let output = "✓ Done.\n›";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Completed),
+            "Expected Completed, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_shell_stopped() {
+        let output = "Some output\n$ ";
+        let status = detect_status_codex(output, ForegroundProcess::Shell);
+        assert!(
+            matches!(status, AgentStatus::Stopped),
+            "Expected Stopped, got {:?}",
+            status
+        );
     }
 }
