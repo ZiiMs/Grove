@@ -504,7 +504,13 @@ fn detect_status_other_process(output: &str) -> AgentStatus {
         return AgentStatus::Running;
     }
 
-    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    let last_5_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .cloned()
+        .collect();
     let last_5_text = last_5_lines.join("\n");
 
     for pattern in QUESTION_PATTERNS.iter() {
@@ -538,8 +544,14 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
         return AgentStatus::Running;
     }
 
-    // Narrow window: last 5 lines for question patterns (reduces false positives)
-    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    // Narrow window: last 5 non-empty lines for question patterns (reduces false positives)
+    let last_5_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .cloned()
+        .collect();
     let last_5_text = last_5_lines.join("\n");
 
     // 1. Check for questions/permission prompts (highest priority)
@@ -562,8 +574,14 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
         }
     }
 
-    // 3. Check last 3 lines for spinners/tool execution → Running
-    let last_3_lines: Vec<&str> = lines.iter().rev().take(3).cloned().collect();
+    // 3. Check last 3 non-empty lines for spinners/tool execution → Running
+    let last_3_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(3)
+        .cloned()
+        .collect();
     let last_3_text = last_3_lines.join("\n");
 
     if SPINNER_CHARS.is_match(&last_3_text) {
@@ -1389,6 +1407,17 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for exact trust dialog, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_trust_dialog_with_trailing_newlines() {
+        let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel\n\n\n\n\n\n";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for trust dialog with trailing newlines, got {:?}",
             status
         );
     }
