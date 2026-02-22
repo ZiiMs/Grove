@@ -699,8 +699,14 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
     // Use full output for question/permission detection (these can appear anywhere)
     let full_lower = clean_output.to_lowercase();
 
-    // Also check last 5 lines for working indicators (bottom of screen where status appears)
-    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    // Also check last 5 non-empty lines for working indicators (bottom of screen where status appears)
+    let last_5_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .cloned()
+        .collect();
     let last_5_text = last_5_lines.join("\n").to_lowercase();
 
     // 1. Check for permission panel (highest priority)
@@ -1129,6 +1135,39 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::Idle),
             "Expected Idle with plan mode footer, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_opencode_running_with_dots_spinner() {
+        let output = r#"  ┃  Let me create the file with varied paragraphs.
+
+     ~ Preparing write...
+
+     ▣  Build · MiniMax-M2.5
+
+  ┃
+  ┃
+  ┃                                                                                                                                                   ~/.grove/worktrees/test/
+  ┃  Build  MiniMax-M2.5 MiniMax Coding Plan                                                                                                          project
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt"#;
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running with dots spinner, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_opencode_running_with_dots_spinner_trailing_newlines() {
+        let output = "  ┃  Let me create the file.\n\n     ~ Preparing write...\n\n     ▣  Build · MiniMax-M2.5\n\n  ┃\n\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt\n\n\n\n\n";
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running with dots spinner and trailing newlines, got {:?}",
             status
         );
     }
