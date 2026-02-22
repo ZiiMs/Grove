@@ -21,6 +21,7 @@ use grove::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
     AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
 };
+use grove::airtable::{parse_airtable_record_id, AirtableTaskStatus, OptionalAirtableClient};
 use grove::app::{
     Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, StatusOption,
     SubtaskStatusDropdownState, TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast,
@@ -436,6 +437,35 @@ async fn main() -> Result<()> {
         config.clickup.cache_ttl_secs,
     ));
 
+    let airtable_base_id = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .airtable
+        .base_id
+        .clone();
+    let airtable_table_name = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .airtable
+        .table_name
+        .clone();
+    let airtable_status_field = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .airtable
+        .status_field_name
+        .clone();
+    let airtable_client = Arc::new(OptionalAirtableClient::new(
+        Config::airtable_token().as_deref(),
+        airtable_base_id,
+        airtable_table_name,
+        airtable_status_field,
+        config.airtable.cache_ttl_secs,
+    ));
+
     let pm_provider = state.settings.repo_config.project_mgmt.provider;
 
     let initial_asana_tasks: Vec<(Uuid, String)> = state
@@ -523,6 +553,37 @@ async fn main() -> Result<()> {
         state.log_info("ClickUp integration enabled".to_string());
     } else {
         state.log_debug("ClickUp not configured (set CLICKUP_TOKEN and list_id)".to_string());
+    }
+
+    let initial_airtable_tasks: Vec<(Uuid, String)> = state
+        .agents
+        .values()
+        .filter_map(|a| {
+            a.pm_task_status
+                .as_airtable()
+                .and_then(|s| s.id().map(|id| (a.id, id.to_string())))
+        })
+        .collect();
+    let (airtable_watch_tx, airtable_watch_rx) = watch::channel(initial_airtable_tasks);
+
+    if airtable_client.is_configured() && matches!(pm_provider, ProjectMgmtProvider::Airtable) {
+        let airtable_poll_tx = action_tx.clone();
+        let airtable_client_clone = Arc::clone(&airtable_client);
+        let refresh_secs = config.airtable.refresh_secs;
+        tokio::spawn(async move {
+            poll_airtable_tasks(
+                airtable_watch_rx,
+                airtable_client_clone,
+                airtable_poll_tx,
+                refresh_secs,
+            )
+            .await;
+        });
+        state.log_info("Airtable integration enabled".to_string());
+    } else {
+        state.log_debug(
+            "Airtable not configured (set AIRTABLE_TOKEN, base_id, and table_name)".to_string(),
+        );
     }
 
     // Main event loop
@@ -726,6 +787,7 @@ async fn main() -> Result<()> {
                 &asana_client,
                 &notion_client,
                 &clickup_client,
+                &airtable_client,
                 &storage,
                 &action_tx,
                 &agent_watch_tx,
@@ -734,6 +796,7 @@ async fn main() -> Result<()> {
                 &asana_watch_tx,
                 &notion_watch_tx,
                 &clickup_watch_tx,
+                &airtable_watch_tx,
                 &devserver_manager,
             )
             .await
@@ -1385,6 +1448,7 @@ async fn process_action(
     asana_client: &Arc<OptionalAsanaClient>,
     notion_client: &Arc<OptionalNotionClient>,
     clickup_client: &Arc<OptionalClickUpClient>,
+    airtable_client: &Arc<OptionalAirtableClient>,
     _storage: &SessionStorage,
     action_tx: &mpsc::UnboundedSender<Action>,
     agent_watch_tx: &watch::Sender<HashSet<Uuid>>,
@@ -1393,6 +1457,7 @@ async fn process_action(
     asana_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     notion_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     clickup_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
+    airtable_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     devserver_manager: &Arc<tokio::sync::Mutex<DevServerManager>>,
 ) -> Result<bool> {
     match action {
@@ -1473,6 +1538,14 @@ async fn process_action(
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
                                     status: task_item.status_name.clone(),
+                                    is_subtask: task_item.is_subtask(),
+                                })
+                            }
+                            ProjectMgmtProvider::Airtable => {
+                                ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::NotStarted {
+                                    id: task_item.id.clone(),
+                                    name: task_item.name.clone(),
+                                    url: task_item.url.clone(),
                                     is_subtask: task_item.is_subtask(),
                                 })
                             }
@@ -2323,6 +2396,54 @@ async fn process_action(
                         }
                     });
                 }
+                ProjectMgmtProvider::Airtable => {
+                    let record_id = parse_airtable_record_id(&url_or_id);
+                    let client = Arc::clone(airtable_client);
+                    let tx = action_tx.clone();
+                    tokio::spawn(async move {
+                        match client.get_record(&record_id).await {
+                            Ok(record) => {
+                                let status_name = record.status.clone().unwrap_or_default();
+                                let is_subtask = record.parent_id.is_some();
+                                let is_completed = status_name.to_lowercase().contains("done")
+                                    || status_name.to_lowercase().contains("complete");
+                                let status = if is_completed {
+                                    AirtableTaskStatus::Completed {
+                                        id: record.id,
+                                        name: record.name,
+                                        is_subtask,
+                                    }
+                                } else if status_name.to_lowercase().contains("progress") {
+                                    AirtableTaskStatus::InProgress {
+                                        id: record.id,
+                                        name: record.name,
+                                        url: record.url,
+                                        is_subtask,
+                                    }
+                                } else {
+                                    AirtableTaskStatus::NotStarted {
+                                        id: record.id,
+                                        name: record.name,
+                                        url: record.url,
+                                        is_subtask,
+                                    }
+                                };
+                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                    id,
+                                    status: ProjectMgmtTaskStatus::Airtable(status),
+                                });
+                            }
+                            Err(e) => {
+                                let status =
+                                    ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::Error {
+                                        id: record_id,
+                                        message: e.to_string(),
+                                    });
+                                let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                            }
+                        }
+                    });
+                }
             }
         }
 
@@ -2373,6 +2494,21 @@ async fn process_action(
                     }
                     ClickUpTaskStatus::None => None,
                 },
+                ProjectMgmtTaskStatus::Airtable(s) => match s {
+                    AirtableTaskStatus::NotStarted { name, .. } => {
+                        Some(format!("Airtable task '{}' linked", name))
+                    }
+                    AirtableTaskStatus::InProgress { name, .. } => {
+                        Some(format!("Airtable task '{}' in progress", name))
+                    }
+                    AirtableTaskStatus::Completed { name, .. } => {
+                        Some(format!("Airtable task '{}' completed", name))
+                    }
+                    AirtableTaskStatus::Error { message, .. } => {
+                        Some(format!("Airtable error: {}", message))
+                    }
+                    AirtableTaskStatus::None => None,
+                },
                 ProjectMgmtTaskStatus::None => None,
             };
             if let Some(agent) = state.agents.get_mut(&id) {
@@ -2412,6 +2548,16 @@ async fn process_action(
                 })
                 .collect();
             let _ = clickup_watch_tx.send(clickup_tasks);
+            let airtable_tasks: Vec<(Uuid, String)> = state
+                .agents
+                .values()
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_airtable()
+                        .and_then(|s| s.id().map(|id| (a.id, id.to_string())))
+                })
+                .collect();
+            let _ = airtable_watch_tx.send(airtable_tasks);
         }
 
         Action::CycleTaskStatus { id } => {
@@ -2693,7 +2839,148 @@ async fn process_action(
                         }
                         ClickUpTaskStatus::Error { .. } | ClickUpTaskStatus::None => {}
                     },
-                    ProjectMgmtTaskStatus::Notion(_) | ProjectMgmtTaskStatus::None => {}
+                    ProjectMgmtTaskStatus::Airtable(airtable_status) => match airtable_status {
+                        AirtableTaskStatus::NotStarted {
+                            id: record_id,
+                            name,
+                            url,
+                            is_subtask,
+                        } => {
+                            let record_id = record_id.clone();
+                            let name = name.clone();
+                            let url = url.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status = ProjectMgmtTaskStatus::Airtable(
+                                    AirtableTaskStatus::InProgress {
+                                        id: record_id.clone(),
+                                        name: name.clone(),
+                                        url: url.clone(),
+                                        is_subtask,
+                                    },
+                                );
+                            }
+                            let client = Arc::clone(airtable_client);
+                            let override_value = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .in_progress_option
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client
+                                    .move_to_in_progress(&record_id, override_value.as_deref())
+                                    .await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Airtable(
+                                            AirtableTaskStatus::Error {
+                                                id: record_id,
+                                                message: format!(
+                                                    "Failed to move to In Progress: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Airtable task '{}' → In Progress", name));
+                        }
+                        AirtableTaskStatus::InProgress {
+                            id: record_id,
+                            name,
+                            is_subtask,
+                            ..
+                        } => {
+                            let record_id = record_id.clone();
+                            let name = name.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status = ProjectMgmtTaskStatus::Airtable(
+                                    AirtableTaskStatus::Completed {
+                                        id: record_id.clone(),
+                                        name: name.clone(),
+                                        is_subtask,
+                                    },
+                                );
+                            }
+                            let client = Arc::clone(airtable_client);
+                            let override_value = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .done_option
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client
+                                    .move_to_done(&record_id, override_value.as_deref())
+                                    .await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Airtable(
+                                            AirtableTaskStatus::Error {
+                                                id: record_id,
+                                                message: format!("Failed to complete task: {}", e),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Airtable task '{}' → Done", name));
+                        }
+                        AirtableTaskStatus::Completed {
+                            name, is_subtask, ..
+                        } => {
+                            let record_id = match airtable_status.id() {
+                                Some(r) => r.to_string(),
+                                None => return Ok(false),
+                            };
+                            let name = name.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status = ProjectMgmtTaskStatus::Airtable(
+                                    AirtableTaskStatus::NotStarted {
+                                        id: record_id.clone(),
+                                        name: name.clone(),
+                                        url: String::new(),
+                                        is_subtask,
+                                    },
+                                );
+                            }
+                            let client = Arc::clone(airtable_client);
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client.move_to_not_started(&record_id, None).await {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Airtable(
+                                            AirtableTaskStatus::Error {
+                                                id: record_id,
+                                                message: format!(
+                                                    "Failed to uncomplete task: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Airtable task '{}' → Not Started", name));
+                        }
+                        AirtableTaskStatus::Error { .. } | AirtableTaskStatus::None => {}
+                    },
+                    ProjectMgmtTaskStatus::Notion(_) => {}
+                    ProjectMgmtTaskStatus::None => {}
                 }
             }
         }
@@ -2838,6 +3125,48 @@ async fn process_action(
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to load ClickUp statuses: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load statuses: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                    ProjectMgmtTaskStatus::Airtable(airtable_status) => {
+                        if !airtable_client.is_configured() {
+                            state.show_error(
+                                "Airtable not configured. Set AIRTABLE_TOKEN, base_id, and table_name.",
+                            );
+                            return Ok(false);
+                        }
+                        if airtable_status.id().is_none() {
+                            state.show_error("No Airtable record linked to this agent");
+                            return Ok(false);
+                        }
+
+                        let agent_id = id;
+                        let client = Arc::clone(airtable_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading statuses...".to_string());
+                        tokio::spawn(async move {
+                            match client.get_status_options().await {
+                                Ok(options) => {
+                                    let status_options: Vec<StatusOption> = options
+                                        .into_iter()
+                                        .map(|o| StatusOption {
+                                            id: o.name.clone(),
+                                            name: o.name,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                        id: agent_id,
+                                        options: status_options,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load Airtable statuses: {}", e);
                                     let _ = tx.send(Action::SetLoading(None));
                                     let _ = tx.send(Action::ShowError(format!(
                                         "Failed to load statuses: {}",
@@ -3175,6 +3504,66 @@ async fn process_action(
                                     state.show_success(format!("Task → {}", option_name));
                                 }
                             }
+                            ProjectMgmtTaskStatus::Airtable(airtable_status) => {
+                                if let Some(record_id_str) = airtable_status.id() {
+                                    let record_id = record_id_str.to_string();
+                                    let task_name = match airtable_status {
+                                        AirtableTaskStatus::NotStarted { name, .. } => name.clone(),
+                                        AirtableTaskStatus::InProgress { name, .. } => name.clone(),
+                                        AirtableTaskStatus::Completed { name, .. } => name.clone(),
+                                        AirtableTaskStatus::Error { .. } => "Task".to_string(),
+                                        AirtableTaskStatus::None => "Task".to_string(),
+                                    };
+                                    let is_subtask = airtable_status.is_subtask();
+                                    let client = Arc::clone(airtable_client);
+                                    let agent_id_clone = agent_id;
+                                    let new_status_name = option_name.clone();
+
+                                    let is_done = new_status_name.to_lowercase().contains("done")
+                                        || new_status_name.to_lowercase().contains("complete");
+                                    let is_in_progress =
+                                        new_status_name.to_lowercase().contains("progress");
+
+                                    let new_status = if is_done {
+                                        ProjectMgmtTaskStatus::Airtable(
+                                            AirtableTaskStatus::Completed {
+                                                id: record_id.clone(),
+                                                name: task_name.clone(),
+                                                is_subtask,
+                                            },
+                                        )
+                                    } else if is_in_progress {
+                                        ProjectMgmtTaskStatus::Airtable(
+                                            AirtableTaskStatus::InProgress {
+                                                id: record_id.clone(),
+                                                name: task_name.clone(),
+                                                url: String::new(),
+                                                is_subtask,
+                                            },
+                                        )
+                                    } else {
+                                        ProjectMgmtTaskStatus::Airtable(
+                                            AirtableTaskStatus::NotStarted {
+                                                id: record_id.clone(),
+                                                name: task_name.clone(),
+                                                url: String::new(),
+                                                is_subtask,
+                                            },
+                                        )
+                                    };
+
+                                    tokio::spawn(async move {
+                                        let _ = client
+                                            .update_record_status(&record_id, &new_status_name)
+                                            .await;
+                                    });
+
+                                    if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
+                                        agent.pm_task_status = new_status;
+                                    }
+                                    state.show_success(format!("Task → {}", option_name));
+                                }
+                            }
                             ProjectMgmtTaskStatus::None => {}
                         }
                     }
@@ -3265,6 +3654,23 @@ async fn process_action(
                             state.log_info("Moving ClickUp task to Done".to_string());
                         }
                     }
+                    ProjectMgmtTaskStatus::Airtable(airtable_status) => {
+                        if let Some(record_id) = airtable_status.id() {
+                            let rid = record_id.to_string();
+                            let client = Arc::clone(airtable_client);
+                            let done_option = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .done_option
+                                .clone();
+                            tokio::spawn(async move {
+                                let _ = client.move_to_done(&rid, done_option.as_deref()).await;
+                            });
+                            state.log_info("Moving Airtable task to Done".to_string());
+                        }
+                    }
                     ProjectMgmtTaskStatus::None => {}
                 }
             }
@@ -3278,6 +3684,7 @@ async fn process_action(
                 ProjectMgmtProvider::Asana => asana_client.invalidate_cache().await,
                 ProjectMgmtProvider::Notion => notion_client.invalidate_cache().await,
                 ProjectMgmtProvider::Clickup => clickup_client.invalidate_cache().await,
+                ProjectMgmtProvider::Airtable => airtable_client.invalidate_cache().await,
             }
             state.task_list_loading = true;
             let _ = action_tx.send(Action::FetchTaskList);
@@ -3288,6 +3695,7 @@ async fn process_action(
             let asana_client = Arc::clone(asana_client);
             let notion_client = Arc::clone(notion_client);
             let clickup_client = Arc::clone(clickup_client);
+            let airtable_client = Arc::clone(airtable_client);
             let tx = action_tx.clone();
             tokio::spawn(async move {
                 let result = match provider {
@@ -3415,6 +3823,52 @@ async fn process_action(
                                             status,
                                             status_name,
                                             url: t.url.unwrap_or_default(),
+                                            parent_id: t.parent_id,
+                                            has_children,
+                                            completed,
+                                        }
+                                    })
+                                    .collect();
+                                sort_tasks_by_parent(&mut items);
+                                Ok(items)
+                            }
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
+                    ProjectMgmtProvider::Airtable => {
+                        match airtable_client.list_records_with_children().await {
+                            Ok(tasks) => {
+                                let parent_ids: std::collections::HashSet<String> = tasks
+                                    .iter()
+                                    .filter_map(|t| t.parent_id.as_ref())
+                                    .cloned()
+                                    .collect();
+
+                                let mut items: Vec<TaskListItem> = tasks
+                                    .into_iter()
+                                    .map(|t| {
+                                        let status_name = t
+                                            .status
+                                            .clone()
+                                            .unwrap_or_else(|| "Unknown".to_string());
+                                        let status =
+                                            if status_name.to_lowercase().contains("progress") {
+                                                TaskItemStatus::InProgress
+                                            } else if status_name.to_lowercase().contains("done")
+                                                || status_name.to_lowercase().contains("complete")
+                                            {
+                                                TaskItemStatus::Completed
+                                            } else {
+                                                TaskItemStatus::NotStarted
+                                            };
+                                        let completed = matches!(status, TaskItemStatus::Completed);
+                                        let has_children = parent_ids.contains(&t.id);
+                                        TaskListItem {
+                                            id: t.id,
+                                            name: t.name,
+                                            status,
+                                            status_name,
+                                            url: t.url,
                                             parent_id: t.parent_id,
                                             has_children,
                                             completed,
@@ -3780,6 +4234,14 @@ async fn process_action(
                                         name: task.name.clone(),
                                         url: task.url.clone(),
                                         status: task.status_name.clone(),
+                                        is_subtask: task.is_subtask(),
+                                    })
+                                }
+                                ProjectMgmtProvider::Airtable => {
+                                    ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::NotStarted {
+                                        id: task.id.clone(),
+                                        name: task.name.clone(),
+                                        url: task.url.clone(),
                                         is_subtask: task.is_subtask(),
                                     })
                                 }
@@ -4227,6 +4689,46 @@ async fn process_action(
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
                                         id,
                                         status: ProjectMgmtTaskStatus::ClickUp(status),
+                                    });
+                                }
+                            });
+                        }
+                    }
+                    ProjectMgmtTaskStatus::Airtable(airtable_status) => {
+                        if let Some(record_id) = airtable_status.id() {
+                            let airtable_client_clone = Arc::clone(airtable_client);
+                            let tx_clone = action_tx.clone();
+                            let rid = record_id.to_string();
+                            tokio::spawn(async move {
+                                if let Ok(record) = airtable_client_clone.get_record(&rid).await {
+                                    let status_name = record.status.clone().unwrap_or_default();
+                                    let is_subtask = record.parent_id.is_some();
+                                    let is_completed = status_name.to_lowercase().contains("done")
+                                        || status_name.to_lowercase().contains("complete");
+                                    let status = if is_completed {
+                                        AirtableTaskStatus::Completed {
+                                            id: record.id,
+                                            name: record.name,
+                                            is_subtask,
+                                        }
+                                    } else if status_name.to_lowercase().contains("progress") {
+                                        AirtableTaskStatus::InProgress {
+                                            id: record.id,
+                                            name: record.name,
+                                            url: record.url,
+                                            is_subtask,
+                                        }
+                                    } else {
+                                        AirtableTaskStatus::NotStarted {
+                                            id: record.id,
+                                            name: record.name,
+                                            url: record.url,
+                                            is_subtask,
+                                        }
+                                    };
+                                    let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
+                                        id,
+                                        status: ProjectMgmtTaskStatus::Airtable(status),
                                     });
                                 }
                             });
@@ -6250,6 +6752,55 @@ async fn poll_clickup_tasks(
                 }
                 Err(e) => {
                     tracing::warn!("Failed to poll ClickUp task {}: {}", task_id, e);
+                }
+            }
+        }
+    }
+}
+
+/// Background task to poll Airtable for task status updates.
+async fn poll_airtable_tasks(
+    airtable_rx: watch::Receiver<Vec<(Uuid, String)>>,
+    airtable_client: Arc<OptionalAirtableClient>,
+    tx: mpsc::UnboundedSender<Action>,
+    refresh_secs: u64,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(refresh_secs)).await;
+
+        let tasks = airtable_rx.borrow().clone();
+        for (id, record_id) in tasks {
+            match airtable_client.get_record(&record_id).await {
+                Ok(record) => {
+                    let status_name = record.status.clone().unwrap_or_default();
+                    let is_subtask = record.parent_id.is_some();
+                    let is_completed = status_name.to_lowercase().contains("done")
+                        || status_name.to_lowercase().contains("complete");
+                    let status = if is_completed {
+                        ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::Completed {
+                            id: record.id,
+                            name: record.name,
+                            is_subtask,
+                        })
+                    } else if status_name.to_lowercase().contains("progress") {
+                        ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::InProgress {
+                            id: record.id,
+                            name: record.name,
+                            url: record.url,
+                            is_subtask,
+                        })
+                    } else {
+                        ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::NotStarted {
+                            id: record.id,
+                            name: record.name,
+                            url: record.url,
+                            is_subtask,
+                        })
+                    };
+                    let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to poll Airtable record {}: {}", record_id, e);
                 }
             }
         }

@@ -130,6 +130,7 @@ pub enum ProjectMgmtProvider {
     Asana,
     Notion,
     Clickup,
+    Airtable,
 }
 
 impl ProjectMgmtProvider {
@@ -138,6 +139,7 @@ impl ProjectMgmtProvider {
             ProjectMgmtProvider::Asana => "Asana",
             ProjectMgmtProvider::Notion => "Notion",
             ProjectMgmtProvider::Clickup => "ClickUp",
+            ProjectMgmtProvider::Airtable => "Airtable",
         }
     }
 
@@ -146,6 +148,7 @@ impl ProjectMgmtProvider {
             ProjectMgmtProvider::Asana,
             ProjectMgmtProvider::Notion,
             ProjectMgmtProvider::Clickup,
+            ProjectMgmtProvider::Airtable,
         ]
     }
 }
@@ -237,6 +240,8 @@ pub struct Config {
     #[serde(default)]
     pub clickup: ClickUpConfig,
     #[serde(default)]
+    pub airtable: AirtableConfig,
+    #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
     pub performance: PerformanceConfig,
@@ -315,6 +320,31 @@ impl Default for ClickUpConfig {
         Self {
             refresh_secs: default_clickup_refresh(),
             cache_ttl_secs: default_clickup_cache_ttl(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AirtableConfig {
+    #[serde(default = "default_airtable_refresh")]
+    pub refresh_secs: u64,
+    #[serde(default = "default_airtable_cache_ttl")]
+    pub cache_ttl_secs: u64,
+}
+
+fn default_airtable_refresh() -> u64 {
+    120
+}
+
+fn default_airtable_cache_ttl() -> u64 {
+    60
+}
+
+impl Default for AirtableConfig {
+    fn default() -> Self {
+        Self {
+            refresh_secs: default_airtable_refresh(),
+            cache_ttl_secs: default_airtable_cache_ttl(),
         }
     }
 }
@@ -773,6 +803,10 @@ impl Config {
         std::env::var("CLICKUP_TOKEN").ok()
     }
 
+    pub fn airtable_token() -> Option<String> {
+        std::env::var("AIRTABLE_TOKEN").ok()
+    }
+
     pub fn codeberg_token() -> Option<String> {
         std::env::var("CODEBERG_TOKEN").ok()
     }
@@ -827,6 +861,8 @@ pub struct RepoProjectMgmtConfig {
     pub notion: RepoNotionConfig,
     #[serde(default)]
     pub clickup: RepoClickUpConfig,
+    #[serde(default)]
+    pub airtable: RepoAirtableConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -842,6 +878,15 @@ pub struct RepoClickUpConfig {
     pub list_id: Option<String>,
     pub in_progress_status: Option<String>,
     pub done_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoAirtableConfig {
+    pub base_id: Option<String>,
+    pub table_name: Option<String>,
+    pub status_field_name: Option<String>,
+    pub in_progress_option: Option<String>,
+    pub done_option: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1051,6 +1096,7 @@ impl RepoConfig {
                         asana: legacy.asana,
                         notion: RepoNotionConfig::default(),
                         clickup: RepoClickUpConfig::default(),
+                        airtable: RepoAirtableConfig::default(),
                     },
                     prompts: legacy.prompts,
                     dev_server: DevServerConfig::default(),

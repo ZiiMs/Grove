@@ -120,6 +120,11 @@ pub enum SettingsField {
     ClickUpListId,
     ClickUpInProgressStatus,
     ClickUpDoneStatus,
+    AirtableBaseId,
+    AirtableTableName,
+    AirtableStatusField,
+    AirtableInProgressOption,
+    AirtableDoneOption,
     SummaryPrompt,
     MergePrompt,
     PushPrompt,
@@ -169,6 +174,7 @@ pub enum SettingsCategory {
     Asana,
     Notion,
     Clickup,
+    Airtable,
     Prompts,
     DevServer,
     KeybindNav,
@@ -191,6 +197,7 @@ impl SettingsCategory {
             SettingsCategory::Asana => "Asana",
             SettingsCategory::Notion => "Notion",
             SettingsCategory::Clickup => "ClickUp",
+            SettingsCategory::Airtable => "Airtable",
             SettingsCategory::Prompts => "Prompts",
             SettingsCategory::DevServer => "Dev Server",
             SettingsCategory::KeybindNav => "Navigation",
@@ -243,7 +250,12 @@ impl SettingsField {
             | SettingsField::NotionDoneOption
             | SettingsField::ClickUpListId
             | SettingsField::ClickUpInProgressStatus
-            | SettingsField::ClickUpDoneStatus => SettingsTab::ProjectMgmt,
+            | SettingsField::ClickUpDoneStatus
+            | SettingsField::AirtableBaseId
+            | SettingsField::AirtableTableName
+            | SettingsField::AirtableStatusField
+            | SettingsField::AirtableInProgressOption
+            | SettingsField::AirtableDoneOption => SettingsTab::ProjectMgmt,
             SettingsField::DevServerCommand
             | SettingsField::DevServerRunBefore
             | SettingsField::DevServerWorkingDir
@@ -429,6 +441,14 @@ impl SettingsItem {
                         items.push(SettingsItem::Field(SettingsField::ClickUpListId));
                         items.push(SettingsItem::Field(SettingsField::ClickUpInProgressStatus));
                         items.push(SettingsItem::Field(SettingsField::ClickUpDoneStatus));
+                    }
+                    ProjectMgmtProvider::Airtable => {
+                        items.push(SettingsItem::Category(SettingsCategory::Airtable));
+                        items.push(SettingsItem::Field(SettingsField::AirtableBaseId));
+                        items.push(SettingsItem::Field(SettingsField::AirtableTableName));
+                        items.push(SettingsItem::Field(SettingsField::AirtableStatusField));
+                        items.push(SettingsItem::Field(SettingsField::AirtableInProgressOption));
+                        items.push(SettingsItem::Field(SettingsField::AirtableDoneOption));
                     }
                 }
                 items

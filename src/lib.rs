@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod airtable;
 pub mod app;
 pub mod asana;
 pub mod cache;

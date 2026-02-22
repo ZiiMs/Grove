@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::agent::{Agent, AgentStatus, ProjectMgmtTaskStatus};
+use crate::airtable::AirtableTaskStatus;
 use crate::app::config::GitProvider;
 use crate::asana::AsanaTaskStatus;
 use crate::clickup::ClickUpTaskStatus;
@@ -401,6 +402,13 @@ impl<'a> AgentListWidget<'a> {
                 ClickUpTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
                 ClickUpTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
                 ClickUpTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
+            ProjectMgmtTaskStatus::Airtable(s) => match s {
+                AirtableTaskStatus::None => Style::default().fg(Color::DarkGray),
+                AirtableTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                AirtableTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                AirtableTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                AirtableTaskStatus::Error { .. } => Style::default().fg(Color::Red),
             },
         };
         (text, style)
