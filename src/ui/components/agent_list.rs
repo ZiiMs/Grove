@@ -16,6 +16,7 @@ use crate::clickup::ClickUpTaskStatus;
 use crate::devserver::DevServerStatus;
 use crate::github::CheckStatus;
 use crate::gitlab::PipelineStatus;
+use crate::linear::LinearTaskStatus;
 use crate::notion::NotionTaskStatus;
 
 /// Braille spinner frames for running status
@@ -409,6 +410,13 @@ impl<'a> AgentListWidget<'a> {
                 AirtableTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
                 AirtableTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
                 AirtableTaskStatus::Error { .. } => Style::default().fg(Color::Red),
+            },
+            ProjectMgmtTaskStatus::Linear(s) => match s {
+                LinearTaskStatus::None => Style::default().fg(Color::DarkGray),
+                LinearTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
+                LinearTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
+                LinearTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                LinearTaskStatus::Error { .. } => Style::default().fg(Color::Red),
             },
         };
         (text, style)

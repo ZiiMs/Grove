@@ -125,6 +125,9 @@ pub enum SettingsField {
     AirtableStatusField,
     AirtableInProgressOption,
     AirtableDoneOption,
+    LinearTeamId,
+    LinearInProgressState,
+    LinearDoneState,
     SummaryPrompt,
     MergePrompt,
     PushPrompt,
@@ -175,6 +178,7 @@ pub enum SettingsCategory {
     Notion,
     Clickup,
     Airtable,
+    Linear,
     Prompts,
     DevServer,
     KeybindNav,
@@ -198,6 +202,7 @@ impl SettingsCategory {
             SettingsCategory::Notion => "Notion",
             SettingsCategory::Clickup => "ClickUp",
             SettingsCategory::Airtable => "Airtable",
+            SettingsCategory::Linear => "Linear",
             SettingsCategory::Prompts => "Prompts",
             SettingsCategory::DevServer => "Dev Server",
             SettingsCategory::KeybindNav => "Navigation",
@@ -255,7 +260,10 @@ impl SettingsField {
             | SettingsField::AirtableTableName
             | SettingsField::AirtableStatusField
             | SettingsField::AirtableInProgressOption
-            | SettingsField::AirtableDoneOption => SettingsTab::ProjectMgmt,
+            | SettingsField::AirtableDoneOption
+            | SettingsField::LinearTeamId
+            | SettingsField::LinearInProgressState
+            | SettingsField::LinearDoneState => SettingsTab::ProjectMgmt,
             SettingsField::DevServerCommand
             | SettingsField::DevServerRunBefore
             | SettingsField::DevServerWorkingDir
@@ -449,6 +457,12 @@ impl SettingsItem {
                         items.push(SettingsItem::Field(SettingsField::AirtableStatusField));
                         items.push(SettingsItem::Field(SettingsField::AirtableInProgressOption));
                         items.push(SettingsItem::Field(SettingsField::AirtableDoneOption));
+                    }
+                    ProjectMgmtProvider::Linear => {
+                        items.push(SettingsItem::Category(SettingsCategory::Linear));
+                        items.push(SettingsItem::Field(SettingsField::LinearTeamId));
+                        items.push(SettingsItem::Field(SettingsField::LinearInProgressState));
+                        items.push(SettingsItem::Field(SettingsField::LinearDoneState));
                     }
                 }
                 items

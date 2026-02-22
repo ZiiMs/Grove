@@ -131,6 +131,7 @@ pub enum ProjectMgmtProvider {
     Notion,
     Clickup,
     Airtable,
+    Linear,
 }
 
 impl ProjectMgmtProvider {
@@ -140,6 +141,7 @@ impl ProjectMgmtProvider {
             ProjectMgmtProvider::Notion => "Notion",
             ProjectMgmtProvider::Clickup => "ClickUp",
             ProjectMgmtProvider::Airtable => "Airtable",
+            ProjectMgmtProvider::Linear => "Linear",
         }
     }
 
@@ -149,6 +151,7 @@ impl ProjectMgmtProvider {
             ProjectMgmtProvider::Notion,
             ProjectMgmtProvider::Clickup,
             ProjectMgmtProvider::Airtable,
+            ProjectMgmtProvider::Linear,
         ]
     }
 }
@@ -241,6 +244,8 @@ pub struct Config {
     pub clickup: ClickUpConfig,
     #[serde(default)]
     pub airtable: AirtableConfig,
+    #[serde(default)]
+    pub linear: LinearConfig,
     #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
@@ -345,6 +350,31 @@ impl Default for AirtableConfig {
         Self {
             refresh_secs: default_airtable_refresh(),
             cache_ttl_secs: default_airtable_cache_ttl(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinearConfig {
+    #[serde(default = "default_linear_refresh")]
+    pub refresh_secs: u64,
+    #[serde(default = "default_linear_cache_ttl")]
+    pub cache_ttl_secs: u64,
+}
+
+fn default_linear_refresh() -> u64 {
+    120
+}
+
+fn default_linear_cache_ttl() -> u64 {
+    60
+}
+
+impl Default for LinearConfig {
+    fn default() -> Self {
+        Self {
+            refresh_secs: default_linear_refresh(),
+            cache_ttl_secs: default_linear_cache_ttl(),
         }
     }
 }
@@ -807,6 +837,10 @@ impl Config {
         std::env::var("AIRTABLE_TOKEN").ok()
     }
 
+    pub fn linear_token() -> Option<String> {
+        std::env::var("LINEAR_TOKEN").ok()
+    }
+
     pub fn codeberg_token() -> Option<String> {
         std::env::var("CODEBERG_TOKEN").ok()
     }
@@ -863,6 +897,8 @@ pub struct RepoProjectMgmtConfig {
     pub clickup: RepoClickUpConfig,
     #[serde(default)]
     pub airtable: RepoAirtableConfig,
+    #[serde(default)]
+    pub linear: RepoLinearConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -887,6 +923,13 @@ pub struct RepoAirtableConfig {
     pub status_field_name: Option<String>,
     pub in_progress_option: Option<String>,
     pub done_option: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RepoLinearConfig {
+    pub team_id: Option<String>,
+    pub in_progress_state: Option<String>,
+    pub done_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1097,6 +1140,7 @@ impl RepoConfig {
                         notion: RepoNotionConfig::default(),
                         clickup: RepoClickUpConfig::default(),
                         airtable: RepoAirtableConfig::default(),
+                        linear: RepoLinearConfig::default(),
                     },
                     prompts: legacy.prompts,
                     dev_server: DevServerConfig::default(),

@@ -34,6 +34,7 @@ use grove::devserver::DevServerManager;
 use grove::git::{GitSync, Worktree};
 use grove::github::OptionalGitHubClient;
 use grove::gitlab::OptionalGitLabClient;
+use grove::linear::{parse_linear_issue_id, LinearTaskStatus, OptionalLinearClient};
 use grove::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
 use grove::storage::{save_session, SessionStorage};
 use grove::tmux::is_tmux_available;
@@ -466,6 +467,19 @@ async fn main() -> Result<()> {
         config.airtable.cache_ttl_secs,
     ));
 
+    let linear_team_id = state
+        .settings
+        .repo_config
+        .project_mgmt
+        .linear
+        .team_id
+        .clone();
+    let linear_client = Arc::new(OptionalLinearClient::new(
+        Config::linear_token().as_deref(),
+        linear_team_id,
+        config.linear.cache_ttl_secs,
+    ));
+
     let pm_provider = state.settings.repo_config.project_mgmt.provider;
 
     let initial_asana_tasks: Vec<(Uuid, String)> = state
@@ -585,6 +599,35 @@ async fn main() -> Result<()> {
         state.log_debug(
             "Airtable not configured (set AIRTABLE_TOKEN, base_id, and table_name)".to_string(),
         );
+    }
+
+    let initial_linear_tasks: Vec<(Uuid, String)> = state
+        .agents
+        .values()
+        .filter_map(|a| {
+            a.pm_task_status
+                .as_linear()
+                .and_then(|s| s.id().map(|id| (a.id, id.to_string())))
+        })
+        .collect();
+    let (linear_watch_tx, linear_watch_rx) = watch::channel(initial_linear_tasks);
+
+    if linear_client.is_configured().await && matches!(pm_provider, ProjectMgmtProvider::Linear) {
+        let linear_poll_tx = action_tx.clone();
+        let linear_client_clone = Arc::clone(&linear_client);
+        let refresh_secs = config.linear.refresh_secs;
+        tokio::spawn(async move {
+            poll_linear_tasks(
+                linear_watch_rx,
+                linear_client_clone,
+                linear_poll_tx,
+                refresh_secs,
+            )
+            .await;
+        });
+        state.log_info("Linear integration enabled".to_string());
+    } else {
+        state.log_debug("Linear not configured (set LINEAR_TOKEN and team_id)".to_string());
     }
 
     // Main event loop
@@ -789,6 +832,7 @@ async fn main() -> Result<()> {
                 &notion_client,
                 &clickup_client,
                 &airtable_client,
+                &linear_client,
                 &storage,
                 &action_tx,
                 &agent_watch_tx,
@@ -798,6 +842,7 @@ async fn main() -> Result<()> {
                 &notion_watch_tx,
                 &clickup_watch_tx,
                 &airtable_watch_tx,
+                &linear_watch_tx,
                 &devserver_manager,
             )
             .await
@@ -1450,6 +1495,7 @@ async fn process_action(
     notion_client: &Arc<OptionalNotionClient>,
     clickup_client: &Arc<OptionalClickUpClient>,
     airtable_client: &Arc<OptionalAirtableClient>,
+    linear_client: &Arc<OptionalLinearClient>,
     _storage: &SessionStorage,
     action_tx: &mpsc::UnboundedSender<Action>,
     agent_watch_tx: &watch::Sender<HashSet<Uuid>>,
@@ -1459,6 +1505,7 @@ async fn process_action(
     notion_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     clickup_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     airtable_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
+    linear_watch_tx: &watch::Sender<Vec<(Uuid, String)>>,
     devserver_manager: &Arc<tokio::sync::Mutex<DevServerManager>>,
 ) -> Result<bool> {
     match action {
@@ -1545,6 +1592,15 @@ async fn process_action(
                             ProjectMgmtProvider::Airtable => {
                                 ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::NotStarted {
                                     id: task_item.id.clone(),
+                                    name: task_item.name.clone(),
+                                    url: task_item.url.clone(),
+                                    is_subtask: task_item.is_subtask(),
+                                })
+                            }
+                            ProjectMgmtProvider::Linear => {
+                                ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted {
+                                    id: task_item.id.clone(),
+                                    identifier: String::new(),
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
                                     is_subtask: task_item.is_subtask(),
@@ -2445,6 +2501,52 @@ async fn process_action(
                         }
                     });
                 }
+                ProjectMgmtProvider::Linear => {
+                    let issue_id = parse_linear_issue_id(&url_or_id);
+                    let client = Arc::clone(linear_client);
+                    let tx = action_tx.clone();
+                    tokio::spawn(async move {
+                        match client.get_issue(&issue_id).await {
+                            Ok(issue) => {
+                                let is_subtask = issue.parent_id.is_some();
+                                let status = match issue.state_type.as_str() {
+                                    "completed" | "cancelled" => LinearTaskStatus::Completed {
+                                        id: issue.id,
+                                        identifier: issue.identifier,
+                                        name: issue.title,
+                                        is_subtask,
+                                    },
+                                    "started" => LinearTaskStatus::InProgress {
+                                        id: issue.id,
+                                        identifier: issue.identifier,
+                                        name: issue.title,
+                                        url: issue.url,
+                                        is_subtask,
+                                    },
+                                    _ => LinearTaskStatus::NotStarted {
+                                        id: issue.id,
+                                        identifier: issue.identifier,
+                                        name: issue.title,
+                                        url: issue.url,
+                                        is_subtask,
+                                    },
+                                };
+                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                    id,
+                                    status: ProjectMgmtTaskStatus::Linear(status),
+                                });
+                            }
+                            Err(e) => {
+                                let status =
+                                    ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Error {
+                                        id: issue_id,
+                                        message: e.to_string(),
+                                    });
+                                let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                            }
+                        }
+                    });
+                }
             }
         }
 
@@ -2510,6 +2612,21 @@ async fn process_action(
                     }
                     AirtableTaskStatus::None => None,
                 },
+                ProjectMgmtTaskStatus::Linear(s) => match s {
+                    LinearTaskStatus::NotStarted { identifier, .. } => {
+                        Some(format!("Linear task '{}' linked", identifier))
+                    }
+                    LinearTaskStatus::InProgress { identifier, .. } => {
+                        Some(format!("Linear task '{}' in progress", identifier))
+                    }
+                    LinearTaskStatus::Completed { identifier, .. } => {
+                        Some(format!("Linear task '{}' completed", identifier))
+                    }
+                    LinearTaskStatus::Error { message, .. } => {
+                        Some(format!("Linear error: {}", message))
+                    }
+                    LinearTaskStatus::None => None,
+                },
                 ProjectMgmtTaskStatus::None => None,
             };
             if let Some(agent) = state.agents.get_mut(&id) {
@@ -2559,6 +2676,16 @@ async fn process_action(
                 })
                 .collect();
             let _ = airtable_watch_tx.send(airtable_tasks);
+            let linear_tasks: Vec<(Uuid, String)> = state
+                .agents
+                .values()
+                .filter_map(|a| {
+                    a.pm_task_status
+                        .as_linear()
+                        .and_then(|s| s.id().map(|id| (a.id, id.to_string())))
+                })
+                .collect();
+            let _ = linear_watch_tx.send(linear_tasks);
         }
 
         Action::CycleTaskStatus { id } => {
@@ -2980,6 +3107,151 @@ async fn process_action(
                         }
                         AirtableTaskStatus::Error { .. } | AirtableTaskStatus::None => {}
                     },
+                    ProjectMgmtTaskStatus::Linear(linear_status) => match linear_status {
+                        LinearTaskStatus::NotStarted {
+                            id: issue_id,
+                            identifier,
+                            name,
+                            url,
+                            is_subtask,
+                        } => {
+                            let issue_id = issue_id.clone();
+                            let identifier = identifier.clone();
+                            let name = name.clone();
+                            let url = url.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Linear(LinearTaskStatus::InProgress {
+                                        id: issue_id.clone(),
+                                        identifier: identifier.clone(),
+                                        name: name.clone(),
+                                        url: url.clone(),
+                                        is_subtask,
+                                    });
+                            }
+                            let client = Arc::clone(linear_client);
+                            let override_state = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .linear
+                                .in_progress_state
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client
+                                    .move_to_in_progress(&issue_id, override_state.as_deref())
+                                    .await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Linear(
+                                            LinearTaskStatus::Error {
+                                                id: issue_id,
+                                                message: format!(
+                                                    "Failed to move to In Progress: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Linear task '{}' → In Progress", identifier));
+                        }
+                        LinearTaskStatus::InProgress {
+                            id: issue_id,
+                            identifier,
+                            name,
+                            is_subtask,
+                            ..
+                        } => {
+                            let issue_id = issue_id.clone();
+                            let identifier = identifier.clone();
+                            let name = name.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Completed {
+                                        id: issue_id.clone(),
+                                        identifier: identifier.clone(),
+                                        name: name.clone(),
+                                        is_subtask,
+                                    });
+                            }
+                            let client = Arc::clone(linear_client);
+                            let override_state = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .linear
+                                .done_state
+                                .clone();
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client
+                                    .move_to_done(&issue_id, override_state.as_deref())
+                                    .await
+                                {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Linear(
+                                            LinearTaskStatus::Error {
+                                                id: issue_id,
+                                                message: format!("Failed to complete task: {}", e),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Linear task '{}' → Done", identifier));
+                        }
+                        LinearTaskStatus::Completed {
+                            id: issue_id,
+                            identifier,
+                            name,
+                            is_subtask,
+                        } => {
+                            let issue_id = issue_id.clone();
+                            let identifier = identifier.clone();
+                            let name = name.clone();
+                            let is_subtask = *is_subtask;
+                            let agent_id = id;
+                            if let Some(agent) = state.agents.get_mut(&id) {
+                                agent.pm_task_status =
+                                    ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted {
+                                        id: issue_id.clone(),
+                                        identifier: identifier.clone(),
+                                        name: name.clone(),
+                                        url: String::new(),
+                                        is_subtask,
+                                    });
+                            }
+                            let client = Arc::clone(linear_client);
+                            let tx = action_tx.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = client.move_to_not_started(&issue_id, None).await {
+                                    let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                        id: agent_id,
+                                        status: ProjectMgmtTaskStatus::Linear(
+                                            LinearTaskStatus::Error {
+                                                id: issue_id,
+                                                message: format!(
+                                                    "Failed to uncomplete task: {}",
+                                                    e
+                                                ),
+                                            },
+                                        ),
+                                    });
+                                }
+                            });
+                            state.log_info(format!("Linear task '{}' → Not Started", identifier));
+                        }
+                        LinearTaskStatus::Error { .. } | LinearTaskStatus::None => {}
+                    },
                     ProjectMgmtTaskStatus::Notion(_) => {}
                     ProjectMgmtTaskStatus::None => {}
                 }
@@ -3168,6 +3440,47 @@ async fn process_action(
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to load Airtable statuses: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load statuses: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                    ProjectMgmtTaskStatus::Linear(linear_status) => {
+                        if !linear_client.is_configured().await {
+                            state
+                                .show_error("Linear not configured. Set LINEAR_TOKEN and team_id.");
+                            return Ok(false);
+                        }
+                        if linear_status.id().is_none() {
+                            state.show_error("No Linear issue linked to this agent");
+                            return Ok(false);
+                        }
+
+                        let agent_id = id;
+                        let client = Arc::clone(linear_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading statuses...".to_string());
+                        tokio::spawn(async move {
+                            match client.get_workflow_states().await {
+                                Ok(states) => {
+                                    let options: Vec<StatusOption> = states
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.id,
+                                            name: s.name,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                        id: agent_id,
+                                        options,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load Linear statuses: {}", e);
                                     let _ = tx.send(Action::SetLoading(None));
                                     let _ = tx.send(Action::ShowError(format!(
                                         "Failed to load statuses: {}",
@@ -3565,6 +3878,58 @@ async fn process_action(
                                     state.show_success(format!("Task → {}", option_name));
                                 }
                             }
+                            ProjectMgmtTaskStatus::Linear(linear_status) => {
+                                if let Some(issue_id) = linear_status.id() {
+                                    let issue_id = issue_id.to_string();
+                                    let identifier =
+                                        linear_status.identifier().unwrap_or("Task").to_string();
+                                    let client = Arc::clone(linear_client);
+                                    let agent_id_clone = agent_id;
+                                    let state_id = option_id.clone();
+
+                                    let new_status = if option_name.to_lowercase().contains("done")
+                                        || option_name.to_lowercase().contains("complete")
+                                        || option_name.to_lowercase().contains("cancelled")
+                                    {
+                                        ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Completed {
+                                            id: issue_id.clone(),
+                                            identifier: identifier.clone(),
+                                            name: String::new(),
+                                            is_subtask: false,
+                                        })
+                                    } else if option_name.to_lowercase().contains("progress") {
+                                        ProjectMgmtTaskStatus::Linear(
+                                            LinearTaskStatus::InProgress {
+                                                id: issue_id.clone(),
+                                                identifier: identifier.clone(),
+                                                name: String::new(),
+                                                url: String::new(),
+                                                is_subtask: false,
+                                            },
+                                        )
+                                    } else {
+                                        ProjectMgmtTaskStatus::Linear(
+                                            LinearTaskStatus::NotStarted {
+                                                id: issue_id.clone(),
+                                                identifier: identifier.clone(),
+                                                name: String::new(),
+                                                url: String::new(),
+                                                is_subtask: false,
+                                            },
+                                        )
+                                    };
+
+                                    tokio::spawn(async move {
+                                        let _ =
+                                            client.update_issue_status(&issue_id, &state_id).await;
+                                    });
+
+                                    if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
+                                        agent.pm_task_status = new_status;
+                                    }
+                                    state.show_success(format!("Task → {}", option_name));
+                                }
+                            }
                             ProjectMgmtTaskStatus::None => {}
                         }
                     }
@@ -3672,6 +4037,23 @@ async fn process_action(
                             state.log_info("Moving Airtable task to Done".to_string());
                         }
                     }
+                    ProjectMgmtTaskStatus::Linear(linear_status) => {
+                        if let Some(issue_id) = linear_status.id() {
+                            let iid = issue_id.to_string();
+                            let client = Arc::clone(linear_client);
+                            let done_state = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .linear
+                                .done_state
+                                .clone();
+                            tokio::spawn(async move {
+                                let _ = client.move_to_done(&iid, done_state.as_deref()).await;
+                            });
+                            state.log_info("Moving Linear task to Done".to_string());
+                        }
+                    }
                     ProjectMgmtTaskStatus::None => {}
                 }
             }
@@ -3686,6 +4068,7 @@ async fn process_action(
                 ProjectMgmtProvider::Notion => notion_client.invalidate_cache().await,
                 ProjectMgmtProvider::Clickup => clickup_client.invalidate_cache().await,
                 ProjectMgmtProvider::Airtable => airtable_client.invalidate_cache().await,
+                ProjectMgmtProvider::Linear => linear_client.invalidate_cache().await,
             }
             state.task_list_loading = true;
             let _ = action_tx.send(Action::FetchTaskList);
@@ -3697,6 +4080,7 @@ async fn process_action(
             let notion_client = Arc::clone(notion_client);
             let clickup_client = Arc::clone(clickup_client);
             let airtable_client = Arc::clone(airtable_client);
+            let linear_client = Arc::clone(linear_client);
             let tx = action_tx.clone();
             tokio::spawn(async move {
                 let result = match provider {
@@ -3871,6 +4255,45 @@ async fn process_action(
                                             status_name,
                                             url: t.url,
                                             parent_id: t.parent_id,
+                                            has_children,
+                                            completed,
+                                        }
+                                    })
+                                    .collect();
+                                sort_tasks_by_parent(&mut items);
+                                Ok(items)
+                            }
+                            Err(e) => Err(e.to_string()),
+                        }
+                    }
+                    ProjectMgmtProvider::Linear => {
+                        match linear_client.get_team_issues_with_children().await {
+                            Ok(issues) => {
+                                let parent_ids: std::collections::HashSet<String> = issues
+                                    .iter()
+                                    .filter_map(|i| i.parent_id.as_ref())
+                                    .cloned()
+                                    .collect();
+
+                                let mut items: Vec<TaskListItem> = issues
+                                    .into_iter()
+                                    .filter(|i| {
+                                        i.state_type != "completed" && i.state_type != "cancelled"
+                                    })
+                                    .map(|i| {
+                                        let status = match i.state_type.as_str() {
+                                            "started" => TaskItemStatus::InProgress,
+                                            _ => TaskItemStatus::NotStarted,
+                                        };
+                                        let completed = i.state_type == "completed";
+                                        let has_children = parent_ids.contains(&i.id);
+                                        TaskListItem {
+                                            id: i.id,
+                                            name: format!("{} {}", i.identifier, i.title),
+                                            status,
+                                            status_name: i.state_name,
+                                            url: i.url,
+                                            parent_id: i.parent_id,
                                             has_children,
                                             completed,
                                         }
@@ -4246,6 +4669,15 @@ async fn process_action(
                                         is_subtask: task.is_subtask(),
                                     },
                                 ),
+                                ProjectMgmtProvider::Linear => {
+                                    ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted {
+                                        id: task.id.clone(),
+                                        identifier: String::new(),
+                                        name: task.name.clone(),
+                                        url: task.url.clone(),
+                                        is_subtask: task.is_subtask(),
+                                    })
+                                }
                             };
                             agent.pm_task_status = pm_status;
                             state.log_info(format!("Linked task '{}' to agent", task.name));
@@ -4730,6 +5162,44 @@ async fn process_action(
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
                                         id,
                                         status: ProjectMgmtTaskStatus::Airtable(status),
+                                    });
+                                }
+                            });
+                        }
+                    }
+                    ProjectMgmtTaskStatus::Linear(linear_status) => {
+                        if let Some(issue_id) = linear_status.id() {
+                            let linear_client_clone = Arc::clone(linear_client);
+                            let tx_clone = action_tx.clone();
+                            let iid = issue_id.to_string();
+                            tokio::spawn(async move {
+                                if let Ok(issue) = linear_client_clone.get_issue(&iid).await {
+                                    let is_subtask = issue.parent_id.is_some();
+                                    let status = match issue.state_type.as_str() {
+                                        "completed" | "cancelled" => LinearTaskStatus::Completed {
+                                            id: issue.id,
+                                            identifier: issue.identifier,
+                                            name: issue.title,
+                                            is_subtask,
+                                        },
+                                        "started" => LinearTaskStatus::InProgress {
+                                            id: issue.id,
+                                            identifier: issue.identifier,
+                                            name: issue.title,
+                                            url: issue.url,
+                                            is_subtask,
+                                        },
+                                        _ => LinearTaskStatus::NotStarted {
+                                            id: issue.id,
+                                            identifier: issue.identifier,
+                                            name: issue.title,
+                                            url: issue.url,
+                                            is_subtask,
+                                        },
+                                    };
+                                    let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
+                                        id,
+                                        status: ProjectMgmtTaskStatus::Linear(status),
                                     });
                                 }
                             });
@@ -5310,6 +5780,39 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                grove::app::SettingsField::LinearTeamId => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .linear
+                        .team_id
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::LinearInProgressState => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .linear
+                        .in_progress_state
+                        .clone()
+                        .unwrap_or_default();
+                }
+                grove::app::SettingsField::LinearDoneState => {
+                    state.settings.editing_text = true;
+                    state.settings.text_buffer = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .linear
+                        .done_state
+                        .clone()
+                        .unwrap_or_default();
+                }
                 grove::app::SettingsField::DevServerCommand => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
@@ -5728,6 +6231,25 @@ async fn process_action(
                     grove::app::SettingsField::AirtableDoneOption => {
                         let val = state.settings.text_buffer.clone();
                         state.settings.repo_config.project_mgmt.airtable.done_option =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::LinearTeamId => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.linear.team_id =
+                            if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::LinearInProgressState => {
+                        let val = state.settings.text_buffer.clone();
+                        state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .linear
+                            .in_progress_state = if val.is_empty() { None } else { Some(val) };
+                    }
+                    grove::app::SettingsField::LinearDoneState => {
+                        let val = state.settings.text_buffer.clone();
+                        state.settings.repo_config.project_mgmt.linear.done_state =
                             if val.is_empty() { None } else { Some(val) };
                     }
                     grove::app::SettingsField::Editor => {
@@ -7063,6 +7585,55 @@ async fn poll_airtable_tasks(
                 }
                 Err(e) => {
                     tracing::warn!("Failed to poll Airtable record {}: {}", record_id, e);
+                }
+            }
+        }
+    }
+}
+
+/// Background task to poll Linear for task status updates.
+async fn poll_linear_tasks(
+    linear_rx: watch::Receiver<Vec<(Uuid, String)>>,
+    linear_client: Arc<OptionalLinearClient>,
+    tx: mpsc::UnboundedSender<Action>,
+    refresh_secs: u64,
+) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(refresh_secs)).await;
+
+        let tasks = linear_rx.borrow().clone();
+        for (id, issue_id) in tasks {
+            match linear_client.get_issue(&issue_id).await {
+                Ok(issue) => {
+                    let is_subtask = issue.parent_id.is_some();
+                    let status = match issue.state_type.as_str() {
+                        "completed" | "cancelled" => {
+                            ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Completed {
+                                id: issue.id,
+                                identifier: issue.identifier,
+                                name: issue.title,
+                                is_subtask,
+                            })
+                        }
+                        "started" => ProjectMgmtTaskStatus::Linear(LinearTaskStatus::InProgress {
+                            id: issue.id,
+                            identifier: issue.identifier,
+                            name: issue.title,
+                            url: issue.url,
+                            is_subtask,
+                        }),
+                        _ => ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted {
+                            id: issue.id,
+                            identifier: issue.identifier,
+                            name: issue.title,
+                            url: issue.url,
+                            is_subtask,
+                        }),
+                    };
+                    let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to poll Linear issue {}: {}", issue_id, e);
                 }
             }
         }
