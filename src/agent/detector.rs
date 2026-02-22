@@ -595,27 +595,42 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
     }
 
     // 4. Check for prompt character → Completed or Idle
-    let is_at_prompt = lines.iter().rev().take(5).any(|line| {
-        let trimmed = line.trim().trim_matches('\u{00A0}');
-        if trimmed == ">" || trimmed == "›" || trimmed == "❯" || trimmed == "$" || trimmed == "%"
-        {
-            return true;
-        }
-        if trimmed.len() <= 3
-            && (trimmed.starts_with('>')
-                || trimmed.starts_with('›')
-                || trimmed.starts_with('❯')
-                || trimmed.starts_with('$')
-                || trimmed.starts_with('%'))
-        {
-            return true;
-        }
-        false
-    });
+    let is_at_prompt = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(5)
+        .any(|line| {
+            let trimmed = line.trim().trim_matches('\u{00A0}');
+            if trimmed == ">"
+                || trimmed == "›"
+                || trimmed == "❯"
+                || trimmed == "$"
+                || trimmed == "%"
+            {
+                return true;
+            }
+            if trimmed.len() <= 3
+                && (trimmed.starts_with('>')
+                    || trimmed.starts_with('›')
+                    || trimmed.starts_with('❯')
+                    || trimmed.starts_with('$')
+                    || trimmed.starts_with('%'))
+            {
+                return true;
+            }
+            false
+        });
 
     if is_at_prompt {
-        // Check last 10 lines for completion patterns
-        let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
+        // Check last 10 non-empty lines for completion patterns
+        let last_10_lines: Vec<&str> = lines
+            .iter()
+            .rev()
+            .filter(|l| !l.trim().is_empty())
+            .take(10)
+            .cloned()
+            .collect();
         let last_10_text = last_10_lines.join("\n");
 
         for pattern in COMPLETION_PATTERNS.iter() {
@@ -1505,6 +1520,36 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for keyboard hints, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_welcome_screen_idle() {
+        let output = r#"╭─── Claude Code v2.1.50 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                                              │
+│                 Welcome back ZiiM!                 │ Run /init to create a CLAUDE.md file with instructions for Claude                                                                     │
+│                                                    │ ─────────────────────────────────────────────────────────────────                                                                     │
+│                                                    │ Recent activity                                                                                                                       │
+│                                                    │ No recent activity                                                                                                                    │
+│                          ✻                         │                                                                                                                                       │
+│                          |                         │                                                                                                                                       │
+│                         ▟█▙                        │                                                                                                                                       │
+│                       ▐▛███▜▌                      │                                                                                                                                       │
+│                      ▝▜█████▛▘                     │                                                                                                                                       │
+│                        ▘▘ ▝▝                       │                                                                                                                                       │
+│              Sonnet 4.6 · Claude API               │                                                                                                                                       │
+│   ~/.grove/worktrees/d0fd05c68b028185/testclaude   │                                                                                                                                       │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts  "#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle for welcome screen at prompt, got {:?}",
             status
         );
     }
