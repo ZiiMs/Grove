@@ -13,6 +13,8 @@ pub enum ForegroundProcess {
     ClaudeRunning,
     /// Opencode is alive (node, opencode, npx)
     OpencodeRunning,
+    /// Codex is alive (codex)
+    CodexRunning,
     /// Gemini is alive (node, gemini)
     GeminiRunning,
     /// At a shell prompt (bash, zsh, sh, fish, dash)
@@ -34,8 +36,8 @@ impl ForegroundProcess {
             return match agent_type {
                 AiAgent::ClaudeCode => ForegroundProcess::ClaudeRunning,
                 AiAgent::Opencode => ForegroundProcess::OpencodeRunning,
+                AiAgent::Codex => ForegroundProcess::CodexRunning,
                 AiAgent::Gemini => ForegroundProcess::GeminiRunning,
-                AiAgent::Codex => ForegroundProcess::OtherProcess(binary.to_string()),
             };
         }
 
@@ -57,6 +59,7 @@ impl ForegroundProcess {
             self,
             ForegroundProcess::ClaudeRunning
                 | ForegroundProcess::OpencodeRunning
+                | ForegroundProcess::CodexRunning
                 | ForegroundProcess::GeminiRunning
         )
     }
@@ -166,6 +169,16 @@ static GEMINI_ANSWER_QUESTIONS: LazyLock<Regex> =
 /// Gemini keyboard hints in question panel (indicates AwaitingInput)
 static GEMINI_KEYBOARD_HINTS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)enter\s+to\s+select.*esc\s+to\s+cancel").unwrap());
+
+/// Gemini numbered questions - indicates clarification needed (AwaitingInput)
+/// Matches patterns like "   1. Question text?" or "   2. Another question?"
+static GEMINI_NUMBERED_QUESTIONS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*\d+\.\s+.+\?$").unwrap());
+
+/// Gemini user answers to numbered questions - indicates question phase is over
+/// Matches patterns like "   1. New doc" or "   2. Lorem ipsum" (no question mark, short answer)
+static GEMINI_NUMBERED_ANSWERS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*[1-4]\.\s+[^?]+$").unwrap());
 
 /// Gemini running indicator: timer format like "(esc to cancel, 15s)" - NOT keyboard hints
 static GEMINI_ESC_CANCEL_TIMER: LazyLock<Regex> =
@@ -468,6 +481,7 @@ pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -
     match foreground {
         ForegroundProcess::ClaudeRunning => detect_status_claude_running(output),
         ForegroundProcess::OpencodeRunning => detect_status_opencode(output, foreground),
+        ForegroundProcess::CodexRunning => detect_status_codex(output, foreground),
         ForegroundProcess::GeminiRunning => detect_status_gemini(output, foreground),
         ForegroundProcess::Shell => detect_status_at_shell(output),
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
@@ -595,8 +609,8 @@ pub fn detect_status_for_agent(
     match agent_type {
         AiAgent::ClaudeCode => detect_status_with_process(output, foreground),
         AiAgent::Opencode => detect_status_opencode(output, foreground),
+        AiAgent::Codex => detect_status_codex(output, foreground),
         AiAgent::Gemini => detect_status_gemini(output, foreground),
-        AiAgent::Codex => detect_status_with_process(output, foreground),
     }
 }
 
@@ -691,11 +705,118 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown
         | ForegroundProcess::ClaudeRunning
+        | ForegroundProcess::CodexRunning
         | ForegroundProcess::GeminiRunning => {
             if clean_output.trim().is_empty() {
                 AgentStatus::Stopped
             } else {
                 AgentStatus::Idle
+            }
+        }
+    }
+}
+
+/// Pattern for Codex "Working" status line: "Working (Xs • esc to interrupt)"
+static CODEX_WORKING_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"•\s*working\s*\(\d+s").unwrap());
+
+/// Status detection for Codex agent.
+/// Patterns: "• Working (Xs • esc to interrupt)" = Running, "Question X/X (X unanswered)" = AwaitingInput
+fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+    let clean_output = strip_ansi(output);
+    let lines: Vec<&str> = clean_output.lines().collect();
+
+    if lines.is_empty() {
+        return AgentStatus::Stopped;
+    }
+
+    let full_lower = clean_output.to_lowercase();
+
+    // 1. Check for question panel (highest priority)
+    // Multiple indicators that a question panel is shown:
+    // - "Question X/X (X unanswered)"
+    // - "tab to add notes" (keyboard hint for question panel)
+    // - "navigate questions" (keyboard hint)
+    let is_question_panel = full_lower.contains("unanswered")
+        || full_lower.contains("tab to add notes")
+        || (full_lower.contains("navigate") && full_lower.contains("questions"))
+        || (full_lower.contains("enter to submit") && full_lower.contains("answer"));
+
+    if is_question_panel {
+        return AgentStatus::AwaitingInput;
+    }
+
+    // 2. Check for working indicator: "• Working (Xs"
+    // Must be specific to avoid matching keyboard hints
+    if CODEX_WORKING_PATTERN.is_match(&full_lower) {
+        return AgentStatus::Running;
+    }
+
+    // 3. Check for spinner characters
+    let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+    let last_5_text = last_5_lines.join("\n");
+    if SPINNER_CHARS.is_match(&last_5_text) || OPENCODE_SPINNER_CHARS.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // 4. Check for errors
+    for pattern in ERROR_PATTERNS.iter() {
+        if pattern.is_match(&clean_output) {
+            for line in lines.iter().rev().take(15) {
+                if pattern.is_match(line) {
+                    let msg = line.trim().chars().take(40).collect::<String>();
+                    return AgentStatus::Error(msg);
+                }
+            }
+            return AgentStatus::Error("Error detected".to_string());
+        }
+    }
+
+    // 5. Check for prompt character (› or >)
+    let is_at_prompt = lines.iter().rev().take(5).any(|line| {
+        let trimmed = line.trim();
+        trimmed == "›" || trimmed == ">" || trimmed.starts_with("›")
+    });
+
+    if is_at_prompt {
+        // At prompt - check for completion patterns in last 10 lines
+        let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
+        let last_10_text = last_10_lines.join("\n");
+
+        for pattern in COMPLETION_PATTERNS.iter() {
+            if pattern.is_match(&last_10_text) {
+                return AgentStatus::Completed;
+            }
+        }
+        return AgentStatus::Idle;
+    }
+
+    // 6. Check for shell prompt (indicates AI has exited)
+    let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
+    let is_shell_prompt = last_line.len() <= 50
+        && (last_line.ends_with('$')
+            || last_line.ends_with('#')
+            || last_line == ">"
+            || last_line.starts_with("➜"));
+
+    if is_shell_prompt && foreground != ForegroundProcess::CodexRunning {
+        return AgentStatus::Stopped;
+    }
+
+    // 7. Process-based fallback
+    // If we got here with CodexRunning but no working indicator, agent is idle
+    match foreground {
+        ForegroundProcess::CodexRunning => AgentStatus::Idle,
+        ForegroundProcess::Shell => AgentStatus::Stopped,
+        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::Unknown
+        | ForegroundProcess::ClaudeRunning
+        | ForegroundProcess::OpencodeRunning
+        | ForegroundProcess::GeminiRunning => {
+            if clean_output.trim().is_empty() {
+                AgentStatus::Stopped
+            } else {
+                AgentStatus::Running
             }
         }
     }
@@ -734,21 +855,8 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         return AgentStatus::AwaitingInput;
     }
 
-    // 5. Check for permission/confirmation prompts
-    for pattern in GEMINI_CONFIRMATION_PATTERNS.iter() {
-        if pattern.is_match(&last_5_text) {
-            return AgentStatus::AwaitingInput;
-        }
-    }
-
-    // 6. Check for standard question patterns (y/n, [Y/n], etc.)
-    for pattern in QUESTION_PATTERNS.iter() {
-        if pattern.is_match(&last_5_text) {
-            return AgentStatus::AwaitingInput;
-        }
-    }
-
-    // 7. Check for running indicator (timer format only, not keyboard hints)
+    // 5. Check for running indicators FIRST - if actively running, don't check for old questions
+    // Timer format like "(esc to cancel, 15s)"
     if GEMINI_ESC_CANCEL_TIMER.is_match(&clean_output) {
         return AgentStatus::Running;
     }
@@ -763,7 +871,38 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         return AgentStatus::Running;
     }
 
-    // 8. Check for errors
+    // 6. Check for numbered questions (only if NOT running)
+    // BUT skip if user has already answered
+    // User answers look like "   1. New doc" or " > 1. New doc" (no question mark)
+    let has_numbered_answers = lines
+        .iter()
+        .rev()
+        .take(20)
+        .any(|line| GEMINI_NUMBERED_ANSWERS.is_match(line));
+
+    if !has_numbered_answers {
+        for line in lines.iter() {
+            if GEMINI_NUMBERED_QUESTIONS.is_match(line) {
+                return AgentStatus::AwaitingInput;
+            }
+        }
+    }
+
+    // 7. Check for permission/confirmation prompts
+    for pattern in GEMINI_CONFIRMATION_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            return AgentStatus::AwaitingInput;
+        }
+    }
+
+    // 8. Check for standard question patterns (y/n, [Y/n], etc.)
+    for pattern in QUESTION_PATTERNS.iter() {
+        if pattern.is_match(&last_5_text) {
+            return AgentStatus::AwaitingInput;
+        }
+    }
+
+    // 9. Check for errors
     for pattern in ERROR_PATTERNS.iter() {
         if pattern.is_match(&clean_output) {
             for line in lines.iter().rev().take(15) {
@@ -776,19 +915,40 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         }
     }
 
-    // 9. Check for completion patterns
-    for pattern in COMPLETION_PATTERNS.iter() {
-        if pattern.is_match(&clean_output) {
-            return AgentStatus::Completed;
+    // 9. Check for prompt character - this is when agent is at prompt, ready for next task
+    // Must be careful not to match shell prompt (e.g., "$ ") when checking AI prompts
+    let is_at_ai_prompt = lines.iter().rev().take(5).any(|line| {
+        let trimmed = line.trim().trim_matches('\u{00A0}');
+        if trimmed == ">" || trimmed == "›" || trimmed == "❯" {
+            return true;
         }
+        // Match prompt with trailing text like ">   Type your message..."
+        if trimmed.starts_with('>') || trimmed.starts_with('›') || trimmed.starts_with('❯') {
+            return true;
+        }
+        false
+    });
+
+    if is_at_ai_prompt {
+        // At AI prompt - check for completion patterns in last 10 lines
+        let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
+        let last_10_text = last_10_lines.join("\n");
+
+        for pattern in COMPLETION_PATTERNS.iter() {
+            if pattern.is_match(&last_10_text) {
+                return AgentStatus::Completed;
+            }
+        }
+        return AgentStatus::Idle;
     }
 
-    // 10. Check for shell prompt (indicates AI has exited)
+    // 10. Check for shell prompt (indicates AI has completely exited to shell)
     let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
     let is_shell_prompt = last_line.len() <= 50
         && (last_line.ends_with('$')
             || last_line.ends_with('#')
-            || last_line == ">"
+            || last_line.starts_with('$')
+            || last_line.starts_with('#')
             || last_line.starts_with("➜"));
 
     if is_shell_prompt && foreground != ForegroundProcess::GeminiRunning {
@@ -796,17 +956,19 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
     }
 
     // 11. Process-based fallback
+    // If we got here with GeminiRunning but no spinner/timer, agent is idle (quiet state)
     match foreground {
         ForegroundProcess::GeminiRunning => AgentStatus::Idle,
         ForegroundProcess::Shell => AgentStatus::Stopped,
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown
         | ForegroundProcess::ClaudeRunning
-        | ForegroundProcess::OpencodeRunning => {
+        | ForegroundProcess::OpencodeRunning
+        | ForegroundProcess::CodexRunning => {
             if clean_output.trim().is_empty() {
                 AgentStatus::Stopped
             } else {
-                AgentStatus::Idle
+                AgentStatus::Running
             }
         }
     }
@@ -1141,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn test_claude_running_prompt_idle() {
+    fn test_claude_running_blind_thinking_stays_running() {
         // At prompt without completion patterns → Idle
         let output = "Some regular output\n❯";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
@@ -1153,6 +1315,145 @@ mod tests {
         let output = "Some output\n⠋ Reading file...";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(matches!(status, AgentStatus::Running));
+    }
+
+    // --- Codex tests ---
+
+    #[test]
+    fn test_codex_working_status() {
+        let output = "Some output\n\n• Working (1s • esc to interrupt)\n";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_working_longer_duration() {
+        let output = "Processing...\n\n• Working (45s • esc to interrupt)\n";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_question_awaiting_input() {
+        let output = "  Question 1/1 (1 unanswered)\n  How should I proceed?\n";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_multiple_questions() {
+        let output = "  Question 3/5 (2 unanswered)\n  Choose an option:\n";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_prompt_idle() {
+        let output = "Task complete.\n›";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_error() {
+        let output = "Error: something went wrong\n›";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Error(_)),
+            "Expected Error, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_foreground_process() {
+        assert_eq!(
+            ForegroundProcess::from_command_for_agent("codex", AiAgent::Codex),
+            ForegroundProcess::CodexRunning
+        );
+        assert_eq!(
+            ForegroundProcess::from_command_for_agent("/usr/bin/codex", AiAgent::Codex),
+            ForegroundProcess::CodexRunning
+        );
+    }
+
+    #[test]
+    fn test_codex_completion() {
+        let output = "✓ Done.\n›";
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Completed),
+            "Expected Completed, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_shell_stopped() {
+        let output = "Some output\n$ ";
+        let status = detect_status_codex(output, ForegroundProcess::Shell);
+        assert!(
+            matches!(status, AgentStatus::Stopped),
+            "Expected Stopped, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_real_question_output() {
+        let output = r#"• I'm preparing to ask the user to specify what they mean by document, content, and theme to ensure a clear shared understanding before proceeding.
+
+
+
+  Question 1/3 (3 unanswered)
+  Where should the 200 paragraphs be written?
+
+  › 1. New file in repo (Recommended)  Create a new text file in the project root.
+    2. Specific path                   You'll provide the exact path to write.
+    3. Terminal output only            Don't write a file; just print sample in response.
+    4. None of the above               Optionally, add details in notes (tab).
+
+  tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt"#;
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Question panel, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_real_working_output() {
+        let output = r#"› Lets output a nice 200 paragraphs in a text document
+
+
+• Working (1s • esc to interrupt)"#;
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for Working indicator, got {:?}",
+            status
+        );
     }
 
     // --- Gemini tests ---
@@ -1319,6 +1620,65 @@ mod tests {
     }
 
     #[test]
+    fn test_gemini_quiet_state_is_idle() {
+        // No spinner, no timer, no questions - agent is in quiet/idle state
+        // This happens when agent is waiting but not actively working
+        let output = r#"Logged in with Google: user@example.com /auth
+Plan: Gemini Code Assist for individuals
+
+ > Okay, lets create a plan to add 200 paragraphs
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ~/.grove/worktrees/test, (test,*)                           /model Auto (Gemini 3)"#;
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Idle),
+            "Expected Idle in quiet state (no spinner/timer), got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_questions_answered_then_running() {
+        // User has answered the numbered questions, agent is now running
+        // Should be Running, NOT AwaitingInput (old questions in history should be ignored)
+        let output = r#"   1. Target File: Should I create a new document?
+   2. Paragraph Content: Do you want specific text?
+   3. Placement: Should the paragraphs be added to the beginning?
+   4. Formatting: Is there a specific format required?
+
+ > 1. New doc
+   2. Lorem ipsum
+   3. Don't care.
+   4. Markdown
+
+ ⠴ Generating witty retort… (esc to cancel, 15s)"#;
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running when user has answered and spinner/timer is present, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_old_questions_with_timer_is_running() {
+        // Old questions are visible in scrollback, but timer/spinner shows agent is actively running
+        // User's answers have scrolled off - should still detect as Running
+        let output = r#"   1. Target File: Should I create a new document?
+   2. Paragraph Content: Do you want specific text?
+
+ ...lots of tool output...
+
+ ⠇ Why do Java developers wear glasses? Because they don't C#. (esc to cancel, 12s)"#;
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running when timer is present, even with old questions in history, got {:?}",
+            status
+        );
+    }
+
+    #[test]
     fn test_gemini_real_answer_questions_panel() {
         // Full output from real Gemini CLI with Answer Questions panel
         let output = r#" ███            █████████  ██████████ ██████   ██████ █████ ██████   █████ █████
@@ -1330,7 +1690,7 @@ Tips for getting started:
 2. Be specific for the best results.
 3. /help for more information.
 
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
  > Write me a nice two hundred paragraph text document
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
