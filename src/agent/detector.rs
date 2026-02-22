@@ -854,7 +854,24 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         return AgentStatus::AwaitingInput;
     }
 
-    // 4b. Check for numbered questions, BUT skip if user has already answered
+    // 5. Check for running indicators FIRST - if actively running, don't check for old questions
+    // Timer format like "(esc to cancel, 15s)"
+    if GEMINI_ESC_CANCEL_TIMER.is_match(&clean_output) {
+        return AgentStatus::Running;
+    }
+
+    // Check for Gemini dots spinner
+    if GEMINI_DOTS_SPINNER.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // Check for braille spinner characters (shared with other tools)
+    if SPINNER_CHARS.is_match(&last_5_text) {
+        return AgentStatus::Running;
+    }
+
+    // 6. Check for numbered questions (only if NOT running)
+    // BUT skip if user has already answered
     // User answers look like "   1. New doc" or " > 1. New doc" (no question mark)
     let has_numbered_answers = lines
         .iter()
@@ -870,36 +887,21 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         }
     }
 
-    // 5. Check for permission/confirmation prompts
+    // 7. Check for permission/confirmation prompts
     for pattern in GEMINI_CONFIRMATION_PATTERNS.iter() {
         if pattern.is_match(&last_5_text) {
             return AgentStatus::AwaitingInput;
         }
     }
 
-    // 6. Check for standard question patterns (y/n, [Y/n], etc.)
+    // 8. Check for standard question patterns (y/n, [Y/n], etc.)
     for pattern in QUESTION_PATTERNS.iter() {
         if pattern.is_match(&last_5_text) {
             return AgentStatus::AwaitingInput;
         }
     }
 
-    // 7. Check for running indicator (timer format only, not keyboard hints)
-    if GEMINI_ESC_CANCEL_TIMER.is_match(&clean_output) {
-        return AgentStatus::Running;
-    }
-
-    // Check for Gemini dots spinner
-    if GEMINI_DOTS_SPINNER.is_match(&last_5_text) {
-        return AgentStatus::Running;
-    }
-
-    // Check for braille spinner characters (shared with other tools)
-    if SPINNER_CHARS.is_match(&last_5_text) {
-        return AgentStatus::Running;
-    }
-
-    // 8. Check for errors
+    // 9. Check for errors
     for pattern in ERROR_PATTERNS.iter() {
         if pattern.is_match(&clean_output) {
             for line in lines.iter().rev().take(15) {
@@ -1634,6 +1636,24 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::Running),
             "Expected Running when user has answered and spinner/timer is present, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_old_questions_with_timer_is_running() {
+        // Old questions are visible in scrollback, but timer/spinner shows agent is actively running
+        // User's answers have scrolled off - should still detect as Running
+        let output = r#"   1. Target File: Should I create a new document?
+   2. Paragraph Content: Do you want specific text?
+
+ ...lots of tool output...
+
+ ⠇ Why do Java developers wear glasses? Because they don't C#. (esc to cancel, 12s)"#;
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running when timer is present, even with old questions in history, got {:?}",
             status
         );
     }
