@@ -667,14 +667,10 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
 
 /// Pattern for Codex "Working" status line: "Working (Xs • esc to interrupt)"
 static CODEX_WORKING_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"working\s*\(\d+s.*esc\s+to\s+interrupt").unwrap());
-
-/// Pattern for Codex question panel: "Question X/X (X unanswered)"
-static CODEX_QUESTION_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"question\s+\d+/\d+\s*\(\d+\s+unanswered").unwrap());
+    LazyLock::new(|| Regex::new(r"•\s*working\s*\(\d+s").unwrap());
 
 /// Status detection for Codex agent.
-/// Patterns: "Working (Xs • esc to interrupt)" = Running, "Question X/X (X unanswered)" = AwaitingInput
+/// Patterns: "• Working (Xs • esc to interrupt)" = Running, "Question X/X (X unanswered)" = AwaitingInput
 fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStatus {
     let clean_output = strip_ansi(output);
     let lines: Vec<&str> = clean_output.lines().collect();
@@ -685,35 +681,34 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
 
     let full_lower = clean_output.to_lowercase();
 
-    // Also check last 10 lines for status indicators
-    let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
-    let last_10_text = last_10_lines.join("\n").to_lowercase();
-
     // 1. Check for question panel (highest priority)
-    // Pattern: "Question 1/1 (1 unanswered)"
-    if CODEX_QUESTION_PATTERN.is_match(&full_lower) {
+    // Multiple indicators that a question panel is shown:
+    // - "Question X/X (X unanswered)"
+    // - "tab to add notes" (keyboard hint for question panel)
+    // - "navigate questions" (keyboard hint)
+    let is_question_panel = full_lower.contains("unanswered")
+        || full_lower.contains("tab to add notes")
+        || (full_lower.contains("navigate") && full_lower.contains("questions"))
+        || (full_lower.contains("enter to submit") && full_lower.contains("answer"));
+
+    if is_question_panel {
         return AgentStatus::AwaitingInput;
     }
 
-    // 2. Check for working indicator
-    // Pattern: "Working (1s • esc to interrupt)"
-    if CODEX_WORKING_PATTERN.is_match(&last_10_text) {
+    // 2. Check for working indicator: "• Working (Xs"
+    // Must be specific to avoid matching keyboard hints
+    if CODEX_WORKING_PATTERN.is_match(&full_lower) {
         return AgentStatus::Running;
     }
 
-    // 3. Check for generic "esc to interrupt" indicator
-    if last_10_text.contains("esc") && last_10_text.contains("interrupt") {
-        return AgentStatus::Running;
-    }
-
-    // 4. Check for spinner characters
+    // 3. Check for spinner characters
     let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
     let last_5_text = last_5_lines.join("\n");
     if SPINNER_CHARS.is_match(&last_5_text) || OPENCODE_SPINNER_CHARS.is_match(&last_5_text) {
         return AgentStatus::Running;
     }
 
-    // 5. Check for errors
+    // 4. Check for errors
     for pattern in ERROR_PATTERNS.iter() {
         if pattern.is_match(&clean_output) {
             for line in lines.iter().rev().take(15) {
@@ -726,7 +721,7 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
         }
     }
 
-    // 6. Check for completion patterns
+    // 5. Check for completion patterns
     for pattern in COMPLETION_PATTERNS.iter() {
         if pattern.is_match(&clean_output) {
             return AgentStatus::Completed;
@@ -1213,6 +1208,43 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::Stopped),
             "Expected Stopped, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_real_question_output() {
+        let output = r#"• I'm preparing to ask the user to specify what they mean by document, content, and theme to ensure a clear shared understanding before proceeding.
+
+
+
+  Question 1/3 (3 unanswered)
+  Where should the 200 paragraphs be written?
+
+  › 1. New file in repo (Recommended)  Create a new text file in the project root.
+    2. Specific path                   You'll provide the exact path to write.
+    3. Terminal output only            Don't write a file; just print sample in response.
+    4. None of the above               Optionally, add details in notes (tab).
+
+  tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt"#;
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Question panel, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_codex_real_working_output() {
+        let output = r#"› Lets output a nice 200 paragraphs in a text document
+
+
+• Working (1s • esc to interrupt)"#;
+        let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running for Working indicator, got {:?}",
             status
         );
     }
