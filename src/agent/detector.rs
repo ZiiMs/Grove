@@ -1317,4 +1317,63 @@ mod tests {
             status
         );
     }
+
+    #[test]
+    fn test_gemini_real_answer_questions_panel() {
+        // Full output from real Gemini CLI with Answer Questions panel
+        let output = r#" ███            █████████  ██████████ ██████   ██████ █████ ██████   █████ █████
+░░░███         ███░░░░░███░░███░░░░░█░░██████ ██████ ░░███ ░░██████ ░░███ ░░███
+Logged in with Google: alextede8899@gmail.com /auth
+Plan: Gemini Code Assist for individuals
+Tips for getting started:
+1. Ask questions, edit files, or run commands.
+2. Be specific for the best results.
+3. /help for more information.
+
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ > Write me a nice two hundred paragraph text document
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+ℹ No background shells are currently active.
+╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Answer Questions                                                                                                                                                                           │
+│                                                                                                                                                                                            │
+│ ← □ Topic │ □ Filename │ ≡ Review →                                                                                                                                                        │
+│                                                                                                                                                                                            │
+│ What should be the topic or content of the 200 paragraphs?                                                                                                                                 │
+│                                                                                                                                                                                            │
+│ ▲                                                                                                                                                                                          │
+│ ● 1.  Lorem Ipsum                                                                                                                                                                          │
+│       Standard placeholder text                                                                                                                                                            │
+│   2.  Story                                                                                                                                                                                │
+│       A creative fictional story                                                                                                                                                           │
+│ ▼                                                                                                                                                                                          │
+│                                                                                                                                                                                            │
+│ Enter to select · ←/→ to switch questions · Esc to cancel                                                                                                                                  │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ shift+tab to accept edits                                                                                                                                                   1 GEMINI.md file
+ ~/dev/todo-testapp/.worktrees/gemini (gemini*)                                                 no sandbox (see /docs)                                                 /model Auto (Gemini 3)"#;
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput for Answer Questions panel, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_real_answer_questions_with_unknown_process() {
+        // Same output but with Unknown foreground - should still detect AwaitingInput
+        let output = r#"Answer Questions
+│
+│ Enter to select · ←/→ to switch questions · Esc to cancel"#;
+        let status = detect_status_gemini(output, ForegroundProcess::Unknown);
+        assert!(
+            matches!(status, AgentStatus::AwaitingInput),
+            "Expected AwaitingInput with Unknown foreground, got {:?}",
+            status
+        );
+    }
 }
