@@ -143,12 +143,12 @@ impl<'a> TaskListModal<'a> {
             .position(|(actual_idx, _, _)| *actual_idx == self.selected_actual_idx)
             .unwrap_or(0);
 
-        let max_name_width = visible_tasks
-            .iter()
-            .map(|(_, t, depth)| t.name.chars().count() + depth * 2)
-            .max()
-            .unwrap_or(20)
-            .min(60);
+        let available_width = chunks[0].width as usize;
+        let max_name_width = if available_width > 50 {
+            available_width.saturating_sub(35)
+        } else {
+            available_width.saturating_sub(20).max(10)
+        };
 
         let items: Vec<ListItem> = visible_tasks
             .iter()
