@@ -1232,6 +1232,15 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
 fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Option<Action> {
     use grove::app::DropdownState;
 
+    // Handle reset confirmation mode
+    if state.settings.reset_confirmation.is_some() {
+        return match key.code {
+            KeyCode::Esc => Some(Action::SettingsCancelReset),
+            KeyCode::Enter => Some(Action::SettingsConfirmReset),
+            _ => None,
+        };
+    }
+
     // Handle prompt editing mode (multi-line text editor)
     if state.settings.editing_prompt {
         return match key.code {
@@ -1362,11 +1371,20 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
         KeyCode::Enter => {
-            let field = state.settings.current_field();
-            if field.is_keybind_field() {
-                Some(Action::SettingsStartKeybindCapture)
+            if let Some(btn) = state.settings.current_action_button() {
+                use grove::app::ActionButtonType;
+                let reset_type = match btn {
+                    ActionButtonType::ResetTab => grove::app::ResetType::CurrentTab,
+                    ActionButtonType::ResetAll => grove::app::ResetType::AllSettings,
+                };
+                Some(Action::SettingsRequestReset { reset_type })
             } else {
-                Some(Action::SettingsSelectField)
+                let field = state.settings.current_field();
+                if field.is_keybind_field() {
+                    Some(Action::SettingsStartKeybindCapture)
+                } else {
+                    Some(Action::SettingsSelectField)
+                }
             }
         }
         _ => None,
@@ -5161,6 +5179,68 @@ async fn process_action(
 
         Action::SettingsCancelKeybindCapture => {
             state.settings.capturing_keybind = None;
+        }
+
+        Action::SettingsRequestReset { reset_type } => {
+            state.settings.reset_confirmation = Some(reset_type);
+        }
+
+        Action::SettingsConfirmReset => {
+            if let Some(reset_type) = state.settings.reset_confirmation {
+                match reset_type {
+                    grove::app::ResetType::CurrentTab => {
+                        state.settings.reset_current_tab();
+                    }
+                    grove::app::ResetType::AllSettings => {
+                        state.settings.reset_all();
+                    }
+                }
+                state.settings.reset_confirmation = None;
+
+                let old_provider = state.settings.repo_config.project_mgmt.provider;
+
+                state.config.global.ai_agent = state.settings.pending_ai_agent.clone();
+                state.config.global.editor = state.settings.pending_editor.clone();
+                state.config.global.log_level = state.settings.pending_log_level;
+                state.config.global.worktree_location = state.settings.pending_worktree_location;
+                state.config.ui = state.settings.pending_ui.clone();
+                state.config.keybinds = state.settings.pending_keybinds.clone();
+
+                if let Err(e) = state.config.save() {
+                    state.log_error(format!("Failed to save config: {}", e));
+                }
+
+                if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                    state.log_error(format!("Failed to save repo config: {}", e));
+                }
+
+                let new_provider = state.settings.repo_config.project_mgmt.provider;
+                if old_provider != new_provider {
+                    state.task_list.clear();
+                    state.task_list_loading = true;
+                    let _ = action_tx.send(Action::FetchTaskList);
+                }
+
+                state.show_logs = state.config.ui.show_logs;
+                state.worktree_base = state.config.worktree_base_path(&state.repo_path);
+                state.settings.active = false;
+
+                match reset_type {
+                    grove::app::ResetType::CurrentTab => {
+                        state.log_info(format!(
+                            "{} settings reset to defaults",
+                            state.settings.tab.display_name()
+                        ));
+                    }
+                    grove::app::ResetType::AllSettings => {
+                        state.log_info("All settings reset to defaults");
+                    }
+                }
+            }
+        }
+
+        Action::SettingsCancelReset => {
+            state.settings.reset_confirmation = None;
         }
 
         // File Browser Actions

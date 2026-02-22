@@ -7,9 +7,9 @@ use ratatui::{
 };
 
 use crate::app::{
-    AiAgent, CodebergCiProvider, Config, ConfigLogLevel, GitProvider, ProjectMgmtProvider,
-    SettingsCategory, SettingsField, SettingsItem, SettingsState, SettingsTab, UiConfig,
-    WorktreeLocation,
+    ActionButtonType, AiAgent, CodebergCiProvider, Config, ConfigLogLevel, GitProvider,
+    ProjectMgmtProvider, ResetType, SettingsCategory, SettingsField, SettingsItem, SettingsState,
+    SettingsTab, UiConfig, WorktreeLocation,
 };
 use crate::ui::components::file_browser;
 
@@ -77,6 +77,10 @@ impl<'a> SettingsModal<'a> {
 
         if self.state.file_browser.active {
             self.render_file_browser(frame);
+        }
+
+        if self.state.reset_confirmation.is_some() {
+            self.render_reset_confirmation(frame);
         }
     }
 
@@ -190,6 +194,10 @@ impl<'a> SettingsModal<'a> {
                         }
                     }
                 }
+                SettingsItem::ActionButton(btn) => {
+                    let is_selected = item_idx == selected_field_idx;
+                    lines.push(self.render_action_button_line(*btn, is_selected));
+                }
             }
         }
 
@@ -289,6 +297,31 @@ impl<'a> SettingsModal<'a> {
             Span::styled(": ", Style::default().fg(Color::DarkGray)),
             Span::styled(format!("{:34}", display_value), final_style),
             Span::styled(cursor.to_string(), Style::default().fg(Color::White)),
+        ])
+    }
+
+    fn render_action_button_line(&self, btn: ActionButtonType, is_selected: bool) -> Line<'static> {
+        let button_text = btn.display_name();
+        let padding = 4;
+        let button_display = format!(
+            "{} {} {}",
+            "─".repeat(padding),
+            button_text,
+            "─".repeat(padding)
+        );
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        Line::from(vec![
+            Span::styled("\n", Style::default()),
+            Span::styled(format!("    {:^48}", button_display), style),
         ])
     }
 
@@ -884,6 +917,60 @@ impl<'a> SettingsModal<'a> {
             &fb.current_path,
         );
         widget.render(frame);
+    }
+
+    fn render_reset_confirmation(&self, frame: &mut Frame) {
+        let area = centered_rect(50, 30, frame.area());
+        frame.render_widget(Clear, area);
+
+        let reset_type = self
+            .state
+            .reset_confirmation
+            .unwrap_or(ResetType::CurrentTab);
+        let (title, message) = match reset_type {
+            ResetType::CurrentTab => (
+                " Confirm Reset ",
+                format!(
+                    "Reset {} settings to defaults?",
+                    self.state.tab.display_name()
+                ),
+            ),
+            ResetType::AllSettings => (
+                " Confirm Reset All ",
+                "Reset ALL settings to defaults?".to_string(),
+            ),
+        };
+
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("  {}", message),
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  This cannot be undone.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  [Enter] ", Style::default().fg(Color::Green)),
+                Span::styled("Confirm   ", Style::default().fg(Color::White)),
+                Span::styled("[Esc] ", Style::default().fg(Color::Yellow)),
+                Span::styled("Cancel", Style::default().fg(Color::White)),
+            ]),
+        ];
+
+        let paragraph = Paragraph::new(lines).alignment(Alignment::Left);
+        frame.render_widget(paragraph, inner);
     }
 }
 
