@@ -1598,9 +1598,15 @@ async fn process_action(
                                 })
                             }
                             ProjectMgmtProvider::Linear => {
+                                let identifier = task_item
+                                    .name
+                                    .split_whitespace()
+                                    .next()
+                                    .unwrap_or("")
+                                    .to_string();
                                 ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted {
                                     id: task_item.id.clone(),
-                                    identifier: String::new(),
+                                    identifier,
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
                                     is_subtask: task_item.is_subtask(),
@@ -4670,9 +4676,15 @@ async fn process_action(
                                     },
                                 ),
                                 ProjectMgmtProvider::Linear => {
+                                    let identifier = task
+                                        .name
+                                        .split_whitespace()
+                                        .next()
+                                        .unwrap_or("")
+                                        .to_string();
                                     ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted {
                                         id: task.id.clone(),
-                                        identifier: String::new(),
+                                        identifier,
                                         name: task.name.clone(),
                                         url: task.url.clone(),
                                         is_subtask: task.is_subtask(),
