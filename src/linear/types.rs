@@ -49,7 +49,7 @@ impl LinearTaskStatus {
             LinearTaskStatus::None => "—".to_string(),
             LinearTaskStatus::NotStarted { status_name, .. }
             | LinearTaskStatus::InProgress { status_name, .. }
-            | LinearTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
+            | LinearTaskStatus::Completed { status_name, .. } => status_name.clone(),
             LinearTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
