@@ -1475,6 +1475,7 @@ async fn process_action(
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
                                     is_subtask: task_item.is_subtask(),
+                                    status_name: task_item.status_name.clone(),
                                 })
                             }
                             ProjectMgmtProvider::Notion => {
@@ -1483,6 +1484,7 @@ async fn process_action(
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
                                     status_option_id: String::new(),
+                                    status_name: task_item.status_name.clone(),
                                 })
                             }
                             ProjectMgmtProvider::Clickup => {
@@ -2149,6 +2151,7 @@ async fn process_action(
                                 gid: task.gid,
                                 name: task.name,
                                 is_subtask,
+                                status_name: "Complete".to_string(),
                             }
                         } else {
                             AsanaTaskStatus::NotStarted {
@@ -2156,6 +2159,7 @@ async fn process_action(
                                 name: task.name,
                                 url,
                                 is_subtask,
+                                status_name: "Not Started".to_string(),
                             }
                         };
                         let _ = tx.send(Action::UpdateAsanaTaskStatus { id, status });
@@ -2241,6 +2245,7 @@ async fn process_action(
                                         gid: task.gid,
                                         name: task.name,
                                         is_subtask,
+                                        status_name: "Complete".to_string(),
                                     }
                                 } else {
                                     AsanaTaskStatus::NotStarted {
@@ -2248,6 +2253,7 @@ async fn process_action(
                                         name: task.name,
                                         url,
                                         is_subtask,
+                                        status_name: "Not Started".to_string(),
                                     }
                                 };
                                 let _ = tx.send(Action::UpdateProjectTaskStatus {
@@ -2272,10 +2278,12 @@ async fn process_action(
                     tokio::spawn(async move {
                         match client.get_page(&page_id).await {
                             Ok(page) => {
+                                let status_name = page.status_name.clone().unwrap_or_default();
                                 let status = if page.is_completed {
                                     NotionTaskStatus::Completed {
                                         page_id: page.id,
                                         name: page.name,
+                                        status_name,
                                     }
                                 } else {
                                     NotionTaskStatus::NotStarted {
@@ -2283,6 +2291,7 @@ async fn process_action(
                                         name: page.name,
                                         url: page.url,
                                         status_option_id: page.status_id.unwrap_or_default(),
+                                        status_name,
                                     }
                                 };
                                 let _ = tx.send(Action::UpdateProjectTaskStatus {
@@ -2442,6 +2451,7 @@ async fn process_action(
                             name,
                             url,
                             is_subtask,
+                            status_name: _,
                         } => {
                             let gid = gid.clone();
                             let name = name.clone();
@@ -2455,6 +2465,7 @@ async fn process_action(
                                         name: name.clone(),
                                         url: url.clone(),
                                         is_subtask,
+                                        status_name: "In Progress".to_string(),
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -2503,6 +2514,7 @@ async fn process_action(
                                         gid: gid.clone(),
                                         name: name.clone(),
                                         is_subtask,
+                                        status_name: "Complete".to_string(),
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -2548,6 +2560,7 @@ async fn process_action(
                                         name: name.clone(),
                                         url: String::new(),
                                         is_subtask,
+                                        status_name: "Not Started".to_string(),
                                     });
                             }
                             let client = Arc::clone(asana_client);
@@ -3025,6 +3038,7 @@ async fn process_action(
                                         ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
                                             page_id: page_id.clone(),
                                             name: task_name.clone(),
+                                            status_name: option_name.clone(),
                                         })
                                     } else if option_name.to_lowercase().contains("progress") {
                                         ProjectMgmtTaskStatus::Notion(
@@ -3033,6 +3047,7 @@ async fn process_action(
                                                 name: task_name.clone(),
                                                 url: String::new(),
                                                 status_option_id: option_id.clone(),
+                                                status_name: option_name.clone(),
                                             },
                                         )
                                     } else {
@@ -3042,6 +3057,7 @@ async fn process_action(
                                                 name: task_name.clone(),
                                                 url: String::new(),
                                                 status_option_id: option_id.clone(),
+                                                status_name: option_name.clone(),
                                             },
                                         )
                                     };
@@ -3096,6 +3112,7 @@ async fn process_action(
                                             gid: task_gid.clone(),
                                             name: task_name.clone(),
                                             is_subtask,
+                                            status_name: option_name.clone(),
                                         })
                                     } else if is_in_progress {
                                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
@@ -3103,6 +3120,7 @@ async fn process_action(
                                             name: task_name.clone(),
                                             url: String::new(),
                                             is_subtask,
+                                            status_name: option_name.clone(),
                                         })
                                     } else {
                                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
@@ -3110,6 +3128,7 @@ async fn process_action(
                                             name: task_name.clone(),
                                             url: String::new(),
                                             is_subtask,
+                                            status_name: option_name.clone(),
                                         })
                                     };
 
@@ -3740,6 +3759,7 @@ async fn process_action(
                                 gid: task_id.clone(),
                                 name,
                                 is_subtask,
+                                status_name: "Complete".to_string(),
                             })
                         } else {
                             ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
@@ -3747,6 +3767,7 @@ async fn process_action(
                                 name,
                                 url,
                                 is_subtask,
+                                status_name: "Not Started".to_string(),
                             })
                         };
                         break;
@@ -3782,6 +3803,7 @@ async fn process_action(
                                         name: task.name.clone(),
                                         url: task.url.clone(),
                                         is_subtask: task.is_subtask(),
+                                        status_name: task.status_name.clone(),
                                     })
                                 }
                                 ProjectMgmtProvider::Notion => {
@@ -3790,6 +3812,7 @@ async fn process_action(
                                         name: task.name.clone(),
                                         url: task.url.clone(),
                                         status_option_id: String::new(),
+                                        status_name: task.status_name.clone(),
                                     })
                                 }
                                 ProjectMgmtProvider::Clickup => {
@@ -4173,6 +4196,7 @@ async fn process_action(
                                             gid: task.gid,
                                             name: task.name,
                                             is_subtask,
+                                            status_name: "Complete".to_string(),
                                         }
                                     } else {
                                         grove::asana::AsanaTaskStatus::InProgress {
@@ -4180,6 +4204,7 @@ async fn process_action(
                                             name: task.name,
                                             url,
                                             is_subtask,
+                                            status_name: "In Progress".to_string(),
                                         }
                                     };
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
@@ -4197,10 +4222,12 @@ async fn process_action(
                             let pid = page_id.to_string();
                             tokio::spawn(async move {
                                 if let Ok(page) = notion_client_clone.get_page(&pid).await {
+                                    let status_name = page.status_name.clone().unwrap_or_default();
                                     let status = if page.is_completed {
                                         NotionTaskStatus::Completed {
                                             page_id: page.id,
                                             name: page.name,
+                                            status_name,
                                         }
                                     } else {
                                         NotionTaskStatus::InProgress {
@@ -4208,6 +4235,7 @@ async fn process_action(
                                             name: page.name,
                                             url: page.url,
                                             status_option_id: page.status_id.unwrap_or_default(),
+                                            status_name,
                                         }
                                     };
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
@@ -6239,6 +6267,7 @@ async fn poll_asana_tasks(
                             gid: task.gid,
                             name: task.name,
                             is_subtask,
+                            status_name: "Complete".to_string(),
                         })
                     } else {
                         ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
@@ -6246,6 +6275,7 @@ async fn poll_asana_tasks(
                             name: task.name,
                             url,
                             is_subtask,
+                            status_name: "In Progress".to_string(),
                         })
                     };
                     let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
@@ -6272,10 +6302,12 @@ async fn poll_notion_tasks(
         for (id, page_id) in tasks {
             match notion_client.get_page(&page_id).await {
                 Ok(page) => {
+                    let status_name = page.status_name.clone().unwrap_or_default();
                     let status = if page.is_completed {
                         ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
                             page_id: page.id,
                             name: page.name,
+                            status_name,
                         })
                     } else {
                         ProjectMgmtTaskStatus::Notion(NotionTaskStatus::InProgress {
@@ -6283,6 +6315,7 @@ async fn poll_notion_tasks(
                             name: page.name,
                             url: page.url,
                             status_option_id: page.status_id.unwrap_or_default(),
+                            status_name,
                         })
                     };
                     let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
