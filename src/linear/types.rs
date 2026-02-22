@@ -175,7 +175,7 @@ pub struct LinearIssueData {
 pub struct LinearStateData {
     pub id: String,
     pub name: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub state_type: String,
     pub color: Option<String>,
 }
