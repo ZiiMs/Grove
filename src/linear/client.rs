@@ -76,8 +76,13 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<TeamsQueryData> = serde_json::from_str(&response_text)
-            .with_context(|| format!("Failed to parse Linear teams response: {}", response_text))?;
+        let data: GraphQLResponse<TeamsQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to parse Linear teams response: {} - body: {}", e, response_text);
+                bail!("Failed to parse Linear teams response: {}", e);
+            }
+        };
 
         Ok(data
             .data
@@ -139,8 +144,13 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<IssueQueryData> = serde_json::from_str(&response_text)
-            .with_context(|| format!("Failed to parse Linear issue response: {}", response_text))?;
+        let data: GraphQLResponse<IssueQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to parse Linear issue response: {} - body: {}", e, response_text);
+                bail!("Failed to parse Linear issue response: {}", e);
+            }
+        };
 
         let issue = data.data.issue.context("Issue not found")?;
 
@@ -234,8 +244,13 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<TeamIssuesQueryData> = serde_json::from_str(&response_text)
-            .with_context(|| format!("Failed to parse Linear team issues response: {}", response_text))?;
+        let data: GraphQLResponse<TeamIssuesQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to parse Linear team issues response: {} - body: {}", e, response_text);
+                bail!("Failed to parse Linear team issues response: {}", e);
+            }
+        };
 
         let team = data.data.team.context("Team not found")?;
 
@@ -337,8 +352,13 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<TeamStatesQueryData> = serde_json::from_str(&response_text)
-            .with_context(|| format!("Failed to parse Linear workflow states response: {}", response_text))?;
+        let data: GraphQLResponse<TeamStatesQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to parse Linear workflow states response: {} - body: {}", e, response_text);
+                bail!("Failed to parse Linear workflow states response: {}", e);
+            }
+        };
 
         let team = data.data.team.context("Team not found")?;
 
@@ -411,8 +431,13 @@ impl LinearClient {
             bail!("Linear API error: {} - {}", status, response_text);
         }
 
-        let data: GraphQLResponse<IssueUpdateData> = serde_json::from_str(&response_text)
-            .with_context(|| format!("Failed to parse Linear issue update response: {}", response_text))?;
+        let data: GraphQLResponse<IssueUpdateData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("Failed to parse Linear issue update response: {} - body: {}", e, response_text);
+                bail!("Failed to parse Linear issue update response: {}", e);
+            }
+        };
 
         if !data.data.issue_update.success {
             bail!("Linear issue update failed");
