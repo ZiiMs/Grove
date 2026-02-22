@@ -3581,61 +3581,129 @@ async fn process_action(
                     let option_id = selected_option.id.clone();
                     let option_name = selected_option.name.clone();
 
-                    // Check if this is a ClickUp subtask from the task list (nil UUID)
+                    // Check if this is a task from the task list (nil UUID)
                     if agent_id == Uuid::nil() {
                         if let Some(subtask) = subtask_dropdown {
                             let task_id = subtask.task_id.clone();
+                            let option_id = option_id.clone();
                             let status_name = option_name.clone();
-                            let task_id_for_spawn = task_id.clone();
-                            let status_name_for_spawn = status_name.clone();
+                            let provider = state.settings.repo_config.project_mgmt.provider;
 
-                            let client = Arc::clone(clickup_client);
-                            let tx = action_tx.clone();
-                            state.loading_message = Some("Updating subtask status...".to_string());
+                            if matches!(provider, ProjectMgmtProvider::Notion) {
+                                let client = Arc::clone(notion_client);
+                                let tx = action_tx.clone();
+                                let status_prop_name = state
+                                    .settings
+                                    .repo_config
+                                    .project_mgmt
+                                    .notion
+                                    .status_property_name
+                                    .clone();
+                                state.loading_message = Some("Updating task status...".to_string());
 
-                            tokio::spawn(async move {
-                                match client
-                                    .update_task_status(&task_id_for_spawn, &status_name_for_spawn)
-                                    .await
-                                {
-                                    Ok(()) => {
+                                let task_id_for_spawn = task_id.clone();
+                                let status_name_for_spawn = status_name.clone();
+                                tokio::spawn(async move {
+                                    let prop_name =
+                                        status_prop_name.unwrap_or_else(|| "Status".to_string());
+                                    if let Err(e) = client
+                                        .update_page_status(
+                                            &task_id_for_spawn,
+                                            &prop_name,
+                                            &option_id,
+                                        )
+                                        .await
+                                    {
+                                        tracing::error!("Failed to update Notion status: {}", e);
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to update status: {}",
+                                            e
+                                        )));
+                                    } else {
                                         let _ = tx.send(Action::SetLoading(None));
                                         let _ = tx.send(Action::ShowToast {
-                                            message: format!("Subtask → {}", status_name_for_spawn),
+                                            message: format!("Task → {}", status_name_for_spawn),
                                             level: ToastLevel::Success,
                                         });
                                         let _ = tx.send(Action::RefreshTaskList);
                                     }
-                                    Err(e) => {
-                                        let _ = tx.send(Action::SetLoading(None));
-                                        let _ = tx.send(Action::ShowError(format!(
-                                            "Failed to update subtask: {}",
-                                            e
-                                        )));
-                                    }
-                                }
-                            });
+                                });
 
-                            // Update local state
-                            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id)
-                            {
-                                let lower = status_name.to_lowercase();
-                                task.status_name = status_name.clone();
-                                task.status = if lower.contains("done")
-                                    || lower.contains("complete")
-                                    || lower.contains("closed")
+                                if let Some(task) =
+                                    state.task_list.iter_mut().find(|t| t.id == task_id)
                                 {
-                                    task.completed = true;
-                                    TaskItemStatus::Completed
-                                } else if lower.contains("progress") {
-                                    task.completed = false;
-                                    TaskItemStatus::InProgress
-                                } else {
-                                    task.completed = false;
-                                    TaskItemStatus::NotStarted
-                                };
+                                    let lower = status_name.to_lowercase();
+                                    task.status_name = status_name.clone();
+                                    task.completed =
+                                        lower.contains("done") || lower.contains("complete");
+                                    task.status = if task.completed {
+                                        TaskItemStatus::Completed
+                                    } else if lower.contains("progress") {
+                                        TaskItemStatus::InProgress
+                                    } else {
+                                        TaskItemStatus::NotStarted
+                                    };
+                                }
+                                state.show_success(format!("Task → {}", status_name));
+                            } else {
+                                let client = Arc::clone(clickup_client);
+                                let tx = action_tx.clone();
+                                state.loading_message =
+                                    Some("Updating subtask status...".to_string());
+
+                                let task_id_for_spawn = task_id.clone();
+                                let status_name_for_spawn = status_name.clone();
+                                tokio::spawn(async move {
+                                    match client
+                                        .update_task_status(
+                                            &task_id_for_spawn,
+                                            &status_name_for_spawn,
+                                        )
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowToast {
+                                                message: format!(
+                                                    "Subtask → {}",
+                                                    status_name_for_spawn
+                                                ),
+                                                level: ToastLevel::Success,
+                                            });
+                                            let _ = tx.send(Action::RefreshTaskList);
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Failed to update subtask: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                });
+
+                                if let Some(task) =
+                                    state.task_list.iter_mut().find(|t| t.id == task_id)
+                                {
+                                    let lower = status_name.to_lowercase();
+                                    task.status_name = status_name.clone();
+                                    task.status = if lower.contains("done")
+                                        || lower.contains("complete")
+                                        || lower.contains("closed")
+                                    {
+                                        task.completed = true;
+                                        TaskItemStatus::Completed
+                                    } else if lower.contains("progress") {
+                                        task.completed = false;
+                                        TaskItemStatus::InProgress
+                                    } else {
+                                        task.completed = false;
+                                        TaskItemStatus::NotStarted
+                                    };
+                                }
+                                state.show_success(format!("Subtask → {}", status_name));
                             }
-                            state.show_success(format!("Subtask → {}", status_name));
                         }
                         return Ok(false);
                     }
@@ -4383,9 +4451,49 @@ async fn process_action(
 
         Action::ToggleSubtaskStatus => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
-                if task.is_subtask() {
-                    let provider = state.settings.repo_config.project_mgmt.provider;
+                let provider = state.settings.repo_config.project_mgmt.provider;
 
+                // Notion: All tasks use full status dropdown
+                if matches!(provider, ProjectMgmtProvider::Notion) {
+                    if !notion_client.is_configured().await {
+                        state
+                            .show_error("Notion not configured. Set NOTION_TOKEN and database_id.");
+                        return Ok(false);
+                    }
+
+                    let task_id_for_dropdown = task.id.clone();
+                    let client = Arc::clone(notion_client);
+                    let tx = action_tx.clone();
+                    state.loading_message = Some("Loading status options...".to_string());
+
+                    tokio::spawn(async move {
+                        match client.get_status_options().await {
+                            Ok(opts) => {
+                                let options: Vec<StatusOption> = opts
+                                    .all_options
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.id,
+                                        name: o.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                    task_id: task_id_for_dropdown,
+                                    task_name: task.name.clone(),
+                                    options,
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to load Notion status options: {}", e);
+                                let _ = tx.send(Action::SetLoading(None));
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load status options: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    });
+                } else if task.is_subtask() {
                     // ClickUp subtasks use the same statuses as parent tasks
                     if matches!(provider, ProjectMgmtProvider::Clickup) {
                         if !clickup_client.is_configured().await {
@@ -4395,7 +4503,6 @@ async fn process_action(
                             return Ok(false);
                         }
 
-                        // Store the task info temporarily and load statuses
                         let task_id_for_dropdown = task.id.clone();
                         let client = Arc::clone(clickup_client);
                         let tx = action_tx.clone();
@@ -4428,7 +4535,7 @@ async fn process_action(
                             }
                         });
                     } else {
-                        // Asana/Notion subtasks use simple complete/incomplete toggle
+                        // Asana subtasks use simple complete/incomplete toggle
                         state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
                             task_id: task.id.clone(),
                             task_name: task.name.clone(),
