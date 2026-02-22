@@ -4,12 +4,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::airtable::AirtableTaskStatus;
 use crate::asana::AsanaTaskStatus;
 use crate::clickup::ClickUpTaskStatus;
 use crate::codeberg::PullRequestStatus as CodebergPullRequestStatus;
 use crate::git::GitSyncStatus;
 use crate::github::PullRequestStatus;
 use crate::gitlab::MergeRequestStatus;
+use crate::linear::LinearTaskStatus;
 use crate::notion::NotionTaskStatus;
 
 /// Maximum number of activity ticks to track for sparkline
@@ -22,6 +24,8 @@ pub enum ProjectMgmtTaskStatus {
     Asana(AsanaTaskStatus),
     Notion(NotionTaskStatus),
     ClickUp(ClickUpTaskStatus),
+    Airtable(AirtableTaskStatus),
+    Linear(LinearTaskStatus),
 }
 
 impl ProjectMgmtTaskStatus {
@@ -31,6 +35,8 @@ impl ProjectMgmtTaskStatus {
             ProjectMgmtTaskStatus::Asana(s) => s.format_short(),
             ProjectMgmtTaskStatus::Notion(s) => s.format_short(),
             ProjectMgmtTaskStatus::ClickUp(s) => s.format_short(),
+            ProjectMgmtTaskStatus::Airtable(s) => s.format_short(),
+            ProjectMgmtTaskStatus::Linear(s) => s.format_short(),
         }
     }
 
@@ -53,6 +59,8 @@ impl ProjectMgmtTaskStatus {
             ProjectMgmtTaskStatus::Asana(s) => s.gid(),
             ProjectMgmtTaskStatus::Notion(s) => s.page_id(),
             ProjectMgmtTaskStatus::ClickUp(s) => s.id(),
+            ProjectMgmtTaskStatus::Airtable(s) => s.id(),
+            ProjectMgmtTaskStatus::Linear(s) => s.id(),
             ProjectMgmtTaskStatus::None => None,
         }
     }
@@ -62,6 +70,8 @@ impl ProjectMgmtTaskStatus {
             ProjectMgmtTaskStatus::Asana(s) => s.name(),
             ProjectMgmtTaskStatus::Notion(s) => s.name(),
             ProjectMgmtTaskStatus::ClickUp(s) => s.name(),
+            ProjectMgmtTaskStatus::Airtable(s) => s.name(),
+            ProjectMgmtTaskStatus::Linear(s) => s.name(),
             ProjectMgmtTaskStatus::None => None,
         }
     }
@@ -71,6 +81,8 @@ impl ProjectMgmtTaskStatus {
             ProjectMgmtTaskStatus::Asana(s) => s.url(),
             ProjectMgmtTaskStatus::Notion(s) => s.url(),
             ProjectMgmtTaskStatus::ClickUp(s) => s.url(),
+            ProjectMgmtTaskStatus::Airtable(s) => s.url(),
+            ProjectMgmtTaskStatus::Linear(s) => s.url(),
             ProjectMgmtTaskStatus::None => None,
         }
     }
@@ -96,6 +108,20 @@ impl ProjectMgmtTaskStatus {
         )
     }
 
+    pub fn is_airtable_not_started(&self) -> bool {
+        matches!(
+            self,
+            ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::NotStarted { .. })
+        )
+    }
+
+    pub fn is_linear_not_started(&self) -> bool {
+        matches!(
+            self,
+            ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted { .. })
+        )
+    }
+
     pub fn as_asana(&self) -> Option<&AsanaTaskStatus> {
         match self {
             ProjectMgmtTaskStatus::Asana(s) => Some(s),
@@ -113,6 +139,20 @@ impl ProjectMgmtTaskStatus {
     pub fn as_clickup(&self) -> Option<&ClickUpTaskStatus> {
         match self {
             ProjectMgmtTaskStatus::ClickUp(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_airtable(&self) -> Option<&AirtableTaskStatus> {
+        match self {
+            ProjectMgmtTaskStatus::Airtable(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_linear(&self) -> Option<&LinearTaskStatus> {
+        match self {
+            ProjectMgmtTaskStatus::Linear(s) => Some(s),
             _ => None,
         }
     }

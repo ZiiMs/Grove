@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use futures::future::join_all;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
     NotionBlock, NotionDatabaseResponse, NotionPageData, NotionPageResponse, NotionPropertySchema,
@@ -416,7 +416,7 @@ fn clean_page_id(id: &str) -> String {
 use crate::cache::Cache;
 
 pub struct OptionalNotionClient {
-    client: Option<NotionClient>,
+    client: RwLock<Option<NotionClient>>,
     cached_tasks: Cache<(bool, Vec<NotionPageData>)>,
 }
 
@@ -431,24 +431,40 @@ impl OptionalNotionClient {
             database_id.and_then(|db_id| NotionClient::new(tok, db_id, status_property_name).ok())
         });
         Self {
-            client,
+            client: RwLock::new(client),
             cached_tasks: Cache::new(cache_ttl_secs),
         }
     }
 
-    pub fn is_configured(&self) -> bool {
-        self.client.is_some()
+    pub fn reconfigure(
+        &self,
+        token: Option<&str>,
+        database_id: Option<String>,
+        status_property_name: Option<String>,
+    ) {
+        let new_client = token.and_then(|tok| {
+            database_id.and_then(|db_id| NotionClient::new(tok, db_id, status_property_name).ok())
+        });
+        if let Ok(mut guard) = self.client.try_write() {
+            *guard = new_client;
+        }
+    }
+
+    pub async fn is_configured(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     pub async fn get_page(&self, page_id: &str) -> Result<NotionPageData> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_page(page_id).await,
             None => bail!("Notion not configured"),
         }
     }
 
     pub async fn query_database(&self, exclude_done: bool) -> Result<Vec<NotionPageData>> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.query_database(exclude_done).await,
             None => bail!("Notion not configured"),
         }
@@ -465,8 +481,8 @@ impl OptionalNotionClient {
             }
         }
 
-        let client = self
-            .client
+        let guard = self.client.read().await;
+        let client = guard
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Notion not configured"))?;
         let pages = client.query_database_with_children(exclude_done).await?;
@@ -478,7 +494,8 @@ impl OptionalNotionClient {
     }
 
     pub async fn get_status_options(&self) -> Result<StatusOptions> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_status_options().await,
             None => bail!("Notion not configured"),
         }
@@ -490,7 +507,8 @@ impl OptionalNotionClient {
         status_property_name: &str,
         option_id: &str,
     ) -> Result<()> {
-        let result = match &self.client {
+        let guard = self.client.read().await;
+        let result = match &*guard {
             Some(c) => {
                 c.update_page_status(page_id, status_property_name, option_id)
                     .await
@@ -507,7 +525,8 @@ impl OptionalNotionClient {
     }
 
     pub async fn append_blocks(&self, page_id: &str, blocks: Vec<NotionBlock>) -> Result<()> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.append_blocks(page_id, blocks).await,
             None => bail!("Notion not configured"),
         }

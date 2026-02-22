@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod airtable;
 pub mod app;
 pub mod asana;
 pub mod cache;
@@ -9,6 +10,7 @@ pub mod devserver;
 pub mod git;
 pub mod github;
 pub mod gitlab;
+pub mod linear;
 pub mod notion;
 pub mod storage;
 pub mod tmux;

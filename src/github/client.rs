@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
+use tokio::sync::RwLock;
 
 use super::types::{CheckRunsResponse, CheckStatus, PullRequestResponse, PullRequestStatus};
 
@@ -226,7 +227,7 @@ impl GitHubClient {
 }
 
 pub struct OptionalGitHubClient {
-    client: Option<GitHubClient>,
+    client: RwLock<Option<GitHubClient>>,
 }
 
 impl OptionalGitHubClient {
@@ -236,15 +237,28 @@ impl OptionalGitHubClient {
             _ => None,
         };
 
-        Self { client }
+        Self {
+            client: RwLock::new(client),
+        }
     }
 
-    pub fn is_configured(&self) -> bool {
-        self.client.is_some()
+    pub fn reconfigure(&self, owner: Option<&str>, repo: Option<&str>, token: Option<&str>) {
+        let new_client = match (owner, repo, token) {
+            (Some(o), Some(r), Some(t)) => GitHubClient::new(t, o, r).ok(),
+            _ => None,
+        };
+        if let Ok(mut guard) = self.client.try_write() {
+            *guard = new_client;
+        }
+    }
+
+    pub async fn is_configured(&self) -> bool {
+        self.client.read().await.is_some()
     }
 
     pub async fn get_pr_for_branch(&self, branch: &str) -> PullRequestStatus {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c
                 .get_pr_for_branch(branch)
                 .await
@@ -257,7 +271,8 @@ impl OptionalGitHubClient {
         &self,
         branches: &[String],
     ) -> Vec<(String, PullRequestStatus)> {
-        match &self.client {
+        let guard = self.client.read().await;
+        match &*guard {
             Some(c) => c.get_prs_for_branches(branches).await.unwrap_or_default(),
             None => branches
                 .iter()

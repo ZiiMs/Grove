@@ -191,6 +191,18 @@ impl<'a> SettingsModal<'a> {
                                     Config::clickup_token().is_some(),
                                 ));
                             }
+                            ProjectMgmtProvider::Airtable => {
+                                lines.push(Self::render_token_status_line(
+                                    "AIRTABLE_TOKEN",
+                                    Config::airtable_token().is_some(),
+                                ));
+                            }
+                            ProjectMgmtProvider::Linear => {
+                                lines.push(Self::render_token_status_line(
+                                    "LINEAR_TOKEN",
+                                    Config::linear_token().is_some(),
+                                ));
+                            }
                         }
                     }
                 }
@@ -608,6 +620,94 @@ impl<'a> SettingsModal<'a> {
                     .project_mgmt
                     .clickup
                     .done_status
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
+            SettingsField::AirtableBaseId => (
+                "Base ID".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .airtable
+                    .base_id
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::AirtableTableName => (
+                "Table Name".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .airtable
+                    .table_name
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::AirtableStatusField => (
+                "Status Field".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .airtable
+                    .status_field_name
+                    .clone()
+                    .unwrap_or_else(|| "Status".to_string()),
+                false,
+            ),
+            SettingsField::AirtableInProgressOption => (
+                "In Progress".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .airtable
+                    .in_progress_option
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
+            SettingsField::AirtableDoneOption => (
+                "Done".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .airtable
+                    .done_option
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
+            SettingsField::LinearTeamId => (
+                "Team ID".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .linear
+                    .team_id
+                    .clone()
+                    .unwrap_or_default(),
+                false,
+            ),
+            SettingsField::LinearInProgressState => (
+                "In Progress".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .linear
+                    .in_progress_state
+                    .clone()
+                    .unwrap_or_else(|| "(auto-detect)".to_string()),
+                false,
+            ),
+            SettingsField::LinearDoneState => (
+                "Done".to_string(),
+                self.state
+                    .repo_config
+                    .project_mgmt
+                    .linear
+                    .done_state
                     .clone()
                     .unwrap_or_else(|| "(auto-detect)".to_string()),
                 false,
