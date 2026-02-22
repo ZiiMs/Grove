@@ -175,6 +175,11 @@ static GEMINI_KEYBOARD_HINTS: LazyLock<Regex> =
 static GEMINI_NUMBERED_QUESTIONS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*\d+\.\s+.+\?$").unwrap());
 
+/// Gemini user answers to numbered questions - indicates question phase is over
+/// Matches patterns like "   1. New doc" or "   2. Lorem ipsum" (no question mark, short answer)
+static GEMINI_NUMBERED_ANSWERS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*[1-4]\.\s+[^?]+$").unwrap());
+
 /// Gemini running indicator: timer format like "(esc to cancel, 15s)" - NOT keyboard hints
 static GEMINI_ESC_CANCEL_TIMER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\(esc\s+to\s+cancel,?\s*\d+s").unwrap());
@@ -849,11 +854,19 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         return AgentStatus::AwaitingInput;
     }
 
-    // 4b. Check for numbered questions (indicates clarification needed)
-    // This catches Gemini's question format like "   1. Target File: Should I...?"
-    for line in lines.iter() {
-        if GEMINI_NUMBERED_QUESTIONS.is_match(line) {
-            return AgentStatus::AwaitingInput;
+    // 4b. Check for numbered questions, BUT skip if user has already answered
+    // User answers look like "   1. New doc" or " > 1. New doc" (no question mark)
+    let has_numbered_answers = lines
+        .iter()
+        .rev()
+        .take(20)
+        .any(|line| GEMINI_NUMBERED_ANSWERS.is_match(line));
+
+    if !has_numbered_answers {
+        for line in lines.iter() {
+            if GEMINI_NUMBERED_QUESTIONS.is_match(line) {
+                return AgentStatus::AwaitingInput;
+            }
         }
     }
 
@@ -1598,6 +1611,29 @@ mod tests {
         assert!(
             matches!(status, AgentStatus::Idle),
             "Expected Idle at Gemini prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_gemini_questions_answered_then_running() {
+        // User has answered the numbered questions, agent is now running
+        // Should be Running, NOT AwaitingInput (old questions in history should be ignored)
+        let output = r#"   1. Target File: Should I create a new document?
+   2. Paragraph Content: Do you want specific text?
+   3. Placement: Should the paragraphs be added to the beginning?
+   4. Formatting: Is there a specific format required?
+
+ > 1. New doc
+   2. Lorem ipsum
+   3. Don't care.
+   4. Markdown
+
+ ⠴ Generating witty retort… (esc to cancel, 15s)"#;
+        let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
+        assert!(
+            matches!(status, AgentStatus::Running),
+            "Expected Running when user has answered and spinner/timer is present, got {:?}",
             status
         );
     }
