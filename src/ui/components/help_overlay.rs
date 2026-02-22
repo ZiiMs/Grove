@@ -18,7 +18,7 @@ impl<'a> HelpOverlay<'a> {
     }
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
-        let popup_area = centered_rect(60, 70, area);
+        let popup_area = centered_rect(60, 80, area);
 
         frame.render_widget(Clear, popup_area);
 
@@ -47,6 +47,7 @@ impl<'a> HelpOverlay<'a> {
                 "  {:8} Go to last agent",
                 kb.nav_last.display_short()
             )),
+            Line::from("  Tab      Switch preview tab"),
             Line::from(""),
             Line::from(Span::styled(
                 "Agent Management",
@@ -71,6 +72,10 @@ impl<'a> HelpOverlay<'a> {
                 kb.set_note.display_short()
             )),
             Line::from(format!(
+                "  {:8} Copy agent name to clipboard",
+                kb.yank.display_short()
+            )),
+            Line::from(format!(
                 "  {:8} Request work summary for Slack",
                 kb.summary.display_short()
             )),
@@ -86,7 +91,7 @@ impl<'a> HelpOverlay<'a> {
                 kb.pause.display_short()
             )),
             Line::from(format!(
-                "  {:8} Resume paused agent",
+                "  {:8} Resume paused agent / Refresh status",
                 kb.resume.display_short()
             )),
             Line::from(format!(
@@ -95,6 +100,25 @@ impl<'a> HelpOverlay<'a> {
             )),
             Line::from(format!("  {:8} Push changes", kb.push.display_short())),
             Line::from(format!("  {:8} Fetch remote", kb.fetch.display_short())),
+            Line::from(""),
+            Line::from(Span::styled(
+                "View Controls",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(format!(
+                "  {:8} Toggle diff view",
+                kb.toggle_diff.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Toggle logs panel",
+                kb.toggle_logs.display_short()
+            )),
+            Line::from(format!(
+                "  {:8} Open settings",
+                kb.toggle_settings.display_short()
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "External Services",
@@ -125,8 +149,22 @@ impl<'a> HelpOverlay<'a> {
                 "  {:8} Open task in browser",
                 kb.asana_open.display_short()
             )),
-            Line::from("  t        Browse tasks from project"),
-            Line::from("  T        Select task status"),
+            Line::from(format!(
+                "  {:8} Browse tasks from project",
+                kb.show_tasks.display_short()
+            )),
+            Line::from("  T        Change linked task status"),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Dev Server (DevServer tab)",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from("  C-s      Start dev server"),
+            Line::from("  C-S      Restart dev server"),
+            Line::from("  C        Clear logs"),
+            Line::from("  O        Open in browser"),
             Line::from(""),
             Line::from(Span::styled(
                 "Other",
@@ -143,7 +181,8 @@ impl<'a> HelpOverlay<'a> {
                 kb.toggle_help.display_short()
             )),
             Line::from(format!("  {:8} Quit", kb.quit.display_short())),
-            Line::from("  Esc      Cancel/close"),
+            Line::from("  Esc      Cancel/close dialogs"),
+            Line::from("  C-c      Force quit"),
             Line::from(""),
             Line::from(Span::styled(
                 "Press any key to close",
