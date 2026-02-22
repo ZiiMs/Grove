@@ -132,6 +132,38 @@ Always run `cargo fmt` before pushing changes to ensure consistent code formatti
 cargo fmt && git add . && git commit
 ```
 
+## Version System
+
+Grove uses **git-based versioning** - automatically generated at build time:
+
+- **Format**: `YYYY.MM.DD-hash` (e.g., `2026.02.22-abc1234`)
+- **Releases**: Tagged commits show the tag instead (e.g., `v1.0.0`)
+
+### No Manual Updates Required
+
+- Version is extracted from git at compile time via `build.rs`
+- Each worktree/branch automatically gets its unique hash
+- **Never edit version manually** - it will conflict across PRs
+
+### Creating a Release
+
+```bash
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
+cargo build --release
+```
+
+The binary will show `v1.0.0` instead of the date-hash format.
+
+### How It Works
+
+1. `build.rs` runs before every compilation
+2. Checks for git tag (if on exact tag, use that)
+3. Otherwise, builds `YYYY.MM.DD-hash` from:
+   - Current date
+   - `git rev-parse --short HEAD`
+4. Writes to `$OUT_DIR/version.txt`, embedded in binary
+
 ## Testing
 
 ```rust

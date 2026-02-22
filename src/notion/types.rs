@@ -4,23 +4,11 @@ use serde::{Deserialize, Serialize};
 pub enum NotionTaskStatus {
     #[default]
     None,
-    NotStarted {
+    Linked {
         page_id: String,
         name: String,
         url: String,
         status_option_id: String,
-        status_name: String,
-    },
-    InProgress {
-        page_id: String,
-        name: String,
-        url: String,
-        status_option_id: String,
-        status_name: String,
-    },
-    Completed {
-        page_id: String,
-        name: String,
         status_name: String,
     },
     Error {
@@ -33,20 +21,15 @@ impl NotionTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             NotionTaskStatus::None => "—".to_string(),
-            NotionTaskStatus::NotStarted { name, .. } => truncate(name, 14),
-            NotionTaskStatus::InProgress { name, .. } => truncate(name, 14),
-            NotionTaskStatus::Completed { name, .. } => truncate(name, 14),
+            NotionTaskStatus::Linked { name, .. } => truncate(name, 14),
             NotionTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
         }
     }
 
-    /// Display string for the status name column.
     pub fn format_status_name(&self) -> String {
         match self {
             NotionTaskStatus::None => "—".to_string(),
-            NotionTaskStatus::NotStarted { status_name, .. }
-            | NotionTaskStatus::InProgress { status_name, .. }
-            | NotionTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
+            NotionTaskStatus::Linked { status_name, .. } => truncate(status_name, 10),
             NotionTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
@@ -54,18 +37,15 @@ impl NotionTaskStatus {
     pub fn page_id(&self) -> Option<&str> {
         match self {
             NotionTaskStatus::None => None,
-            NotionTaskStatus::NotStarted { page_id, .. }
-            | NotionTaskStatus::InProgress { page_id, .. }
-            | NotionTaskStatus::Completed { page_id, .. }
-            | NotionTaskStatus::Error { page_id, .. } => Some(page_id),
+            NotionTaskStatus::Linked { page_id, .. } | NotionTaskStatus::Error { page_id, .. } => {
+                Some(page_id)
+            }
         }
     }
 
     pub fn url(&self) -> Option<&str> {
         match self {
-            NotionTaskStatus::NotStarted { url, .. } | NotionTaskStatus::InProgress { url, .. } => {
-                Some(url)
-            }
+            NotionTaskStatus::Linked { url, .. } => Some(url),
             _ => None,
         }
     }
@@ -73,15 +53,32 @@ impl NotionTaskStatus {
     pub fn name(&self) -> Option<&str> {
         match self {
             NotionTaskStatus::None => None,
-            NotionTaskStatus::NotStarted { name, .. }
-            | NotionTaskStatus::InProgress { name, .. }
-            | NotionTaskStatus::Completed { name, .. } => Some(name),
+            NotionTaskStatus::Linked { name, .. } => Some(name),
             NotionTaskStatus::Error { message, .. } => Some(message),
         }
     }
 
     pub fn is_linked(&self) -> bool {
         !matches!(self, NotionTaskStatus::None)
+    }
+
+    pub fn is_completed(&self) -> bool {
+        match self {
+            NotionTaskStatus::Linked { status_name, .. } => {
+                let lower = status_name.to_lowercase();
+                lower.contains("done") || lower.contains("complete")
+            }
+            _ => false,
+        }
+    }
+
+    pub fn is_in_progress(&self) -> bool {
+        match self {
+            NotionTaskStatus::Linked { status_name, .. } => {
+                status_name.to_lowercase().contains("progress")
+            }
+            _ => false,
+        }
     }
 }
 
@@ -101,9 +98,20 @@ pub struct NotionPageData {
     pub url: String,
     pub status_id: Option<String>,
     pub status_name: Option<String>,
-    pub is_completed: bool,
     pub parent_page_id: Option<String>,
     pub related_task_ids: Vec<String>,
+}
+
+impl NotionPageData {
+    pub fn is_completed(&self) -> bool {
+        self.status_name
+            .as_ref()
+            .map(|n| {
+                let lower = n.to_lowercase();
+                lower.contains("done") || lower.contains("complete")
+            })
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -317,13 +325,6 @@ impl From<NotionPageResponse> for NotionPageData {
         let status = page.properties.status.as_ref();
         let status_id = status.and_then(|s| s.status.as_ref().map(|opt| opt.id.clone()));
         let status_name = status.and_then(|s| s.status.as_ref().map(|opt| opt.name.clone()));
-        let is_completed = status_name
-            .as_ref()
-            .map(|n| {
-                let lower = n.to_lowercase();
-                lower.contains("done") || lower.contains("complete")
-            })
-            .unwrap_or(false);
 
         let related_task_ids: Vec<String> = page
             .properties
@@ -338,7 +339,6 @@ impl From<NotionPageResponse> for NotionPageData {
             url: page.url,
             status_id,
             status_name,
-            is_completed,
             parent_page_id,
             related_task_ids,
         }

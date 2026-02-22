@@ -395,9 +395,13 @@ impl<'a> AgentListWidget<'a> {
             },
             ProjectMgmtTaskStatus::Notion(s) => match s {
                 NotionTaskStatus::None => Style::default().fg(Color::DarkGray),
-                NotionTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                NotionTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                NotionTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                NotionTaskStatus::Linked { .. } if s.is_completed() => {
+                    Style::default().fg(Color::Green)
+                }
+                NotionTaskStatus::Linked { .. } if s.is_in_progress() => {
+                    Style::default().fg(Color::LightBlue)
+                }
+                NotionTaskStatus::Linked { .. } => Style::default().fg(Color::White),
                 NotionTaskStatus::Error { .. } => Style::default().fg(Color::Red),
             },
             ProjectMgmtTaskStatus::ClickUp(s) => match s {
@@ -438,9 +442,13 @@ impl<'a> AgentListWidget<'a> {
             },
             ProjectMgmtTaskStatus::Notion(s) => match s {
                 NotionTaskStatus::None => Style::default().fg(Color::DarkGray),
-                NotionTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                NotionTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                NotionTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
+                NotionTaskStatus::Linked { .. } if s.is_completed() => {
+                    Style::default().fg(Color::Green)
+                }
+                NotionTaskStatus::Linked { .. } if s.is_in_progress() => {
+                    Style::default().fg(Color::LightBlue)
+                }
+                NotionTaskStatus::Linked { .. } => Style::default().fg(Color::White),
                 NotionTaskStatus::Error { .. } => Style::default().fg(Color::Red),
             },
             ProjectMgmtTaskStatus::ClickUp(s) => match s {

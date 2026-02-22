@@ -1592,7 +1592,7 @@ async fn process_action(
                                 })
                             }
                             ProjectMgmtProvider::Notion => {
-                                ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                                ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Linked {
                                     page_id: task_item.id.clone(),
                                     name: task_item.name.clone(),
                                     url: task_item.url.clone(),
@@ -2414,21 +2414,12 @@ async fn process_action(
                     tokio::spawn(async move {
                         match client.get_page(&page_id).await {
                             Ok(page) => {
-                                let status_name = page.status_name.clone().unwrap_or_default();
-                                let status = if page.is_completed {
-                                    NotionTaskStatus::Completed {
-                                        page_id: page.id,
-                                        name: page.name,
-                                        status_name,
-                                    }
-                                } else {
-                                    NotionTaskStatus::NotStarted {
-                                        page_id: page.id,
-                                        name: page.name,
-                                        url: page.url,
-                                        status_option_id: page.status_id.unwrap_or_default(),
-                                        status_name,
-                                    }
+                                let status = NotionTaskStatus::Linked {
+                                    page_id: page.id,
+                                    name: page.name,
+                                    url: page.url,
+                                    status_option_id: page.status_id.unwrap_or_default(),
+                                    status_name: page.status_name.unwrap_or_default(),
                                 };
                                 let _ = tx.send(Action::UpdateProjectTaskStatus {
                                     id,
@@ -2601,15 +2592,9 @@ async fn process_action(
                     AsanaTaskStatus::None => None,
                 },
                 ProjectMgmtTaskStatus::Notion(s) => match s {
-                    NotionTaskStatus::NotStarted { name, .. } => {
-                        Some(format!("Notion task '{}' linked", name))
-                    }
-                    NotionTaskStatus::InProgress { name, .. } => {
-                        Some(format!("Notion task '{}' in progress", name))
-                    }
-                    NotionTaskStatus::Completed { name, .. } => {
-                        Some(format!("Notion task '{}' completed", name))
-                    }
+                    NotionTaskStatus::Linked {
+                        name, status_name, ..
+                    } => Some(format!("Notion task '{}' [{}]", name, status_name)),
                     NotionTaskStatus::Error { message, .. } => {
                         Some(format!("Notion error: {}", message))
                     }
@@ -3665,9 +3650,7 @@ async fn process_action(
                                     }
                                     let page_id = page_id.to_string();
                                     let task_name = match notion_status {
-                                        NotionTaskStatus::NotStarted { name, .. } => name.clone(),
-                                        NotionTaskStatus::InProgress { name, .. } => name.clone(),
-                                        NotionTaskStatus::Completed { name, .. } => name.clone(),
+                                        NotionTaskStatus::Linked { name, .. } => name.clone(),
                                         NotionTaskStatus::Error { .. } => "Task".to_string(),
                                         NotionTaskStatus::None => "Task".to_string(),
                                     };
@@ -3681,35 +3664,14 @@ async fn process_action(
                                         .clone();
                                     let tx = action_tx.clone();
 
-                                    let new_status = if option_name.to_lowercase().contains("done")
-                                        || option_name.to_lowercase().contains("complete")
-                                    {
-                                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
+                                    let new_status =
+                                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Linked {
                                             page_id: page_id.clone(),
                                             name: task_name.clone(),
+                                            url: String::new(),
+                                            status_option_id: option_id.clone(),
                                             status_name: option_name.clone(),
-                                        })
-                                    } else if option_name.to_lowercase().contains("progress") {
-                                        ProjectMgmtTaskStatus::Notion(
-                                            NotionTaskStatus::InProgress {
-                                                page_id: page_id.clone(),
-                                                name: task_name.clone(),
-                                                url: String::new(),
-                                                status_option_id: option_id.clone(),
-                                                status_name: option_name.clone(),
-                                            },
-                                        )
-                                    } else {
-                                        ProjectMgmtTaskStatus::Notion(
-                                            NotionTaskStatus::NotStarted {
-                                                page_id: page_id.clone(),
-                                                name: task_name.clone(),
-                                                url: String::new(),
-                                                status_option_id: option_id.clone(),
-                                                status_name: option_name.clone(),
-                                            },
-                                        )
-                                    };
+                                        });
 
                                     if let Some(agent) = state.agents.get_mut(&agent_id) {
                                         agent.pm_task_status = new_status;
@@ -4691,7 +4653,7 @@ async fn process_action(
                                     })
                                 }
                                 ProjectMgmtProvider::Notion => {
-                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::NotStarted {
+                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Linked {
                                         page_id: task.id.clone(),
                                         name: task.name.clone(),
                                         url: task.url.clone(),
@@ -5129,21 +5091,12 @@ async fn process_action(
                             let pid = page_id.to_string();
                             tokio::spawn(async move {
                                 if let Ok(page) = notion_client_clone.get_page(&pid).await {
-                                    let status_name = page.status_name.clone().unwrap_or_default();
-                                    let status = if page.is_completed {
-                                        NotionTaskStatus::Completed {
-                                            page_id: page.id,
-                                            name: page.name,
-                                            status_name,
-                                        }
-                                    } else {
-                                        NotionTaskStatus::InProgress {
-                                            page_id: page.id,
-                                            name: page.name,
-                                            url: page.url,
-                                            status_option_id: page.status_id.unwrap_or_default(),
-                                            status_name,
-                                        }
+                                    let status = NotionTaskStatus::Linked {
+                                        page_id: page.id,
+                                        name: page.name,
+                                        url: page.url,
+                                        status_option_id: page.status_id.unwrap_or_default(),
+                                        status_name: page.status_name.unwrap_or_default(),
                                     };
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
                                         id,
@@ -7600,22 +7553,13 @@ async fn poll_notion_tasks(
         for (id, page_id) in tasks {
             match notion_client.get_page(&page_id).await {
                 Ok(page) => {
-                    let status_name = page.status_name.clone().unwrap_or_default();
-                    let status = if page.is_completed {
-                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Completed {
-                            page_id: page.id,
-                            name: page.name,
-                            status_name,
-                        })
-                    } else {
-                        ProjectMgmtTaskStatus::Notion(NotionTaskStatus::InProgress {
-                            page_id: page.id,
-                            name: page.name,
-                            url: page.url,
-                            status_option_id: page.status_id.unwrap_or_default(),
-                            status_name,
-                        })
-                    };
+                    let status = ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Linked {
+                        page_id: page.id,
+                        name: page.name,
+                        url: page.url,
+                        status_option_id: page.status_id.unwrap_or_default(),
+                        status_name: page.status_name.unwrap_or_default(),
+                    });
                     let _ = tx.send(Action::UpdateProjectTaskStatus { id, status });
                 }
                 Err(e) => {
