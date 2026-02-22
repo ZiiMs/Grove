@@ -762,24 +762,26 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
         }
     }
 
-    // 5. Check for completion patterns
-    for pattern in COMPLETION_PATTERNS.iter() {
-        if pattern.is_match(&clean_output) {
-            return AgentStatus::Completed;
-        }
-    }
-
-    // 7. Check for prompt character (› or >)
+    // 5. Check for prompt character (› or >)
     let is_at_prompt = lines.iter().rev().take(5).any(|line| {
         let trimmed = line.trim();
         trimmed == "›" || trimmed == ">" || trimmed.starts_with("›")
     });
 
     if is_at_prompt {
+        // At prompt - check for completion patterns in last 10 lines
+        let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
+        let last_10_text = last_10_lines.join("\n");
+
+        for pattern in COMPLETION_PATTERNS.iter() {
+            if pattern.is_match(&last_10_text) {
+                return AgentStatus::Completed;
+            }
+        }
         return AgentStatus::Idle;
     }
 
-    // 8. Check for shell prompt (indicates AI has exited)
+    // 6. Check for shell prompt (indicates AI has exited)
     let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
     let is_shell_prompt = last_line.len() <= 50
         && (last_line.ends_with('$')
@@ -791,9 +793,9 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
         return AgentStatus::Stopped;
     }
 
-    // 9. Process-based fallback
+    // 7. Process-based fallback - default to Running when process is active
     match foreground {
-        ForegroundProcess::CodexRunning => AgentStatus::Idle,
+        ForegroundProcess::CodexRunning => AgentStatus::Running,
         ForegroundProcess::Shell => AgentStatus::Stopped,
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown
@@ -803,7 +805,7 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
             if clean_output.trim().is_empty() {
                 AgentStatus::Stopped
             } else {
-                AgentStatus::Idle
+                AgentStatus::Running
             }
         }
     }
@@ -884,28 +886,49 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
         }
     }
 
-    // 9. Check for completion patterns
-    for pattern in COMPLETION_PATTERNS.iter() {
-        if pattern.is_match(&clean_output) {
-            return AgentStatus::Completed;
+    // 9. Check for prompt character - this is when agent is at prompt, ready for next task
+    // Must be careful not to match shell prompt (e.g., "$ ") when checking AI prompts
+    let is_at_ai_prompt = lines.iter().rev().take(5).any(|line| {
+        let trimmed = line.trim().trim_matches('\u{00A0}');
+        if trimmed == ">" || trimmed == "›" || trimmed == "❯" {
+            return true;
         }
+        // Match prompt with trailing text like ">   Type your message..."
+        if trimmed.starts_with('>') || trimmed.starts_with('›') || trimmed.starts_with('❯') {
+            return true;
+        }
+        false
+    });
+
+    if is_at_ai_prompt {
+        // At AI prompt - check for completion patterns in last 10 lines
+        let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
+        let last_10_text = last_10_lines.join("\n");
+
+        for pattern in COMPLETION_PATTERNS.iter() {
+            if pattern.is_match(&last_10_text) {
+                return AgentStatus::Completed;
+            }
+        }
+        return AgentStatus::Idle;
     }
 
-    // 10. Check for shell prompt (indicates AI has exited)
+    // 10. Check for shell prompt (indicates AI has completely exited to shell)
     let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
     let is_shell_prompt = last_line.len() <= 50
         && (last_line.ends_with('$')
             || last_line.ends_with('#')
-            || last_line == ">"
+            || last_line.starts_with('$')
+            || last_line.starts_with('#')
             || last_line.starts_with("➜"));
 
     if is_shell_prompt && foreground != ForegroundProcess::GeminiRunning {
         return AgentStatus::Stopped;
     }
 
-    // 11. Process-based fallback
+    // 11. Process-based fallback - default to Running when process is active
     match foreground {
-        ForegroundProcess::GeminiRunning => AgentStatus::Idle,
+        ForegroundProcess::GeminiRunning => AgentStatus::Running,
         ForegroundProcess::Shell => AgentStatus::Stopped,
         ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
         ForegroundProcess::Unknown
@@ -915,7 +938,7 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
             if clean_output.trim().is_empty() {
                 AgentStatus::Stopped
             } else {
-                AgentStatus::Idle
+                AgentStatus::Running
             }
         }
     }
