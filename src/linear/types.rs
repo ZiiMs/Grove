@@ -37,15 +37,9 @@ impl LinearTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             LinearTaskStatus::None => "—".to_string(),
-            LinearTaskStatus::NotStarted {
-                identifier, name, ..
-            } => truncate(&format!("{} {}", identifier, name), 24),
-            LinearTaskStatus::InProgress {
-                identifier, name, ..
-            } => truncate(&format!("{} {}", identifier, name), 24),
-            LinearTaskStatus::Completed {
-                identifier, name, ..
-            } => truncate(&format!("{} {}", identifier, name), 24),
+            LinearTaskStatus::NotStarted { name, .. } => truncate(name, 24),
+            LinearTaskStatus::InProgress { name, .. } => truncate(name, 24),
+            LinearTaskStatus::Completed { name, .. } => truncate(name, 24),
             LinearTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
         }
     }
