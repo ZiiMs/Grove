@@ -2816,49 +2816,36 @@ async fn process_action(
                             return Ok(false);
                         }
 
-                        if clickup_status.is_subtask() {
-                            let task_id = clickup_status.id().unwrap().to_string();
-                            let name = clickup_status.name().unwrap_or("Task").to_string();
-                            let is_completed =
-                                matches!(clickup_status, ClickUpTaskStatus::Completed { .. });
-                            state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
-                                task_id,
-                                task_name: name,
-                                current_completed: is_completed,
-                                selected_index: if is_completed { 1 } else { 0 },
-                            });
-                            state.input_mode = Some(InputMode::SelectSubtaskStatus);
-                        } else {
-                            let agent_id = id;
-                            let client = Arc::clone(clickup_client);
-                            let tx = action_tx.clone();
-                            state.loading_message = Some("Loading statuses...".to_string());
-                            tokio::spawn(async move {
-                                match client.get_statuses().await {
-                                    Ok(statuses) => {
-                                        let options: Vec<StatusOption> = statuses
-                                            .into_iter()
-                                            .map(|s| StatusOption {
-                                                id: s.status.clone(),
-                                                name: s.status,
-                                            })
-                                            .collect();
-                                        let _ = tx.send(Action::TaskStatusOptionsLoaded {
-                                            id: agent_id,
-                                            options,
-                                        });
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to load ClickUp statuses: {}", e);
-                                        let _ = tx.send(Action::SetLoading(None));
-                                        let _ = tx.send(Action::ShowError(format!(
-                                            "Failed to load statuses: {}",
-                                            e
-                                        )));
-                                    }
+                        // ClickUp subtasks use the same statuses as parent tasks
+                        let agent_id = id;
+                        let client = Arc::clone(clickup_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading statuses...".to_string());
+                        tokio::spawn(async move {
+                            match client.get_statuses().await {
+                                Ok(statuses) => {
+                                    let options: Vec<StatusOption> = statuses
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.status.clone(),
+                                            name: s.status,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                        id: agent_id,
+                                        options,
+                                    });
                                 }
-                            });
-                        }
+                                Err(e) => {
+                                    tracing::error!("Failed to load ClickUp statuses: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load statuses: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
                     }
                     ProjectMgmtTaskStatus::None => {}
                 }
@@ -2920,6 +2907,7 @@ async fn process_action(
         Action::TaskStatusDropdownSelect => {
             tracing::info!("TaskStatusDropdownSelect triggered");
             let dropdown = state.task_status_dropdown.take();
+            let subtask_dropdown = state.subtask_status_dropdown.take();
             state.exit_input_mode();
             if let Some(dropdown) = dropdown {
                 let agent_id = dropdown.agent_id;
@@ -2927,6 +2915,65 @@ async fn process_action(
                 {
                     let option_id = selected_option.id.clone();
                     let option_name = selected_option.name.clone();
+
+                    // Check if this is a ClickUp subtask from the task list (nil UUID)
+                    if agent_id == Uuid::nil() {
+                        if let Some(subtask) = subtask_dropdown {
+                            let task_id = subtask.task_id.clone();
+                            let status_name = option_name.clone();
+                            let task_id_for_spawn = task_id.clone();
+                            let status_name_for_spawn = status_name.clone();
+
+                            let client = Arc::clone(clickup_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Updating subtask status...".to_string());
+
+                            tokio::spawn(async move {
+                                match client
+                                    .update_task_status(&task_id_for_spawn, &status_name_for_spawn)
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowToast {
+                                            message: format!("Subtask → {}", status_name_for_spawn),
+                                            level: ToastLevel::Success,
+                                        });
+                                        let _ = tx.send(Action::RefreshTaskList);
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to update subtask: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
+
+                            // Update local state
+                            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id)
+                            {
+                                let lower = status_name.to_lowercase();
+                                task.status_name = status_name.clone();
+                                task.status = if lower.contains("done")
+                                    || lower.contains("complete")
+                                    || lower.contains("closed")
+                                {
+                                    task.completed = true;
+                                    TaskItemStatus::Completed
+                                } else if lower.contains("progress") {
+                                    task.completed = false;
+                                    TaskItemStatus::InProgress
+                                } else {
+                                    task.completed = false;
+                                    TaskItemStatus::NotStarted
+                                };
+                            }
+                            state.show_success(format!("Subtask → {}", status_name));
+                        }
+                        return Ok(false);
+                    }
 
                     if let Some(agent) = state.agents.get(&agent_id) {
                         match &agent.pm_task_status {
@@ -3454,16 +3501,141 @@ async fn process_action(
         Action::ToggleSubtaskStatus => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
                 if task.is_subtask() {
-                    state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
-                        task_id: task.id.clone(),
-                        task_name: task.name.clone(),
-                        current_completed: task.completed,
-                        selected_index: if task.completed { 1 } else { 0 },
-                    });
-                    state.input_mode = Some(InputMode::SelectSubtaskStatus);
+                    let provider = state.settings.repo_config.project_mgmt.provider;
+
+                    // ClickUp subtasks use the same statuses as parent tasks
+                    if matches!(provider, ProjectMgmtProvider::Clickup) {
+                        if !clickup_client.is_configured() {
+                            state.show_error(
+                                "ClickUp not configured. Set CLICKUP_TOKEN and list_id.",
+                            );
+                            return Ok(false);
+                        }
+
+                        // Store the task info temporarily and load statuses
+                        let task_id_for_dropdown = task.id.clone();
+                        let client = Arc::clone(clickup_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading statuses...".to_string());
+
+                        tokio::spawn(async move {
+                            match client.get_statuses().await {
+                                Ok(statuses) => {
+                                    let options: Vec<StatusOption> = statuses
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.status.clone(),
+                                            name: s.status,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                        task_id: task_id_for_dropdown,
+                                        task_name: task.name.clone(),
+                                        options,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load ClickUp statuses: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load statuses: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    } else {
+                        // Asana/Notion subtasks use simple complete/incomplete toggle
+                        state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
+                            task_id: task.id.clone(),
+                            task_name: task.name.clone(),
+                            current_completed: task.completed,
+                            selected_index: if task.completed { 1 } else { 0 },
+                        });
+                        state.input_mode = Some(InputMode::SelectSubtaskStatus);
+                    }
                 } else {
                     state.show_warning("Status toggle only available for subtasks");
                 }
+            }
+        }
+
+        Action::SubtaskStatusOptionsLoaded {
+            task_id,
+            task_name,
+            options,
+        } => {
+            state.loading_message = None;
+            if !options.is_empty() {
+                state.task_status_dropdown = Some(TaskStatusDropdownState {
+                    agent_id: Uuid::nil(), // Using nil UUID to indicate this is for a subtask
+                    status_options: options,
+                    selected_index: 0,
+                });
+                // Store task info for later use
+                state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
+                    task_id,
+                    task_name,
+                    current_completed: false, // Not used for ClickUp
+                    selected_index: 0,
+                });
+                state.input_mode = Some(InputMode::SelectTaskStatus);
+            } else {
+                state.show_warning("No status options found");
+            }
+        }
+
+        Action::SubtaskStatusOptionSelected {
+            task_id,
+            status_name,
+        } => {
+            let client = Arc::clone(clickup_client);
+            let tx = action_tx.clone();
+            let status_name_for_spawn = status_name.clone();
+            let task_id_for_spawn = task_id.clone();
+            state.loading_message = Some("Updating subtask status...".to_string());
+
+            tokio::spawn(async move {
+                match client
+                    .update_task_status(&task_id_for_spawn, &status_name_for_spawn)
+                    .await
+                {
+                    Ok(()) => {
+                        let _ = tx.send(Action::SetLoading(None));
+                        let _ = tx.send(Action::ShowToast {
+                            message: format!("Subtask → {}", status_name_for_spawn),
+                            level: ToastLevel::Success,
+                        });
+                        // Trigger a refresh of the task list
+                        let _ = tx.send(Action::RefreshTaskList);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Action::SetLoading(None));
+                        let _ = tx.send(Action::ShowError(format!(
+                            "Failed to update subtask: {}",
+                            e
+                        )));
+                    }
+                }
+            });
+
+            // Update local state
+            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id) {
+                let lower = status_name.to_lowercase();
+                task.status_name = status_name.clone();
+                task.status = if lower.contains("done")
+                    || lower.contains("complete")
+                    || lower.contains("closed")
+                {
+                    task.completed = true;
+                    TaskItemStatus::Completed
+                } else if lower.contains("progress") {
+                    task.completed = false;
+                    TaskItemStatus::InProgress
+                } else {
+                    task.completed = false;
+                    TaskItemStatus::NotStarted
+                };
             }
         }
 

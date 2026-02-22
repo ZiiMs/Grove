@@ -161,6 +161,15 @@ pub enum Action {
         task_id: String,
         completed: bool,
     },
+    SubtaskStatusOptionsLoaded {
+        task_id: String,
+        task_name: String,
+        options: Vec<crate::app::StatusOption>,
+    },
+    SubtaskStatusOptionSelected {
+        task_id: String,
+        status_name: String,
+    },
 
     ConfirmTaskReassignment,
     DismissTaskReassignmentWarning,
