@@ -379,6 +379,7 @@ impl<'a> AppWidget<'a> {
             AgentListWidget::new(
                 &agents,
                 self.state.selected_index,
+                self.state.agent_list_scroll,
                 self.state.animation_frame,
                 self.state.settings.repo_config.git.provider,
                 &self.devserver_statuses,
