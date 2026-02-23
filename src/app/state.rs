@@ -871,6 +871,7 @@ pub struct AppState {
     pub task_list_expanded_ids: HashSet<String>,
     pub task_status_dropdown: Option<TaskStatusDropdownState>,
     pub subtask_status_dropdown: Option<SubtaskStatusDropdownState>,
+    pub agent_list_scroll: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1027,6 +1028,7 @@ impl AppState {
             task_list_expanded_ids: HashSet::new(),
             task_status_dropdown: None,
             subtask_status_dropdown: None,
+            agent_list_scroll: 0,
         }
     }
 
