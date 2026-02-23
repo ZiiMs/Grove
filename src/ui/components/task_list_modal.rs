@@ -185,6 +185,14 @@ impl<'a> TaskListModal<'a> {
         let effective_visible = available_height
             .saturating_sub(if has_above { 1 } else { 0 } + if has_below { 1 } else { 0 });
 
+        if has_below && selected_visible_pos >= scroll_offset + effective_visible {
+            scroll_offset =
+                selected_visible_pos.saturating_sub(effective_visible.saturating_sub(1));
+        }
+
+        let has_above = scroll_offset > 0;
+        let has_below = scroll_offset + effective_visible < total_tasks;
+
         let end_index = (scroll_offset + effective_visible).min(total_tasks);
         let visible_slice = &visible_tasks[scroll_offset..end_index];
 
