@@ -28,6 +28,7 @@ const BARS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '
 pub struct AgentListWidget<'a> {
     agents: &'a [&'a Agent],
     selected: usize,
+    scroll_offset: usize,
     animation_frame: usize,
     count: usize,
     provider: GitProvider,
@@ -38,6 +39,7 @@ impl<'a> AgentListWidget<'a> {
     pub fn new(
         agents: &'a [&'a Agent],
         selected: usize,
+        scroll_offset: usize,
         animation_frame: usize,
         provider: GitProvider,
         devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
@@ -45,6 +47,7 @@ impl<'a> AgentListWidget<'a> {
         Self {
             agents,
             selected,
+            scroll_offset,
             animation_frame,
             count: agents.len(),
             provider,
@@ -66,42 +69,103 @@ impl<'a> AgentListWidget<'a> {
         .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
         let header = Row::new(header_cells).height(1);
 
-        let rows: Vec<Row> = self
-            .agents
-            .iter()
-            .enumerate()
-            .flat_map(|(i, agent)| {
-                let is_selected = i == self.selected;
-                let is_last = i == self.agents.len() - 1;
+        let total_agents = self.agents.len();
+        let available_height = area.height.saturating_sub(3) as usize;
 
-                let mut agent_row = self.render_agent_row(agent, is_selected);
-                if is_selected {
-                    agent_row = agent_row.style(Style::default().bg(Color::Rgb(40, 44, 52)));
-                }
+        let visible_agents = if total_agents == 0 {
+            0
+        } else if total_agents == 1 {
+            1
+        } else {
+            let with_separators = total_agents * 2 - 1;
+            if with_separators <= available_height {
+                total_agents
+            } else {
+                available_height.div_ceil(2)
+            }
+        };
 
-                if is_last {
-                    vec![agent_row]
-                } else {
-                    let separator = Row::new(vec![
-                        Cell::from("──"),
-                        Cell::from("──"),
-                        Cell::from("────────────────────"),
-                        Cell::from("──────────────────"),
-                        Cell::from("────────"),
-                        Cell::from("────────────"),
-                        Cell::from("────────"),
-                        Cell::from("──────────"),
-                        Cell::from("──────────"),
-                        Cell::from("────────"),
-                        Cell::from("────────────────"),
-                        Cell::from("──────────"),
-                        Cell::from("──────────"),
-                    ])
-                    .style(Style::default().fg(Color::DarkGray));
-                    vec![agent_row, separator]
-                }
-            })
-            .collect();
+        let visible_agents = visible_agents.max(1);
+        let max_scroll = total_agents.saturating_sub(visible_agents);
+        let scroll_offset = self.scroll_offset.min(max_scroll);
+
+        let has_above = scroll_offset > 0;
+        let has_below = scroll_offset + visible_agents < total_agents;
+
+        let effective_visible = if has_above {
+            visible_agents - 1
+        } else {
+            visible_agents
+        };
+        let effective_visible = if has_below {
+            effective_visible - 1
+        } else {
+            effective_visible
+        };
+        let effective_visible = effective_visible.max(1).min(total_agents);
+
+        let end_index = (scroll_offset + effective_visible).min(total_agents);
+        let visible_slice = &self.agents[scroll_offset..end_index];
+
+        let mut rows: Vec<Row> = Vec::new();
+
+        if has_above {
+            let hidden_above = scroll_offset;
+            let indicator = Row::new(vec![
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(format!("▲ {} more above", hidden_above))
+                    .style(Style::default().fg(Color::Yellow)),
+            ]);
+            rows.push(indicator);
+        }
+
+        for (i, agent) in visible_slice.iter().enumerate() {
+            let actual_index = scroll_offset + i;
+            let is_selected = actual_index == self.selected;
+            let is_last_visible = actual_index == total_agents - 1;
+
+            let mut agent_row = self.render_agent_row(agent, is_selected);
+            if is_selected {
+                agent_row = agent_row.style(Style::default().bg(Color::Rgb(40, 44, 52)));
+            }
+
+            if is_last_visible {
+                rows.push(agent_row);
+            } else {
+                rows.push(agent_row);
+                let separator = Row::new(vec![
+                    Cell::from("──"),
+                    Cell::from("──"),
+                    Cell::from("────────────────────"),
+                    Cell::from("──────────────────"),
+                    Cell::from("────────"),
+                    Cell::from("────────────"),
+                    Cell::from("────────"),
+                    Cell::from("──────────"),
+                    Cell::from("──────────"),
+                    Cell::from("────────"),
+                    Cell::from("────────────────"),
+                    Cell::from("──────────"),
+                    Cell::from("──────────"),
+                ])
+                .style(Style::default().fg(Color::DarkGray));
+                rows.push(separator);
+            }
+        }
+
+        if has_below {
+            let hidden_below = total_agents - scroll_offset - effective_visible;
+            if hidden_below > 0 {
+                let indicator = Row::new(vec![
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(format!("▼ {} more below", hidden_below))
+                        .style(Style::default().fg(Color::Yellow)),
+                ]);
+                rows.push(indicator);
+            }
+        }
 
         let table = Table::new(
             rows,
