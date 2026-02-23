@@ -343,6 +343,12 @@ pub enum Action {
         message: String,
     },
     PmSetupComplete,
+    LinearUserFetched {
+        username: String,
+    },
+    LinearUserFetchError {
+        message: String,
+    },
 
     // Git Setup Wizard
     OpenGitSetup,

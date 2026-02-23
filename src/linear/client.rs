@@ -5,7 +5,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
     GraphQLResponse, IssueQueryData, IssueUpdateData, LinearIssueSummary, TeamIssuesQueryData,
-    TeamStatesQueryData, TeamsQueryData, WorkflowState,
+    TeamStatesQueryData, TeamsQueryData, ViewerQueryData, WorkflowState,
 };
 use crate::cache::Cache;
 
@@ -95,6 +95,65 @@ impl LinearClient {
             .into_iter()
             .map(|t| (t.id, t.name, t.key))
             .collect())
+    }
+
+    pub async fn get_viewer(&self) -> Result<String> {
+        let query = r#"
+            query Viewer {
+                viewer {
+                    id
+                    name
+                    displayName
+                }
+            }
+        "#;
+
+        let body = serde_json::json!({ "query": query });
+
+        tracing::debug!("Linear get_viewer: sending request");
+
+        let response = self
+            .client
+            .post(LINEAR_API_URL)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to fetch Linear viewer")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Linear get_viewer response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            tracing::error!("Linear API error: {} - {}", status, response_text);
+            bail!("Linear API error: {} - {}", status, response_text);
+        }
+
+        let data: GraphQLResponse<ViewerQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse Linear viewer response: {} - body: {}",
+                    e,
+                    response_text
+                );
+                bail!("Failed to parse Linear viewer response: {}", e);
+            }
+        };
+
+        let username = data
+            .data
+            .viewer
+            .display_name
+            .filter(|s| !s.is_empty())
+            .unwrap_or(data.data.viewer.name);
+
+        Ok(username)
     }
 
     pub async fn get_issue(&self, issue_id: &str) -> Result<LinearIssueSummary> {
@@ -561,6 +620,14 @@ impl OptionalLinearClient {
         let guard = self.client.read().await;
         match &*guard {
             Some(c) => c.get_teams().await,
+            None => bail!("Linear not configured"),
+        }
+    }
+
+    pub async fn get_viewer(&self) -> Result<String> {
+        let guard = self.client.read().await;
+        match &*guard {
+            Some(c) => c.get_viewer().await,
             None => bail!("Linear not configured"),
         }
     }

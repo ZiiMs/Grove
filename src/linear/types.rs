@@ -243,6 +243,19 @@ pub struct TeamsQueryData {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ViewerQueryData {
+    pub viewer: LinearUserData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinearUserData {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TeamsConnection {
     pub nodes: Vec<TeamData>,
 }
