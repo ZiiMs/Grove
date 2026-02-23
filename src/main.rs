@@ -1531,7 +1531,39 @@ fn handle_pm_setup_key(
             KeyCode::Enter => Some(Action::PmSetupNextStep),
             _ => None,
         },
-        PmSetupStep::Team => {
+        PmSetupStep::Workspace => {
+            if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Enter => Some(Action::PmSetupNextStep),
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
+                    KeyCode::Backspace => Some(Action::PmSetupBackspace),
+                    KeyCode::Char(ch) if ch != 'j' && ch != 'k' => {
+                        Some(Action::PmSetupInputChar(ch))
+                    }
+                    KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
+                    _ => None,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Enter => {
+                        if pm_setup.field_index == 0 && !pm_setup.teams.is_empty() {
+                            Some(Action::PmSetupToggleDropdown)
+                        } else {
+                            Some(Action::PmSetupNextStep)
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
+                    KeyCode::Right => Some(Action::PmSetupToggleAdvanced),
+                    KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
+                    _ => None,
+                }
+            }
+        }
+        PmSetupStep::Project => {
             if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
                 match key.code {
                     KeyCode::Esc => Some(Action::PmSetupPrevStep),
@@ -7218,7 +7250,7 @@ async fn process_action(
         }
         Action::PmSetupNextStep => match state.pm_setup.step {
             grove::app::state::PmSetupStep::Token => {
-                state.pm_setup.step = grove::app::state::PmSetupStep::Team;
+                state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
                 let provider = state.settings.repo_config.project_mgmt.provider;
                 if state.pm_setup.teams.is_empty() {
                     match provider {
@@ -7261,11 +7293,67 @@ async fn process_action(
                                 }
                             });
                         }
+                        grove::app::config::ProjectMgmtProvider::Asana
+                            if grove::app::Config::asana_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let asana_client = Arc::clone(asana_client);
+                            tokio::spawn(async move {
+                                match asana_client.fetch_workspaces().await {
+                                    Ok(workspaces) => {
+                                        let _ = tx
+                                            .send(Action::PmSetupTeamsLoaded { teams: workspaces });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
                         _ => {}
                     }
                 }
             }
-            grove::app::state::PmSetupStep::Team => {
+            grove::app::state::PmSetupStep::Workspace => {
+                let provider = state.settings.repo_config.project_mgmt.provider;
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Asana => {
+                        if let Some(ws_gid) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(ws_gid.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            state.pm_setup.teams.clear();
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let asana_client = Arc::clone(asana_client);
+                            tokio::spawn(async move {
+                                match asana_client.fetch_projects(&ws_gid).await {
+                                    Ok(projects) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: projects });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    _ => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Advanced;
+                    }
+                }
+            }
+            grove::app::state::PmSetupStep::Project => {
                 state.pm_setup.step = grove::app::state::PmSetupStep::Advanced;
             }
             grove::app::state::PmSetupStep::Advanced => {}
@@ -7275,11 +7363,50 @@ async fn process_action(
                 state.pm_setup.active = false;
                 state.settings.active = true;
             }
-            grove::app::state::PmSetupStep::Team => {
+            grove::app::state::PmSetupStep::Workspace => {
                 state.pm_setup.step = grove::app::state::PmSetupStep::Token;
             }
+            grove::app::state::PmSetupStep::Project => {
+                let provider = state.settings.repo_config.project_mgmt.provider;
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Asana => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams.clear();
+                        state.pm_setup.selected_team_index = 0;
+                        if grove::app::Config::asana_token().is_some() {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let asana_client = Arc::clone(asana_client);
+                            tokio::spawn(async move {
+                                match asana_client.fetch_workspaces().await {
+                                    Ok(workspaces) => {
+                                        let _ = tx
+                                            .send(Action::PmSetupTeamsLoaded { teams: workspaces });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    _ => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                    }
+                }
+            }
             grove::app::state::PmSetupStep::Advanced => {
-                state.pm_setup.step = grove::app::state::PmSetupStep::Team;
+                let provider = state.settings.repo_config.project_mgmt.provider;
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Asana => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                    }
+                    _ => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                    }
+                }
             }
         },
         Action::PmSetupToggleAdvanced => {
@@ -7433,6 +7560,38 @@ async fn process_action(
                                     .notion
                                     .status_property_name
                                     .clone(),
+                            );
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Asana => {
+                        state.settings.repo_config.project_mgmt.asana.project_gid =
+                            Some(id.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .in_progress_section_gid = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .done_section_gid = Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "Asana setup complete: project '{}'",
+                                selected_name
+                            ));
+                            asana_client.reconfigure(
+                                grove::app::Config::asana_token().as_deref(),
+                                Some(id),
                             );
                         }
                     }

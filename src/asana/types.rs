@@ -162,6 +162,28 @@ pub struct AsanaTaskListResponse {
     pub data: Vec<AsanaTaskData>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AsanaWorkspacesResponse {
+    pub data: Vec<AsanaWorkspaceData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaWorkspaceData {
+    pub gid: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaProjectsResponse {
+    pub data: Vec<AsanaProjectData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaProjectData {
+    pub gid: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct AsanaTaskSummary {
     pub gid: String,

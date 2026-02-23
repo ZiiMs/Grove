@@ -51,11 +51,12 @@ impl<'a> PmSetupModal<'a> {
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let step_count = 3;
+        let step_count = 4;
         let current_step = match self.state.step {
             PmSetupStep::Token => 1,
-            PmSetupStep::Team => 2,
-            PmSetupStep::Advanced => 3,
+            PmSetupStep::Workspace => 2,
+            PmSetupStep::Project => 3,
+            PmSetupStep::Advanced => 4,
         };
 
         let step_text = format!(
@@ -85,7 +86,8 @@ impl<'a> PmSetupModal<'a> {
     fn step_name(&self) -> &'static str {
         match self.state.step {
             PmSetupStep::Token => "API Token",
-            PmSetupStep::Team => "Team Selection",
+            PmSetupStep::Workspace => "Workspace",
+            PmSetupStep::Project => "Project",
             PmSetupStep::Advanced => "Advanced Settings",
         }
     }
@@ -94,6 +96,7 @@ impl<'a> PmSetupModal<'a> {
         let lines = match self.provider {
             ProjectMgmtProvider::Linear => self.render_linear_content(),
             ProjectMgmtProvider::Notion => self.render_notion_content(),
+            ProjectMgmtProvider::Asana => self.render_asana_content(),
             _ => self.render_generic_content(),
         };
 
@@ -101,10 +104,266 @@ impl<'a> PmSetupModal<'a> {
         frame.render_widget(paragraph, area);
     }
 
+    fn render_asana_content(&self) -> Vec<Line<'static>> {
+        match self.state.step {
+            PmSetupStep::Token => self.render_asana_token_step(),
+            PmSetupStep::Workspace => self.render_asana_workspace_step(),
+            PmSetupStep::Project => self.render_asana_project_step(),
+            PmSetupStep::Advanced => self.render_asana_advanced_step(),
+        }
+    }
+
+    fn render_asana_token_step(&self) -> Vec<Line<'static>> {
+        let token_exists = Config::asana_token().is_some();
+        let (status_symbol, status_color) = if token_exists {
+            ("✓ OK", Color::Green)
+        } else {
+            ("✗ Missing", Color::Red)
+        };
+
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Asana uses a Personal Access Token for authentication.",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  1. Go to: https://app.asana.com/0/developer-console",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  2. Click \"+ Create new token\"",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  3. Give it a name (e.g., \"Grove\")",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  4. Copy the token (you won't see it again!)",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Add to your shell profile (~/.zshrc or ~/.bashrc):",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "    export ASANA_TOKEN=\"your_token_here\"",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Then restart Grove or run: source ~/.zshrc",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Token Status: ", Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{} (ASANA_TOKEN)", status_symbol),
+                    Style::default().fg(status_color),
+                ),
+            ]),
+            Line::from(""),
+        ]
+    }
+
+    fn render_asana_workspace_step(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Select your Asana workspace:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.state.teams_loading {
+            lines.push(Line::from(Span::styled(
+                "  Loading workspaces...",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else if self.state.teams.is_empty() {
+            if Config::asana_token().is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No token set. Go back to set ASANA_TOKEN first.",
+                    Style::default().fg(Color::Red),
+                )));
+            } else if let Some(ref err) = self.state.error {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  No workspaces found.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            let selected_idx = self.state.selected_team_index;
+            let workspace_display = if let Some(ws) = self.state.teams.get(selected_idx) {
+                ws.1.clone()
+            } else {
+                "Select workspace...".to_string()
+            };
+
+            let is_selected = self.state.field_index == 0;
+            lines.push(self.render_field_line("Workspace", &workspace_display, is_selected, true));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Select a workspace to see its projects",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    }
+
+    fn render_asana_project_step(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Select your Asana project:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.state.teams_loading {
+            lines.push(Line::from(Span::styled(
+                "  Loading projects...",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else if self.state.teams.is_empty() {
+            if Config::asana_token().is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No token set. Go back to set ASANA_TOKEN first.",
+                    Style::default().fg(Color::Red),
+                )));
+            } else if self.state.selected_workspace_gid.is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No workspace selected. Go back to select one.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            } else if let Some(ref err) = self.state.error {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  No projects found in this workspace.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            let selected_idx = self.state.selected_team_index;
+            let project_display = if let Some(proj) = self.state.teams.get(selected_idx) {
+                proj.1.clone()
+            } else {
+                "Select project...".to_string()
+            };
+
+            let is_selected = self.state.field_index == 0;
+            lines.push(self.render_field_line("Project", &project_display, is_selected, true));
+            lines.push(Line::from(""));
+
+            if self.state.advanced_expanded {
+                lines.push(Line::from(Span::styled(
+                    "  ▼ Advanced (optional)",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "    ─────────────────────────────────────────────",
+                    Style::default().fg(Color::DarkGray),
+                )));
+
+                let in_progress_selected = self.state.field_index == 1;
+                let done_selected = self.state.field_index == 2;
+
+                let in_progress_val = if self.state.in_progress_state.is_empty() {
+                    "(auto-detect)".to_string()
+                } else {
+                    self.state.in_progress_state.clone()
+                };
+                let done_val = if self.state.done_state.is_empty() {
+                    "(auto-detect)".to_string()
+                } else {
+                    self.state.done_state.clone()
+                };
+
+                lines.push(self.render_field_line(
+                    "In Progress",
+                    &in_progress_val,
+                    in_progress_selected,
+                    false,
+                ));
+                lines.push(self.render_field_line("Done", &done_val, done_selected, false));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "    Tip: Leave blank to auto-detect from section names",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  ▶ Advanced (optional)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Project GID will be saved to .grove/project.toml",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    }
+
+    fn render_asana_advanced_step(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Configure section overrides (optional):",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  These settings override auto-detection. In most cases,",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  you can leave them blank and Grove will detect sections",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  by name (e.g., \"In Progress\", \"Done\").",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+        ]
+    }
+
     fn render_notion_content(&self) -> Vec<Line<'static>> {
         match self.state.step {
             PmSetupStep::Token => self.render_notion_token_step(),
-            PmSetupStep::Team => self.render_notion_database_step(),
+            PmSetupStep::Workspace | PmSetupStep::Project => self.render_notion_database_step(),
             PmSetupStep::Advanced => self.render_notion_advanced_step(),
         }
     }
@@ -112,7 +371,7 @@ impl<'a> PmSetupModal<'a> {
     fn render_linear_content(&self) -> Vec<Line<'static>> {
         match self.state.step {
             PmSetupStep::Token => self.render_linear_token_step(),
-            PmSetupStep::Team => self.render_linear_team_step(),
+            PmSetupStep::Workspace | PmSetupStep::Project => self.render_linear_team_step(),
             PmSetupStep::Advanced => self.render_linear_advanced_step(),
         }
     }
@@ -600,7 +859,8 @@ impl<'a> PmSetupModal<'a> {
         } else {
             match self.state.step {
                 PmSetupStep::Token => "[Enter] Next  [Esc] Cancel",
-                PmSetupStep::Team => {
+                PmSetupStep::Workspace => "[Enter] Open Dropdown  [Enter] Select  [Esc] Back",
+                PmSetupStep::Project => {
                     if self.state.advanced_expanded {
                         "[c] Finish  [←][→] Toggle Advanced  [Esc] Back"
                     } else {
@@ -670,7 +930,7 @@ impl<'a> PmSetupModal<'a> {
 
 impl PmSetupState {
     pub fn editing_field(&self) -> bool {
-        self.step == PmSetupStep::Team && self.field_index > 0
+        matches!(self.step, PmSetupStep::Project) && self.field_index > 0
     }
 }
 
