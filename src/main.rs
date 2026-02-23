@@ -6142,6 +6142,7 @@ async fn process_action(
                     state.pm_setup.selected_team_index = 0;
                     state.pm_setup.field_index = 0;
                     state.pm_setup.advanced_expanded = false;
+                    state.pm_setup.manual_team_id.clear();
                     state.pm_setup.in_progress_state.clear();
                     state.pm_setup.done_state.clear();
                 }
@@ -7204,6 +7205,7 @@ async fn process_action(
             state.pm_setup.selected_team_index = 0;
             state.pm_setup.field_index = 0;
             state.pm_setup.advanced_expanded = false;
+            state.pm_setup.manual_team_id.clear();
             state.pm_setup.in_progress_state.clear();
             state.pm_setup.done_state.clear();
         }
@@ -7254,7 +7256,7 @@ async fn process_action(
         }
         Action::PmSetupNavigateNext => {
             let max_fields = if state.pm_setup.advanced_expanded {
-                2
+                3
             } else {
                 0
             };
@@ -7291,15 +7293,19 @@ async fn process_action(
         }
         Action::PmSetupInputChar(c) => {
             if state.pm_setup.field_index == 1 {
-                state.pm_setup.in_progress_state.push(c);
+                state.pm_setup.manual_team_id.push(c);
             } else if state.pm_setup.field_index == 2 {
+                state.pm_setup.in_progress_state.push(c);
+            } else if state.pm_setup.field_index == 3 {
                 state.pm_setup.done_state.push(c);
             }
         }
         Action::PmSetupBackspace => {
             if state.pm_setup.field_index == 1 {
-                state.pm_setup.in_progress_state.pop();
+                state.pm_setup.manual_team_id.pop();
             } else if state.pm_setup.field_index == 2 {
+                state.pm_setup.in_progress_state.pop();
+            } else if state.pm_setup.field_index == 3 {
                 state.pm_setup.done_state.pop();
             }
         }
@@ -7313,20 +7319,29 @@ async fn process_action(
             state.pm_setup.error = Some(message);
         }
         Action::PmSetupComplete => {
-            let setup_data = state
+            let manual_team_id = state.pm_setup.manual_team_id.clone();
+            let in_progress_state = state.pm_setup.in_progress_state.clone();
+            let done_state = state.pm_setup.done_state.clone();
+
+            let team_id = if !manual_team_id.is_empty() {
+                Some(manual_team_id)
+            } else {
+                state
+                    .pm_setup
+                    .teams
+                    .get(state.pm_setup.selected_team_index)
+                    .map(|t| t.0.clone())
+            };
+
+            let team_name = state
                 .pm_setup
                 .teams
                 .get(state.pm_setup.selected_team_index)
-                .map(|team| {
-                    (
-                        team.0.clone(),
-                        team.1.clone(),
-                        state.pm_setup.in_progress_state.clone(),
-                        state.pm_setup.done_state.clone(),
-                    )
-                });
-            if let Some((team_id, team_name, in_progress_state, done_state)) = setup_data {
-                state.settings.repo_config.project_mgmt.linear.team_id = Some(team_id.clone());
+                .map(|t| t.1.clone())
+                .unwrap_or_else(|| "manual".to_string());
+
+            if let Some(tid) = team_id {
+                state.settings.repo_config.project_mgmt.linear.team_id = Some(tid.clone());
                 if !in_progress_state.is_empty() {
                     state
                         .settings
@@ -7343,7 +7358,7 @@ async fn process_action(
                 } else {
                     state.log_info(format!("Linear setup complete: team '{}'", team_name));
                     linear_client
-                        .reconfigure(grove::app::Config::linear_token().as_deref(), Some(team_id));
+                        .reconfigure(grove::app::Config::linear_token().as_deref(), Some(tid));
                 }
             }
             state.pm_setup.active = false;

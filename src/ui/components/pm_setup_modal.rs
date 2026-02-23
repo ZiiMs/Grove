@@ -126,7 +126,7 @@ impl<'a> PmSetupModal<'a> {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  1. Go to: https://linear.app/settings/api",
+                "  1. Go to: https://linear.app/settings/account/security",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
@@ -226,9 +226,15 @@ impl<'a> PmSetupModal<'a> {
                     Style::default().fg(Color::DarkGray),
                 )));
 
-                let in_progress_selected = self.state.field_index == 1;
-                let done_selected = self.state.field_index == 2;
+                let team_id_selected = self.state.field_index == 1;
+                let in_progress_selected = self.state.field_index == 2;
+                let done_selected = self.state.field_index == 3;
 
+                let team_id_val = if self.state.manual_team_id.is_empty() {
+                    "(from selection)".to_string()
+                } else {
+                    self.state.manual_team_id.clone()
+                };
                 let in_progress_val = if self.state.in_progress_state.is_empty() {
                     "(auto-detect)".to_string()
                 } else {
@@ -241,11 +247,18 @@ impl<'a> PmSetupModal<'a> {
                 };
 
                 lines.push(self.render_field_line(
+                    "Team ID",
+                    &team_id_val,
+                    team_id_selected,
+                    false,
+                ));
+                lines.push(self.render_field_line(
                     "In Progress",
                     &in_progress_val,
                     in_progress_selected,
                     false,
                 ));
+                lines.push(self.render_field_line("Done", &done_val, done_selected, false));
                 lines.push(self.render_field_line("Done", &done_val, done_selected, false));
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
@@ -359,15 +372,13 @@ impl<'a> PmSetupModal<'a> {
             match self.state.step {
                 PmSetupStep::Token => "[Enter] Next  [Esc] Cancel",
                 PmSetupStep::Team => {
-                    if self.state.editing_field() {
-                        "[Enter] Save  [Esc] Cancel"
-                    } else if self.state.advanced_expanded {
-                        "[Enter] Finish  [←][→] Toggle Advanced  [Esc] Back"
+                    if self.state.advanced_expanded {
+                        "[c] Finish  [←][→] Toggle Advanced  [Esc] Back"
                     } else {
-                        "[Enter] Finish  [→] Expand Advanced  [Esc] Back"
+                        "[Enter] Open Dropdown  [c] Finish  [→] Expand Advanced  [Esc] Back"
                     }
                 }
-                PmSetupStep::Advanced => "[Enter] Finish  [Esc] Back",
+                PmSetupStep::Advanced => "[c] Finish  [Esc] Back",
             }
         };
 

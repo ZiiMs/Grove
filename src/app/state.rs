@@ -223,6 +223,7 @@ pub struct PmSetupState {
     pub teams: Vec<(String, String, String)>,
     pub teams_loading: bool,
     pub selected_team_index: usize,
+    pub manual_team_id: String,
     pub in_progress_state: String,
     pub done_state: String,
     pub dropdown_open: bool,
