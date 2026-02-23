@@ -7871,6 +7871,7 @@ async fn process_action(
 
         // Git Setup Wizard Actions
         Action::OpenGitSetup => {
+            state.settings.active = false;
             let provider = state.settings.repo_config.git.provider;
             state.git_setup.active = true;
             state.git_setup.step = grove::app::state::GitSetupStep::Token;
