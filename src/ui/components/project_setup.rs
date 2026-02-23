@@ -14,23 +14,13 @@ pub struct ProjectSetupWizard<'a> {
     repo_name: &'a str,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetupRow {
-    GitProvider,
-    GitSetup,
-    PmProvider,
-    PmSetup,
-    Save,
-    Close,
-}
-
 impl<'a> ProjectSetupWizard<'a> {
     pub fn new(state: &'a ProjectSetupState, repo_name: &'a str) -> Self {
         Self { state, repo_name }
     }
 
     pub fn render(&self, frame: &mut Frame) {
-        let area = centered_rect(60, 50, frame.area());
+        let area = centered_rect(60, 60, frame.area());
         frame.render_widget(Clear, area);
 
         let block = Block::default()
@@ -45,7 +35,7 @@ impl<'a> ProjectSetupWizard<'a> {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
-                Constraint::Min(10),
+                Constraint::Min(14),
                 Constraint::Length(3),
             ])
             .split(inner);
@@ -86,9 +76,11 @@ impl<'a> ProjectSetupWizard<'a> {
 
         let lines = vec![
             Line::from(""),
-            self.render_git_row(git_configured),
+            self.render_git_dropdown_row(),
+            self.render_git_setup_row(git_configured),
             Line::from(""),
-            self.render_pm_row(pm_configured),
+            self.render_pm_dropdown_row(),
+            self.render_pm_setup_row(pm_configured),
             Line::from(""),
             self.render_buttons(),
         ];
@@ -97,8 +89,8 @@ impl<'a> ProjectSetupWizard<'a> {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_git_row(&self, configured: bool) -> Line<'static> {
-        let is_selected = matches!(self.state.selected_index, 0 | 1);
+    fn render_git_dropdown_row(&self) -> Line<'static> {
+        let is_selected = self.state.selected_index == 0;
         let provider_name = self.state.config.git.provider.display_name();
 
         let label_style = if is_selected {
@@ -109,7 +101,7 @@ impl<'a> ProjectSetupWizard<'a> {
             Style::default().fg(Color::White)
         };
 
-        let dropdown_style = if self.state.selected_index == 0 && is_selected {
+        let dropdown_style = if is_selected {
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
@@ -117,7 +109,16 @@ impl<'a> ProjectSetupWizard<'a> {
             Style::default().fg(Color::Gray)
         };
 
-        let button_style = if self.state.selected_index == 1 && is_selected {
+        Line::from(vec![
+            Span::styled("  Git Provider: ", label_style),
+            Span::styled(format!("[{} ▼]", provider_name), dropdown_style),
+        ])
+    }
+
+    fn render_git_setup_row(&self, configured: bool) -> Line<'static> {
+        let is_selected = self.state.selected_index == 1;
+
+        let button_style = if is_selected {
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
@@ -139,17 +140,15 @@ impl<'a> ProjectSetupWizard<'a> {
         };
 
         Line::from(vec![
-            Span::styled("  Git Provider: ", label_style),
-            Span::styled(format!("[{} ▼]", provider_name), dropdown_style),
-            Span::styled("  ", Style::default()),
+            Span::styled("           ", Style::default()),
             Span::styled("[ Setup ]", button_style),
             Span::styled("  ", Style::default()),
             Span::styled(status_text, status_style),
         ])
     }
 
-    fn render_pm_row(&self, configured: bool) -> Line<'static> {
-        let is_selected = matches!(self.state.selected_index, 2 | 3);
+    fn render_pm_dropdown_row(&self) -> Line<'static> {
+        let is_selected = self.state.selected_index == 2;
         let provider_name = self.state.config.project_mgmt.provider.display_name();
 
         let label_style = if is_selected {
@@ -160,7 +159,7 @@ impl<'a> ProjectSetupWizard<'a> {
             Style::default().fg(Color::White)
         };
 
-        let dropdown_style = if self.state.selected_index == 2 && is_selected {
+        let dropdown_style = if is_selected {
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
@@ -168,7 +167,16 @@ impl<'a> ProjectSetupWizard<'a> {
             Style::default().fg(Color::Gray)
         };
 
-        let button_style = if self.state.selected_index == 3 && is_selected {
+        Line::from(vec![
+            Span::styled("  Project Mgmt: ", label_style),
+            Span::styled(format!("[{} ▼]", provider_name), dropdown_style),
+        ])
+    }
+
+    fn render_pm_setup_row(&self, configured: bool) -> Line<'static> {
+        let is_selected = self.state.selected_index == 3;
+
+        let button_style = if is_selected {
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
@@ -190,9 +198,7 @@ impl<'a> ProjectSetupWizard<'a> {
         };
 
         Line::from(vec![
-            Span::styled("  Project Mgmt: ", label_style),
-            Span::styled(format!("[{} ▼]", provider_name), dropdown_style),
-            Span::styled("  ", Style::default()),
+            Span::styled("           ", Style::default()),
             Span::styled("[ Setup ]", button_style),
             Span::styled("  ", Style::default()),
             Span::styled(status_text, status_style),
@@ -291,7 +297,7 @@ impl<'a> ProjectSetupWizard<'a> {
 
         let area = Rect::new(
             frame.area().x + 15,
-            frame.area().y + 10,
+            frame.area().y + 11,
             15,
             (options.len() + 2) as u16,
         );
