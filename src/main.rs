@@ -888,7 +888,8 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
 
     // Handle PM setup modal
     if state.pm_setup.active {
-        return handle_pm_setup_key(key, &state.pm_setup);
+        let provider = state.settings.repo_config.project_mgmt.provider;
+        return handle_pm_setup_key(key, &state.pm_setup, provider);
     }
 
     // Handle Git setup modal
@@ -1519,8 +1520,10 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
 fn handle_pm_setup_key(
     key: crossterm::event::KeyEvent,
     pm_setup: &grove::app::state::PmSetupState,
+    provider: grove::app::config::ProjectMgmtProvider,
 ) -> Option<Action> {
     use grove::app::state::PmSetupStep;
+    let is_linear = matches!(provider, grove::app::config::ProjectMgmtProvider::Linear);
 
     if pm_setup.dropdown_open {
         return match key.code {
@@ -1542,7 +1545,13 @@ fn handle_pm_setup_key(
             if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
                 match key.code {
                     KeyCode::Esc => Some(Action::PmSetupPrevStep),
-                    KeyCode::Char('c') => Some(Action::PmSetupNextStep),
+                    KeyCode::Char('c') => {
+                        if is_linear {
+                            Some(Action::PmSetupComplete)
+                        } else {
+                            Some(Action::PmSetupNextStep)
+                        }
+                    }
                     KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
                     KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
                     KeyCode::Backspace => Some(Action::PmSetupBackspace),
@@ -1558,11 +1567,19 @@ fn handle_pm_setup_key(
                     KeyCode::Enter => {
                         if pm_setup.field_index == 0 && !pm_setup.teams.is_empty() {
                             Some(Action::PmSetupToggleDropdown)
+                        } else if is_linear {
+                            Some(Action::PmSetupComplete)
                         } else {
                             None
                         }
                     }
-                    KeyCode::Char('c') => Some(Action::PmSetupNextStep),
+                    KeyCode::Char('c') => {
+                        if is_linear {
+                            Some(Action::PmSetupComplete)
+                        } else {
+                            Some(Action::PmSetupNextStep)
+                        }
+                    }
                     KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
                     KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
                     KeyCode::Right => Some(Action::PmSetupToggleAdvanced),
@@ -1572,7 +1589,14 @@ fn handle_pm_setup_key(
             }
         }
         PmSetupStep::Project => {
-            if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
+            if is_linear {
+                // Linear skips Project step, treat as completion
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            } else if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
                 match key.code {
                     KeyCode::Esc => Some(Action::PmSetupPrevStep),
                     KeyCode::Char('c') => Some(Action::PmSetupComplete),
@@ -1604,11 +1628,22 @@ fn handle_pm_setup_key(
                 }
             }
         }
-        PmSetupStep::Advanced => match key.code {
-            KeyCode::Esc => Some(Action::PmSetupPrevStep),
-            KeyCode::Char('c') => Some(Action::PmSetupComplete),
-            _ => None,
-        },
+        PmSetupStep::Advanced => {
+            if is_linear {
+                // Linear skips Advanced step, treat as completion
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            }
+        }
     }
 }
 
@@ -7368,6 +7403,7 @@ async fn process_action(
             state.pm_setup.active = true;
             state.pm_setup.step = grove::app::state::PmSetupStep::Token;
             state.pm_setup.teams.clear();
+            state.pm_setup.all_databases.clear();
             state.pm_setup.error = None;
             state.pm_setup.selected_team_index = 0;
             state.pm_setup.field_index = 0;
@@ -7414,8 +7450,12 @@ async fn process_action(
                             tokio::spawn(async move {
                                 match grove::notion::fetch_databases(&token).await {
                                     Ok(databases) => {
-                                        let _ = tx
-                                            .send(Action::PmSetupTeamsLoaded { teams: databases });
+                                        let parent_pages =
+                                            grove::notion::extract_parent_pages(&databases);
+                                        let _ = tx.send(Action::PmSetupNotionDatabasesLoaded {
+                                            databases,
+                                            parent_pages,
+                                        });
                                     }
                                     Err(e) => {
                                         let _ = tx.send(Action::PmSetupTeamsError {
@@ -7491,6 +7531,26 @@ async fn process_action(
             grove::app::state::PmSetupStep::Workspace => {
                 let provider = state.settings.repo_config.project_mgmt.provider;
                 match provider {
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        if let Some(parent_page) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(parent_page.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            let filtered: Vec<(String, String, String)> = state
+                                .pm_setup
+                                .all_databases
+                                .iter()
+                                .filter(|(_, _, parent)| parent == &parent_page)
+                                .map(|(id, title, _)| (id.clone(), title.clone(), String::new()))
+                                .collect();
+                            state.pm_setup.teams = filtered;
+                            state.pm_setup.selected_team_index = 0;
+                        }
+                    }
                     grove::app::config::ProjectMgmtProvider::Asana => {
                         if let Some(ws_gid) = state
                             .pm_setup
@@ -7596,6 +7656,12 @@ async fn process_action(
             grove::app::state::PmSetupStep::Project => {
                 let provider = state.settings.repo_config.project_mgmt.provider;
                 match provider {
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams =
+                            grove::notion::extract_parent_pages(&state.pm_setup.all_databases);
+                        state.pm_setup.selected_team_index = 0;
+                    }
                     grove::app::config::ProjectMgmtProvider::Asana => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
                         state.pm_setup.teams.clear();
@@ -7674,7 +7740,8 @@ async fn process_action(
                 match provider {
                     grove::app::config::ProjectMgmtProvider::Asana
                     | grove::app::config::ProjectMgmtProvider::Clickup
-                    | grove::app::config::ProjectMgmtProvider::Airtable => {
+                    | grove::app::config::ProjectMgmtProvider::Airtable
+                    | grove::app::config::ProjectMgmtProvider::Notion => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Project;
                     }
                     _ => {
@@ -7743,6 +7810,15 @@ async fn process_action(
         }
         Action::PmSetupTeamsLoaded { teams } => {
             state.pm_setup.teams = teams;
+            state.pm_setup.teams_loading = false;
+            state.pm_setup.selected_team_index = 0;
+        }
+        Action::PmSetupNotionDatabasesLoaded {
+            databases,
+            parent_pages,
+        } => {
+            state.pm_setup.all_databases = databases;
+            state.pm_setup.teams = parent_pages;
             state.pm_setup.teams_loading = false;
             state.pm_setup.selected_team_index = 0;
         }

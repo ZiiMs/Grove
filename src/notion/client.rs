@@ -753,3 +753,21 @@ pub async fn fetch_databases(token: &str) -> Result<Vec<(String, String, String)
 
     Ok(databases)
 }
+
+pub fn extract_parent_pages(
+    databases: &[(String, String, String)],
+) -> Vec<(String, String, String)> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut parents: Vec<(String, String, String)> = Vec::new();
+
+    for (_id, _title, parent_title) in databases {
+        if !parent_title.is_empty() && !seen.contains(parent_title) {
+            seen.insert(parent_title.clone());
+            parents.push((parent_title.clone(), parent_title.clone(), String::new()));
+        }
+    }
+
+    parents.sort_by(|a, b| a.0.cmp(&b.0));
+    parents
+}
