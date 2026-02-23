@@ -786,6 +786,11 @@ impl<'a> SettingsModal<'a> {
                 ("Push".to_string(), value, false)
             }
             SettingsField::Version => ("Version".to_string(), version::VERSION.to_string(), false),
+            SettingsField::SetupPm => {
+                let provider = self.state.repo_config.project_mgmt.provider;
+                let btn_text = format!("Setup {}...", provider.display_name());
+                ("Setup".to_string(), btn_text, false)
+            }
             field if field.is_keybind_field() => {
                 let label = field.keybind_name().unwrap_or("Keybind").to_string();
                 let value = self

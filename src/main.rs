@@ -886,6 +886,11 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return handle_settings_key(key, state);
     }
 
+    // Handle PM setup modal
+    if state.pm_setup.active {
+        return handle_pm_setup_key(key, &state.pm_setup);
+    }
+
     // Handle task reassignment warning modal
     if state.task_reassignment_warning.is_some() {
         return match key.code {
@@ -1482,11 +1487,15 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::Enter => {
             if let Some(btn) = state.settings.current_action_button() {
                 use grove::app::ActionButtonType;
-                let reset_type = match btn {
-                    ActionButtonType::ResetTab => grove::app::ResetType::CurrentTab,
-                    ActionButtonType::ResetAll => grove::app::ResetType::AllSettings,
-                };
-                Some(Action::SettingsRequestReset { reset_type })
+                match btn {
+                    ActionButtonType::ResetTab => Some(Action::SettingsRequestReset {
+                        reset_type: grove::app::ResetType::CurrentTab,
+                    }),
+                    ActionButtonType::ResetAll => Some(Action::SettingsRequestReset {
+                        reset_type: grove::app::ResetType::AllSettings,
+                    }),
+                    ActionButtonType::SetupPm => Some(Action::SettingsSelectField),
+                }
             } else {
                 let field = state.settings.current_field();
                 if field.is_keybind_field() {
@@ -1497,6 +1506,66 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
             }
         }
         _ => None,
+    }
+}
+
+fn handle_pm_setup_key(
+    key: crossterm::event::KeyEvent,
+    pm_setup: &grove::app::state::PmSetupState,
+) -> Option<Action> {
+    use grove::app::state::PmSetupStep;
+
+    if pm_setup.dropdown_open {
+        return match key.code {
+            KeyCode::Esc => Some(Action::PmSetupToggleDropdown),
+            KeyCode::Enter => Some(Action::PmSetupConfirmDropdown),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupDropdownPrev),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupDropdownNext),
+            _ => None,
+        };
+    }
+
+    match pm_setup.step {
+        PmSetupStep::Token => match key.code {
+            KeyCode::Esc => Some(Action::ClosePmSetup),
+            KeyCode::Enter => Some(Action::PmSetupNextStep),
+            _ => None,
+        },
+        PmSetupStep::Team => {
+            if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Enter => Some(Action::PmSetupComplete),
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
+                    KeyCode::Backspace => Some(Action::PmSetupBackspace),
+                    KeyCode::Char(c) => Some(Action::PmSetupInputChar(c)),
+                    KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
+                    _ => None,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Enter => {
+                        if pm_setup.field_index == 0 && !pm_setup.teams.is_empty() {
+                            Some(Action::PmSetupToggleDropdown)
+                        } else {
+                            Some(Action::PmSetupComplete)
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
+                    KeyCode::Right => Some(Action::PmSetupToggleAdvanced),
+                    KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
+                    _ => None,
+                }
+            }
+        }
+        PmSetupStep::Advanced => match key.code {
+            KeyCode::Esc => Some(Action::PmSetupPrevStep),
+            KeyCode::Enter => Some(Action::PmSetupComplete),
+            _ => None,
+        },
     }
 }
 
@@ -6064,6 +6133,18 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                grove::app::SettingsField::SetupPm => {
+                    state.settings.active = false;
+                    state.pm_setup.active = true;
+                    state.pm_setup.step = grove::app::state::PmSetupStep::Token;
+                    state.pm_setup.teams.clear();
+                    state.pm_setup.error = None;
+                    state.pm_setup.selected_team_index = 0;
+                    state.pm_setup.field_index = 0;
+                    state.pm_setup.advanced_expanded = false;
+                    state.pm_setup.in_progress_state.clear();
+                    state.pm_setup.done_state.clear();
+                }
                 grove::app::SettingsField::LinearTeamId => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
@@ -7112,6 +7193,161 @@ async fn process_action(
                 }
             }
             state.show_project_setup = false;
+        }
+
+        // PM Setup Wizard Actions
+        Action::OpenPmSetup => {
+            state.pm_setup.active = true;
+            state.pm_setup.step = grove::app::state::PmSetupStep::Token;
+            state.pm_setup.teams.clear();
+            state.pm_setup.error = None;
+            state.pm_setup.selected_team_index = 0;
+            state.pm_setup.field_index = 0;
+            state.pm_setup.advanced_expanded = false;
+            state.pm_setup.in_progress_state.clear();
+            state.pm_setup.done_state.clear();
+        }
+        Action::ClosePmSetup => {
+            state.pm_setup.active = false;
+            state.settings.active = true;
+        }
+        Action::PmSetupNextStep => match state.pm_setup.step {
+            grove::app::state::PmSetupStep::Token => {
+                state.pm_setup.step = grove::app::state::PmSetupStep::Team;
+                if state.pm_setup.teams.is_empty() && grove::app::Config::linear_token().is_some() {
+                    state.pm_setup.teams_loading = true;
+                    let tx = action_tx.clone();
+                    let linear_client = Arc::clone(linear_client);
+                    tokio::spawn(async move {
+                        match linear_client.get_teams().await {
+                            Ok(teams) => {
+                                let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Action::PmSetupTeamsError {
+                                    message: e.to_string(),
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+            grove::app::state::PmSetupStep::Team => {
+                state.pm_setup.step = grove::app::state::PmSetupStep::Advanced;
+            }
+            grove::app::state::PmSetupStep::Advanced => {}
+        },
+        Action::PmSetupPrevStep => match state.pm_setup.step {
+            grove::app::state::PmSetupStep::Token => {
+                state.pm_setup.active = false;
+                state.settings.active = true;
+            }
+            grove::app::state::PmSetupStep::Team => {
+                state.pm_setup.step = grove::app::state::PmSetupStep::Token;
+            }
+            grove::app::state::PmSetupStep::Advanced => {
+                state.pm_setup.step = grove::app::state::PmSetupStep::Team;
+            }
+        },
+        Action::PmSetupToggleAdvanced => {
+            state.pm_setup.advanced_expanded = !state.pm_setup.advanced_expanded;
+        }
+        Action::PmSetupNavigateNext => {
+            let max_fields = if state.pm_setup.advanced_expanded {
+                2
+            } else {
+                0
+            };
+            if state.pm_setup.field_index < max_fields {
+                state.pm_setup.field_index += 1;
+            }
+        }
+        Action::PmSetupNavigatePrev => {
+            if state.pm_setup.field_index > 0 {
+                state.pm_setup.field_index -= 1;
+            }
+        }
+        Action::PmSetupToggleDropdown => {
+            if !state.pm_setup.teams.is_empty() && state.pm_setup.field_index == 0 {
+                state.pm_setup.dropdown_open = !state.pm_setup.dropdown_open;
+                state.pm_setup.dropdown_index = state.pm_setup.selected_team_index;
+            }
+        }
+        Action::PmSetupDropdownNext => {
+            if state.pm_setup.dropdown_index < state.pm_setup.teams.len().saturating_sub(1) {
+                state.pm_setup.dropdown_index += 1;
+            }
+        }
+        Action::PmSetupDropdownPrev => {
+            if state.pm_setup.dropdown_index > 0 {
+                state.pm_setup.dropdown_index -= 1;
+            }
+        }
+        Action::PmSetupConfirmDropdown => {
+            if state.pm_setup.dropdown_index < state.pm_setup.teams.len() {
+                state.pm_setup.selected_team_index = state.pm_setup.dropdown_index;
+            }
+            state.pm_setup.dropdown_open = false;
+        }
+        Action::PmSetupInputChar(c) => {
+            if state.pm_setup.field_index == 1 {
+                state.pm_setup.in_progress_state.push(c);
+            } else if state.pm_setup.field_index == 2 {
+                state.pm_setup.done_state.push(c);
+            }
+        }
+        Action::PmSetupBackspace => {
+            if state.pm_setup.field_index == 1 {
+                state.pm_setup.in_progress_state.pop();
+            } else if state.pm_setup.field_index == 2 {
+                state.pm_setup.done_state.pop();
+            }
+        }
+        Action::PmSetupTeamsLoaded { teams } => {
+            state.pm_setup.teams = teams;
+            state.pm_setup.teams_loading = false;
+            state.pm_setup.selected_team_index = 0;
+        }
+        Action::PmSetupTeamsError { message } => {
+            state.pm_setup.teams_loading = false;
+            state.pm_setup.error = Some(message);
+        }
+        Action::PmSetupComplete => {
+            let setup_data = state
+                .pm_setup
+                .teams
+                .get(state.pm_setup.selected_team_index)
+                .map(|team| {
+                    (
+                        team.0.clone(),
+                        team.1.clone(),
+                        state.pm_setup.in_progress_state.clone(),
+                        state.pm_setup.done_state.clone(),
+                    )
+                });
+            if let Some((team_id, team_name, in_progress_state, done_state)) = setup_data {
+                state.settings.repo_config.project_mgmt.linear.team_id = Some(team_id.clone());
+                if !in_progress_state.is_empty() {
+                    state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .linear
+                        .in_progress_state = Some(in_progress_state);
+                }
+                if !done_state.is_empty() {
+                    state.settings.repo_config.project_mgmt.linear.done_state = Some(done_state);
+                }
+                if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                    state.log_error(format!("Failed to save project config: {}", e));
+                } else {
+                    state.log_info(format!("Linear setup complete: team '{}'", team_name));
+                    linear_client
+                        .reconfigure(grove::app::Config::linear_token().as_deref(), Some(team_id));
+                }
+            }
+            state.pm_setup.active = false;
+            state.settings.active = true;
         }
 
         // Dev Server Actions
