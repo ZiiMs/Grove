@@ -1659,14 +1659,22 @@ fn handle_git_setup_key(
             };
 
             // Check if current field is the dropdown (field_index == 2 for Codeberg CI provider)
-            let is_dropdown = matches!(provider, grove::app::config::GitProvider::Codeberg)
+            let is_dropdown_field = matches!(provider, grove::app::config::GitProvider::Codeberg)
                 && git_setup.field_index == 2
                 && !git_setup.editing_text;
 
             match key.code {
-                KeyCode::Esc => Some(Action::GitSetupPrevStep),
+                KeyCode::Esc => {
+                    if git_setup.dropdown_open {
+                        Some(Action::GitSetupCloseDropdown)
+                    } else {
+                        Some(Action::GitSetupPrevStep)
+                    }
+                }
                 KeyCode::Enter => {
-                    if is_dropdown {
+                    if git_setup.dropdown_open {
+                        Some(Action::GitSetupConfirmDropdown)
+                    } else if is_dropdown_field {
                         Some(Action::GitSetupToggleDropdown)
                     } else if git_setup.field_index < max_field {
                         Some(Action::GitSetupStartEdit)
@@ -1674,7 +1682,7 @@ fn handle_git_setup_key(
                         Some(Action::GitSetupComplete)
                     }
                 }
-                KeyCode::Char('a') if !git_setup.advanced_expanded => {
+                KeyCode::Char('a') if !git_setup.advanced_expanded && !git_setup.dropdown_open => {
                     Some(Action::GitSetupToggleAdvanced)
                 }
                 KeyCode::Char('f')
@@ -1686,18 +1694,30 @@ fn handle_git_setup_key(
                 {
                     Some(Action::GitSetupFetchProjectId)
                 }
-                KeyCode::Up | KeyCode::Char('k') => Some(Action::GitSetupNavigatePrev),
-                KeyCode::Down | KeyCode::Char('j') => Some(Action::GitSetupNavigateNext),
-                KeyCode::Right | KeyCode::Char('l') => {
-                    if is_dropdown {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if git_setup.dropdown_open {
+                        Some(Action::GitSetupDropdownPrev)
+                    } else {
+                        Some(Action::GitSetupNavigatePrev)
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if git_setup.dropdown_open {
                         Some(Action::GitSetupDropdownNext)
+                    } else {
+                        Some(Action::GitSetupNavigateNext)
+                    }
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if git_setup.dropdown_open {
+                        None
                     } else {
                         Some(Action::GitSetupComplete)
                     }
                 }
                 KeyCode::Left | KeyCode::Char('h') => {
-                    if is_dropdown {
-                        Some(Action::GitSetupDropdownPrev)
+                    if git_setup.dropdown_open {
+                        None
                     } else if git_setup.advanced_expanded {
                         Some(Action::GitSetupToggleAdvanced)
                     } else {
@@ -8270,6 +8290,9 @@ async fn process_action(
             } else {
                 state.git_setup.ci_provider = grove::app::config::CodebergCiProvider::Woodpecker;
             }
+        }
+        Action::GitSetupCloseDropdown => {
+            state.git_setup.dropdown_open = false;
         }
 
         // Dev Server Actions

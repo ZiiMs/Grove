@@ -140,7 +140,7 @@ mod tests {
     fn test_parse_ssh_url_with_scheme() {
         let url = "ssh://git@codeberg.org/ziim/aitickets.git";
         let result = parse_git_url(url);
-        
+
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.owner, "ziim");
@@ -152,7 +152,7 @@ mod tests {
     fn test_parse_ssh_url_classic() {
         let url = "git@codeberg.org:ziim/aitickets.git";
         let result = parse_git_url(url);
-        
+
         assert!(result.is_some());
         let info = result.unwrap();
         assert_eq!(info.owner, "ziim");

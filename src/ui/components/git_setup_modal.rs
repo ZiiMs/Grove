@@ -634,19 +634,42 @@ impl<'a> GitSetupModal<'a> {
 
         // Field 2: CI Provider (dropdown)
         let ci_options = ["Forgejo Actions", "Woodpecker CI"];
-        let ci_current = match self.state.ci_provider {
-            CodebergCiProvider::ForgejoActions => "Forgejo Actions",
-            CodebergCiProvider::Woodpecker => "Woodpecker CI",
-        };
-
-        let ci_display = if self.state.dropdown_open && self.state.field_index == 2 {
-            let idx = self.state.dropdown_index % ci_options.len();
-            format!("{} ▼", ci_options[idx])
-        } else {
-            format!("{} ▼", ci_current)
-        };
         let ci_selected = self.state.field_index == 2;
-        lines.push(self.render_field_line("CI Provider", &ci_display, ci_selected));
+
+        if self.state.dropdown_open && self.state.field_index == 2 {
+            // Show dropdown expanded with all options
+            lines.push(self.render_field_line("CI Provider", "Select...", ci_selected));
+            for (idx, option) in ci_options.iter().enumerate() {
+                let is_current = match self.state.ci_provider {
+                    CodebergCiProvider::ForgejoActions => idx == 0,
+                    CodebergCiProvider::Woodpecker => idx == 1,
+                };
+                let indicator = if idx == self.state.dropdown_index {
+                    "◀"
+                } else {
+                    " "
+                };
+                let check = if is_current { "✓ " } else { "  " };
+                let style = if idx == self.state.dropdown_index {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("      {} {} {}", check, option, indicator),
+                    style,
+                )));
+            }
+        } else {
+            let ci_current = match self.state.ci_provider {
+                CodebergCiProvider::ForgejoActions => "Forgejo Actions",
+                CodebergCiProvider::Woodpecker => "Woodpecker CI",
+            };
+            let ci_display = format!("{} ▼", ci_current);
+            lines.push(self.render_field_line("CI Provider", &ci_display, ci_selected));
+        }
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
@@ -758,14 +781,16 @@ impl<'a> GitSetupModal<'a> {
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let hint = if self.state.editing_text {
             "[Enter] Save  [Esc] Cancel"
+        } else if self.state.dropdown_open {
+            "[↑/k][↓/j] Select  [Enter] Confirm  [Esc] Cancel"
         } else {
             match self.state.step {
                 GitSetupStep::Token => "[Enter] Continue  [Esc] Cancel",
                 GitSetupStep::Repository => {
                     if self.state.advanced_expanded {
-                        "[↑/k][↓/j] Navigate  [Enter] Edit  [a] Collapse Advanced  [→/l] Finish  [Esc] Cancel"
+                        "[↑/k][↓/j] Navigate  [Enter] Edit/Select  [a] Collapse Advanced  [→/l] Finish  [Esc] Cancel"
                     } else {
-                        "[↑/k][↓/j] Navigate  [Enter] Edit  [a] Expand Advanced  [→/l] Finish  [Esc] Cancel"
+                        "[↑/k][↓/j] Navigate  [Enter] Edit/Select  [a] Expand Advanced  [→/l] Finish  [Esc] Cancel"
                     }
                 }
                 GitSetupStep::Advanced => "[←/h] Back  [Enter] Finish  [Esc] Cancel",

@@ -352,6 +352,7 @@ pub enum Action {
     GitSetupDropdownNext,
     GitSetupDropdownPrev,
     GitSetupConfirmDropdown,
+    GitSetupCloseDropdown,
     GitSetupInputChar(char),
     GitSetupBackspace,
     GitSetupStartEdit,
