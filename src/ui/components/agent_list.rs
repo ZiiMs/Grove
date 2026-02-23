@@ -70,41 +70,57 @@ impl<'a> AgentListWidget<'a> {
         let header = Row::new(header_cells).height(1);
 
         let total_agents = self.agents.len();
+        if total_agents == 0 {
+            let table = Table::new(
+                vec![Row::new(vec![Cell::from("")])],
+                [
+                    Constraint::Length(2),
+                    Constraint::Length(2),
+                    Constraint::Length(28),
+                    Constraint::Length(18),
+                    Constraint::Length(8),
+                    Constraint::Length(12),
+                    Constraint::Length(8),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(10),
+                    Constraint::Length(16),
+                    Constraint::Length(10),
+                    Constraint::Min(10),
+                ],
+            )
+            .header(header)
+            .block(
+                Block::default()
+                    .title(format!(" AGENTS ({}) ", self.count))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::White)),
+            );
+            frame.render_widget(table, area);
+            return;
+        }
+
         let available_height = area.height.saturating_sub(3) as usize;
 
-        let visible_agents = if total_agents == 0 {
-            0
-        } else if total_agents == 1 {
+        let max_visible = if available_height <= 1 {
             1
         } else {
-            let with_separators = total_agents * 2 - 1;
-            if with_separators <= available_height {
-                total_agents
-            } else {
-                available_height.div_ceil(2)
-            }
+            available_height.div_ceil(2)
         };
 
-        let visible_agents = visible_agents.max(1);
-        let max_scroll = total_agents.saturating_sub(visible_agents);
-        let scroll_offset = self.scroll_offset.min(max_scroll);
+        let max_scroll = total_agents.saturating_sub(max_visible);
+        let mut scroll_offset = self.scroll_offset.min(max_scroll);
+
+        if self.selected < scroll_offset {
+            scroll_offset = self.selected;
+        } else if self.selected >= scroll_offset + max_visible {
+            scroll_offset = self.selected.saturating_sub(max_visible - 1);
+        }
 
         let has_above = scroll_offset > 0;
-        let has_below = scroll_offset + visible_agents < total_agents;
+        let has_below = scroll_offset + max_visible < total_agents;
 
-        let effective_visible = if has_above {
-            visible_agents - 1
-        } else {
-            visible_agents
-        };
-        let effective_visible = if has_below {
-            effective_visible - 1
-        } else {
-            effective_visible
-        };
-        let effective_visible = effective_visible.max(1).min(total_agents);
-
-        let end_index = (scroll_offset + effective_visible).min(total_agents);
+        let end_index = (scroll_offset + max_visible).min(total_agents);
         let visible_slice = &self.agents[scroll_offset..end_index];
 
         let mut rows: Vec<Row> = Vec::new();
@@ -123,17 +139,16 @@ impl<'a> AgentListWidget<'a> {
         for (i, agent) in visible_slice.iter().enumerate() {
             let actual_index = scroll_offset + i;
             let is_selected = actual_index == self.selected;
-            let is_last_visible = actual_index == total_agents - 1;
+            let is_last = actual_index == total_agents - 1;
 
             let mut agent_row = self.render_agent_row(agent, is_selected);
             if is_selected {
                 agent_row = agent_row.style(Style::default().bg(Color::Rgb(40, 44, 52)));
             }
 
-            if is_last_visible {
-                rows.push(agent_row);
-            } else {
-                rows.push(agent_row);
+            rows.push(agent_row);
+
+            if !is_last {
                 let separator = Row::new(vec![
                     Cell::from("──"),
                     Cell::from("──"),
@@ -155,7 +170,7 @@ impl<'a> AgentListWidget<'a> {
         }
 
         if has_below {
-            let hidden_below = total_agents - scroll_offset - effective_visible;
+            let hidden_below = total_agents - scroll_offset - max_visible;
             if hidden_below > 0 {
                 let indicator = Row::new(vec![
                     Cell::from(""),

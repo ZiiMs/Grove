@@ -1103,71 +1103,38 @@ impl AppState {
             if self.selected_index >= self.agent_order.len() && self.selected_index > 0 {
                 self.selected_index -= 1;
             }
-            let visible_count = self.visible_agent_count();
-            let max_scroll = self.agent_order.len().saturating_sub(visible_count);
-            self.agent_list_scroll = self.agent_list_scroll.min(max_scroll);
         }
         self.agents.remove(&id)
     }
 
     pub fn select_next(&mut self) {
         if !self.agent_order.is_empty() {
-            let prev_index = self.selected_index;
             self.selected_index = (self.selected_index + 1) % self.agent_order.len();
             self.output_scroll = 0;
-
-            if self.selected_index == 0 {
-                self.agent_list_scroll = 0;
-            } else if self.selected_index > prev_index {
-                let visible_count = self.visible_agent_count();
-                if self.selected_index >= self.agent_list_scroll + visible_count {
-                    self.agent_list_scroll = self.selected_index - visible_count + 1;
-                }
-            }
         }
     }
 
     pub fn select_previous(&mut self) {
         if !self.agent_order.is_empty() {
-            let prev_index = self.selected_index;
             self.selected_index = if self.selected_index == 0 {
                 self.agent_order.len() - 1
             } else {
                 self.selected_index - 1
             };
             self.output_scroll = 0;
-
-            if self.selected_index < prev_index || prev_index == 0 {
-                if self.selected_index < self.agent_list_scroll {
-                    self.agent_list_scroll = self.selected_index;
-                }
-                if prev_index == 0 {
-                    let visible_count = self.visible_agent_count();
-                    let max_scroll = self.agent_order.len().saturating_sub(visible_count);
-                    self.agent_list_scroll = max_scroll;
-                }
-            }
         }
     }
 
     pub fn select_first(&mut self) {
         self.selected_index = 0;
         self.output_scroll = 0;
-        self.agent_list_scroll = 0;
     }
 
     pub fn select_last(&mut self) {
         if !self.agent_order.is_empty() {
             self.selected_index = self.agent_order.len() - 1;
             self.output_scroll = 0;
-            let visible_count = self.visible_agent_count();
-            let max_scroll = self.agent_order.len().saturating_sub(visible_count);
-            self.agent_list_scroll = max_scroll;
         }
-    }
-
-    pub fn visible_agent_count(&self) -> usize {
-        4
     }
 
     pub fn is_input_mode(&self) -> bool {
