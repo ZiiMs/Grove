@@ -7393,8 +7393,15 @@ async fn process_action(
                         state.pm_setup.active = true;
                         state.pm_setup.source = grove::app::state::SetupSource::ProjectSetup;
                         state.pm_setup.step = grove::app::state::PmSetupStep::Token;
-                        state.pm_setup.field_index = 0;
+                        state.pm_setup.teams.clear();
+                        state.pm_setup.all_databases.clear();
                         state.pm_setup.error = None;
+                        state.pm_setup.selected_team_index = 0;
+                        state.pm_setup.field_index = 0;
+                        state.pm_setup.advanced_expanded = false;
+                        state.pm_setup.manual_team_id.clear();
+                        state.pm_setup.in_progress_state.clear();
+                        state.pm_setup.done_state.clear();
                     }
                     4 => {
                         if let Some(wizard) = state.project_setup.take() {
