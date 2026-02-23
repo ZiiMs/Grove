@@ -93,11 +93,20 @@ impl<'a> PmSetupModal<'a> {
     fn render_content(&self, frame: &mut Frame, area: Rect) {
         let lines = match self.provider {
             ProjectMgmtProvider::Linear => self.render_linear_content(),
+            ProjectMgmtProvider::Notion => self.render_notion_content(),
             _ => self.render_generic_content(),
         };
 
         let paragraph = Paragraph::new(lines);
         frame.render_widget(paragraph, area);
+    }
+
+    fn render_notion_content(&self) -> Vec<Line<'static>> {
+        match self.state.step {
+            PmSetupStep::Token => self.render_notion_token_step(),
+            PmSetupStep::Team => self.render_notion_database_step(),
+            PmSetupStep::Advanced => self.render_notion_advanced_step(),
+        }
     }
 
     fn render_linear_content(&self) -> Vec<Line<'static>> {
@@ -308,6 +317,218 @@ impl<'a> PmSetupModal<'a> {
         ]
     }
 
+    fn render_notion_token_step(&self) -> Vec<Line<'static>> {
+        let token_exists = Config::notion_token().is_some();
+        let (status_symbol, status_color) = if token_exists {
+            ("✓ OK", Color::Green)
+        } else {
+            ("✗ Missing", Color::Red)
+        };
+
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Notion uses an Integration Secret for authentication.",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  1. Go to: https://www.notion.so/my-integrations",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  2. Click \"+ New integration\"",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  3. Give it a name (e.g., \"Grove\")",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  4. Select the workspace and capabilities",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  5. Copy the \"Internal Integration Secret\"",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Important: Share your database with the integration!",
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(Span::styled(
+                "  In Notion, open your database → ... → Connections → Add",
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Add to your shell profile (~/.zshrc or ~/.bashrc):",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "    export NOTION_TOKEN=\"secret_your_token_here\"",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Then restart Grove or run: source ~/.zshrc",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Token Status: ", Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{} (NOTION_TOKEN)", status_symbol),
+                    Style::default().fg(status_color),
+                ),
+            ]),
+            Line::from(""),
+        ]
+    }
+
+    fn render_notion_database_step(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Select your Notion database:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.state.teams_loading {
+            lines.push(Line::from(Span::styled(
+                "  Loading databases...",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else if self.state.teams.is_empty() {
+            if Config::notion_token().is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No token set. Go back to set NOTION_TOKEN first.",
+                    Style::default().fg(Color::Red),
+                )));
+            } else if let Some(ref err) = self.state.error {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  No databases found.",
+                    Style::default().fg(Color::Yellow),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  Make sure you've shared a database with your integration.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            let selected_idx = self.state.selected_team_index;
+            let db_display = if let Some(db) = self.state.teams.get(selected_idx) {
+                db.1.clone()
+            } else {
+                "Select database...".to_string()
+            };
+
+            let is_selected = self.state.field_index == 0;
+            lines.push(self.render_field_line("Database", &db_display, is_selected, true));
+            lines.push(Line::from(""));
+
+            if self.state.advanced_expanded {
+                lines.push(Line::from(Span::styled(
+                    "  ▼ Advanced (optional)",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "    ─────────────────────────────────────────────",
+                    Style::default().fg(Color::DarkGray),
+                )));
+
+                let db_id_selected = self.state.field_index == 1;
+                let in_progress_selected = self.state.field_index == 2;
+                let done_selected = self.state.field_index == 3;
+
+                let db_id_val = if self.state.manual_team_id.is_empty() {
+                    "(from selection)".to_string()
+                } else {
+                    self.state.manual_team_id.clone()
+                };
+                let in_progress_val = if self.state.in_progress_state.is_empty() {
+                    "(auto-detect)".to_string()
+                } else {
+                    self.state.in_progress_state.clone()
+                };
+                let done_val = if self.state.done_state.is_empty() {
+                    "(auto-detect)".to_string()
+                } else {
+                    self.state.done_state.clone()
+                };
+
+                lines.push(self.render_field_line(
+                    "Database ID",
+                    &db_id_val,
+                    db_id_selected,
+                    false,
+                ));
+                lines.push(self.render_field_line(
+                    "In Progress",
+                    &in_progress_val,
+                    in_progress_selected,
+                    false,
+                ));
+                lines.push(self.render_field_line("Done", &done_val, done_selected, false));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "    Tip: Leave blank to auto-detect from status options",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  ▶ Advanced (optional)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Database ID will be saved to .grove/project.toml",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    }
+
+    fn render_notion_advanced_step(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Configure status options (optional):",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  These settings override auto-detection. In most cases,",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  you can leave them blank and Grove will detect statuses automatically.",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+        ]
+    }
+
     fn render_generic_content(&self) -> Vec<Line<'static>> {
         vec![
             Line::from(""),
@@ -421,7 +642,12 @@ impl<'a> PmSetupModal<'a> {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                Line::from(Span::styled(format!(" {} ({}) ", name, key), style))
+                let display = if key.is_empty() {
+                    format!(" {} ", name)
+                } else {
+                    format!(" {} ({}) ", name, key)
+                };
+                Line::from(Span::styled(display, style))
             })
             .collect();
 

@@ -7219,22 +7219,50 @@ async fn process_action(
         Action::PmSetupNextStep => match state.pm_setup.step {
             grove::app::state::PmSetupStep::Token => {
                 state.pm_setup.step = grove::app::state::PmSetupStep::Team;
-                if state.pm_setup.teams.is_empty() && grove::app::Config::linear_token().is_some() {
-                    state.pm_setup.teams_loading = true;
-                    let tx = action_tx.clone();
-                    let linear_client = Arc::clone(linear_client);
-                    tokio::spawn(async move {
-                        match linear_client.get_teams().await {
-                            Ok(teams) => {
-                                let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
-                            }
-                            Err(e) => {
-                                let _ = tx.send(Action::PmSetupTeamsError {
-                                    message: e.to_string(),
-                                });
-                            }
+                let provider = state.settings.repo_config.project_mgmt.provider;
+                if state.pm_setup.teams.is_empty() {
+                    match provider {
+                        grove::app::config::ProjectMgmtProvider::Linear
+                            if grove::app::Config::linear_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let linear_client = Arc::clone(linear_client);
+                            tokio::spawn(async move {
+                                match linear_client.get_teams().await {
+                                    Ok(teams) => {
+                                        let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
                         }
-                    });
+                        grove::app::config::ProjectMgmtProvider::Notion
+                            if grove::app::Config::notion_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::notion_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::notion::fetch_databases(&token).await {
+                                    Ok(databases) => {
+                                        let _ = tx
+                                            .send(Action::PmSetupTeamsLoaded { teams: databases });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                        _ => {}
+                    }
                 }
             }
             grove::app::state::PmSetupStep::Team => {
@@ -7322,12 +7350,13 @@ async fn process_action(
             state.pm_setup.error = Some(message);
         }
         Action::PmSetupComplete => {
-            let manual_team_id = state.pm_setup.manual_team_id.clone();
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            let manual_id = state.pm_setup.manual_team_id.clone();
             let in_progress_state = state.pm_setup.in_progress_state.clone();
             let done_state = state.pm_setup.done_state.clone();
 
-            let team_id = if !manual_team_id.is_empty() {
-                Some(manual_team_id)
+            let selected_id = if !manual_id.is_empty() {
+                Some(manual_id)
             } else {
                 state
                     .pm_setup
@@ -7336,32 +7365,80 @@ async fn process_action(
                     .map(|t| t.0.clone())
             };
 
-            let team_name = state
+            let selected_name = state
                 .pm_setup
                 .teams
                 .get(state.pm_setup.selected_team_index)
                 .map(|t| t.1.clone())
                 .unwrap_or_else(|| "manual".to_string());
 
-            if let Some(tid) = team_id {
-                state.settings.repo_config.project_mgmt.linear.team_id = Some(tid.clone());
-                if !in_progress_state.is_empty() {
-                    state
-                        .settings
-                        .repo_config
-                        .project_mgmt
-                        .linear
-                        .in_progress_state = Some(in_progress_state);
-                }
-                if !done_state.is_empty() {
-                    state.settings.repo_config.project_mgmt.linear.done_state = Some(done_state);
-                }
-                if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
-                    state.log_error(format!("Failed to save project config: {}", e));
-                } else {
-                    state.log_info(format!("Linear setup complete: team '{}'", team_name));
-                    linear_client
-                        .reconfigure(grove::app::Config::linear_token().as_deref(), Some(tid));
+            if let Some(id) = selected_id {
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Linear => {
+                        state.settings.repo_config.project_mgmt.linear.team_id = Some(id.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .linear
+                                .in_progress_state = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state.settings.repo_config.project_mgmt.linear.done_state =
+                                Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "Linear setup complete: team '{}'",
+                                selected_name
+                            ));
+                            linear_client.reconfigure(
+                                grove::app::Config::linear_token().as_deref(),
+                                Some(id),
+                            );
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        state.settings.repo_config.project_mgmt.notion.database_id =
+                            Some(id.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .in_progress_option = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state.settings.repo_config.project_mgmt.notion.done_option =
+                                Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "Notion setup complete: database '{}'",
+                                selected_name
+                            ));
+                            notion_client.reconfigure(
+                                grove::app::Config::notion_token().as_deref(),
+                                Some(id),
+                                state
+                                    .settings
+                                    .repo_config
+                                    .project_mgmt
+                                    .notion
+                                    .status_property_name
+                                    .clone(),
+                            );
+                        }
+                    }
+                    _ => {
+                        state.log_error(format!("PM setup not implemented for {:?}", provider));
+                    }
                 }
             }
             state.pm_setup.active = false;

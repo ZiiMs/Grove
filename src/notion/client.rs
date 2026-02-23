@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use futures::future::join_all;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
@@ -561,4 +562,101 @@ pub fn parse_notion_page_id(input: &str) -> String {
 
 fn clean_uuid(s: &str) -> String {
     s.replace('-', "").to_lowercase()
+}
+
+#[derive(Debug, Deserialize)]
+struct NotionSearchResponse {
+    results: Vec<NotionSearchResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotionSearchResult {
+    id: String,
+    #[serde(rename = "object")]
+    object: String,
+    title: Option<Vec<NotionRichTextTitle>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotionRichTextTitle {
+    plain_text: String,
+}
+
+pub async fn fetch_databases(token: &str) -> Result<Vec<(String, String, String)>> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token)).context("Invalid Notion token")?,
+    );
+    headers.insert(
+        "Notion-Version",
+        HeaderValue::from_static(NotionClient::NOTION_VERSION),
+    );
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    let body = serde_json::json!({
+        "filter": {
+            "property": "object",
+            "value": "database"
+        },
+        "page_size": 100
+    });
+
+    let url = format!("{}/search", NotionClient::BASE_URL);
+
+    tracing::debug!("Notion fetch_databases: url={}", url);
+
+    let response = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to search Notion databases")?;
+
+    let status = response.status();
+    let response_text = response.text().await.unwrap_or_default();
+
+    tracing::debug!(
+        "Notion fetch_databases response: status={}, body={}",
+        status,
+        response_text
+    );
+
+    if !status.is_success() {
+        tracing::error!("Notion API error: {} - {}", status, response_text);
+        bail!("Notion API error: {} - {}", status, response_text);
+    }
+
+    let search_response: NotionSearchResponse =
+        serde_json::from_str(&response_text).context("Failed to parse Notion search response")?;
+
+    let databases: Vec<(String, String, String)> = search_response
+        .results
+        .into_iter()
+        .filter(|r| r.object == "database")
+        .map(|r| {
+            let title = r
+                .title
+                .as_ref()
+                .and_then(|t| t.first())
+                .map(|t| t.plain_text.clone())
+                .unwrap_or_else(|| "Untitled".to_string());
+            (r.id, title, String::new())
+        })
+        .collect();
+
+    tracing::debug!(
+        "Notion fetch_databases: found {} databases",
+        databases.len()
+    );
+
+    Ok(databases)
 }
