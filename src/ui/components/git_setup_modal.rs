@@ -187,22 +187,50 @@ impl<'a> GitSetupModal<'a> {
 
         if self.state.detected_from_remote {
             lines.push(Line::from(Span::styled(
-                "  ↳ Detected from git remote",
+                format!("  ↳ Detected: {}/{}", self.state.owner, self.state.repo),
                 Style::default().fg(Color::Green),
             )));
+            lines.push(Line::from(""));
+        }
+
+        if self.state.loading {
+            lines.push(Line::from(Span::styled(
+                "  Fetching project ID from GitLab...",
+                Style::default().fg(Color::Yellow),
+            )));
+            lines.push(Line::from(""));
+            return lines;
+        }
+
+        if let Some(ref name) = self.state.project_name {
+            lines.push(Line::from(vec![
+                Span::styled("  Project: ", Style::default().fg(Color::Green)),
+                Span::styled(name.clone(), Style::default().fg(Color::White)),
+            ]));
             lines.push(Line::from(""));
         }
 
         let project_id_display = if self.state.editing_text && self.state.field_index == 0 {
             format!("{}█", self.state.text_buffer)
         } else if self.state.project_id.is_empty() {
-            "Enter Project ID...".to_string()
+            "(auto-fetch or enter manually)".to_string()
         } else {
             self.state.project_id.clone()
         };
 
         let is_selected = self.state.field_index == 0;
         lines.push(self.render_field_line("Project ID", &project_id_display, is_selected));
+
+        if self.state.project_id.is_empty()
+            && Config::gitlab_token().is_some()
+            && !self.state.owner.is_empty()
+            && !self.state.repo.is_empty()
+        {
+            lines.push(Line::from(Span::styled(
+                "  [f] Auto-fetch from GitLab",
+                Style::default().fg(Color::Cyan),
+            )));
+        }
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(

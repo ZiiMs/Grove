@@ -256,11 +256,13 @@ pub struct GitSetupState {
     pub editing_text: bool,
     pub text_buffer: String,
     pub error: Option<String>,
+    pub loading: bool,
     pub project_id: String,
     pub owner: String,
     pub repo: String,
     pub base_url: String,
     pub detected_from_remote: bool,
+    pub project_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

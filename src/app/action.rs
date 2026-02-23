@@ -357,6 +357,14 @@ pub enum Action {
     GitSetupStartEdit,
     GitSetupCancelEdit,
     GitSetupConfirmEdit,
+    GitSetupFetchProjectId,
+    GitSetupProjectIdFetched {
+        id: u64,
+        name: String,
+    },
+    GitSetupProjectIdError {
+        message: String,
+    },
     GitSetupComplete,
 }
 

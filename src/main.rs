@@ -893,7 +893,8 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
 
     // Handle Git setup modal
     if state.git_setup.active {
-        return handle_git_setup_key(key, &state.git_setup);
+        let provider = state.settings.repo_config.git.provider;
+        return handle_git_setup_key(key, &state.git_setup, provider);
     }
 
     // Handle task reassignment warning modal
@@ -1614,8 +1615,13 @@ fn handle_pm_setup_key(
 fn handle_git_setup_key(
     key: crossterm::event::KeyEvent,
     git_setup: &grove::app::state::GitSetupState,
+    provider: grove::app::config::GitProvider,
 ) -> Option<Action> {
     use grove::app::state::GitSetupStep;
+
+    if git_setup.loading {
+        return None;
+    }
 
     if git_setup.editing_text {
         return match key.code {
@@ -1646,6 +1652,14 @@ fn handle_git_setup_key(
                 }
                 KeyCode::Char('a') if !git_setup.advanced_expanded => {
                     Some(Action::GitSetupToggleAdvanced)
+                }
+                KeyCode::Char('f')
+                    if matches!(provider, grove::app::config::GitProvider::GitLab)
+                        && git_setup.project_id.is_empty()
+                        && !git_setup.owner.is_empty()
+                        && !git_setup.repo.is_empty() =>
+                {
+                    Some(Action::GitSetupFetchProjectId)
                 }
                 KeyCode::Up | KeyCode::Char('k') => Some(Action::GitSetupNavigatePrev),
                 KeyCode::Down | KeyCode::Char('j') => Some(Action::GitSetupNavigateNext),
@@ -7880,11 +7894,13 @@ async fn process_action(
             state.git_setup.advanced_expanded = false;
             state.git_setup.editing_text = false;
             state.git_setup.text_buffer.clear();
+            state.git_setup.loading = false;
             state.git_setup.project_id.clear();
             state.git_setup.owner.clear();
             state.git_setup.repo.clear();
             state.git_setup.base_url.clear();
             state.git_setup.detected_from_remote = false;
+            state.git_setup.project_name = None;
 
             // Try to auto-detect from git remote
             if let Some(remote_info) = grove::git::parse_remote_info(&state.repo_path) {
@@ -8096,6 +8112,45 @@ async fn process_action(
 
             state.git_setup.active = false;
             state.settings.active = true;
+        }
+        Action::GitSetupFetchProjectId => {
+            if grove::app::Config::gitlab_token().is_some() {
+                state.git_setup.loading = true;
+                state.git_setup.error = None;
+
+                let owner = state.git_setup.owner.clone();
+                let repo = state.git_setup.repo.clone();
+                let base_url = if state.git_setup.base_url.is_empty() {
+                    "https://gitlab.com".to_string()
+                } else {
+                    state.git_setup.base_url.clone()
+                };
+                let token = grove::app::Config::gitlab_token().unwrap();
+                let tx = action_tx.clone();
+
+                tokio::spawn(async move {
+                    let path = format!("{}/{}", owner, repo);
+                    match grove::gitlab::fetch_project_by_path(&base_url, &path, &token).await {
+                        Ok((id, name)) => {
+                            let _ = tx.send(Action::GitSetupProjectIdFetched { id, name });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Action::GitSetupProjectIdError {
+                                message: e.to_string(),
+                            });
+                        }
+                    }
+                });
+            }
+        }
+        Action::GitSetupProjectIdFetched { id, name } => {
+            state.git_setup.loading = false;
+            state.git_setup.project_id = id.to_string();
+            state.git_setup.project_name = Some(name);
+        }
+        Action::GitSetupProjectIdError { message } => {
+            state.git_setup.loading = false;
+            state.git_setup.error = Some(message);
         }
         Action::GitSetupToggleDropdown => {}
         Action::GitSetupDropdownNext => {}
