@@ -97,6 +97,12 @@ impl<'a> PmSetupModal<'a> {
                 PmSetupStep::Project => "Database",
                 PmSetupStep::Advanced => "Advanced Settings",
             },
+            ProjectMgmtProvider::Linear => match self.state.step {
+                PmSetupStep::Token => "API Token",
+                PmSetupStep::Workspace => "Team",
+                PmSetupStep::Project => "Complete",
+                PmSetupStep::Advanced => "Complete",
+            },
             _ => match self.state.step {
                 PmSetupStep::Token => "API Token",
                 PmSetupStep::Workspace => "Workspace",
@@ -387,8 +393,9 @@ impl<'a> PmSetupModal<'a> {
     fn render_linear_content(&self) -> Vec<Line<'static>> {
         match self.state.step {
             PmSetupStep::Token => self.render_linear_token_step(),
-            PmSetupStep::Workspace | PmSetupStep::Project => self.render_linear_team_step(),
-            PmSetupStep::Advanced => self.render_linear_advanced_step(),
+            PmSetupStep::Workspace | PmSetupStep::Project | PmSetupStep::Advanced => {
+                self.render_linear_team_step()
+            }
         }
     }
 
@@ -568,28 +575,6 @@ impl<'a> PmSetupModal<'a> {
         )));
 
         lines
-    }
-
-    fn render_linear_advanced_step(&self) -> Vec<Line<'static>> {
-        vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Configure workflow states (optional):",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  These settings override auto-detection. In most cases,",
-                Style::default().fg(Color::Gray),
-            )),
-            Line::from(Span::styled(
-                "  you can leave them blank and Grove will detect states automatically.",
-                Style::default().fg(Color::Gray),
-            )),
-            Line::from(""),
-        ]
     }
 
     fn render_notion_token_step(&self) -> Vec<Line<'static>> {
@@ -1431,14 +1416,23 @@ impl<'a> PmSetupModal<'a> {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let is_linear = matches!(self.provider, ProjectMgmtProvider::Linear);
         let hint = if self.state.dropdown_open {
             "[↑/k][↓/j] Navigate  [Enter] Select  [Esc] Cancel"
         } else {
             match self.state.step {
                 PmSetupStep::Token => "[Enter] Next  [Esc] Cancel",
-                PmSetupStep::Workspace => "[Enter] Open Dropdown  [c] Continue  [Esc] Back",
+                PmSetupStep::Workspace => {
+                    if is_linear {
+                        "[Enter] Open Dropdown  [c] Finish  [Esc] Back"
+                    } else {
+                        "[Enter] Open Dropdown  [c] Continue  [Esc] Back"
+                    }
+                }
                 PmSetupStep::Project => {
-                    if self.state.advanced_expanded {
+                    if is_linear {
+                        "[c] Finish  [Esc] Back"
+                    } else if self.state.advanced_expanded {
                         "[c] Finish  [←][→] Toggle Advanced  [Esc] Back"
                     } else {
                         "[Enter] Open Dropdown  [c] Finish  [→] Expand Advanced  [Esc] Back"

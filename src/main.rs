@@ -888,7 +888,8 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
 
     // Handle PM setup modal
     if state.pm_setup.active {
-        return handle_pm_setup_key(key, &state.pm_setup);
+        let provider = state.settings.repo_config.project_mgmt.provider;
+        return handle_pm_setup_key(key, &state.pm_setup, provider);
     }
 
     // Handle task reassignment warning modal
@@ -1512,8 +1513,10 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
 fn handle_pm_setup_key(
     key: crossterm::event::KeyEvent,
     pm_setup: &grove::app::state::PmSetupState,
+    provider: grove::app::config::ProjectMgmtProvider,
 ) -> Option<Action> {
     use grove::app::state::PmSetupStep;
+    let is_linear = matches!(provider, grove::app::config::ProjectMgmtProvider::Linear);
 
     if pm_setup.dropdown_open {
         return match key.code {
@@ -1535,7 +1538,13 @@ fn handle_pm_setup_key(
             if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
                 match key.code {
                     KeyCode::Esc => Some(Action::PmSetupPrevStep),
-                    KeyCode::Char('c') => Some(Action::PmSetupNextStep),
+                    KeyCode::Char('c') => {
+                        if is_linear {
+                            Some(Action::PmSetupComplete)
+                        } else {
+                            Some(Action::PmSetupNextStep)
+                        }
+                    }
                     KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
                     KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
                     KeyCode::Backspace => Some(Action::PmSetupBackspace),
@@ -1551,11 +1560,19 @@ fn handle_pm_setup_key(
                     KeyCode::Enter => {
                         if pm_setup.field_index == 0 && !pm_setup.teams.is_empty() {
                             Some(Action::PmSetupToggleDropdown)
+                        } else if is_linear {
+                            Some(Action::PmSetupComplete)
                         } else {
                             None
                         }
                     }
-                    KeyCode::Char('c') => Some(Action::PmSetupNextStep),
+                    KeyCode::Char('c') => {
+                        if is_linear {
+                            Some(Action::PmSetupComplete)
+                        } else {
+                            Some(Action::PmSetupNextStep)
+                        }
+                    }
                     KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
                     KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
                     KeyCode::Right => Some(Action::PmSetupToggleAdvanced),
@@ -1565,7 +1582,14 @@ fn handle_pm_setup_key(
             }
         }
         PmSetupStep::Project => {
-            if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
+            if is_linear {
+                // Linear skips Project step, treat as completion
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            } else if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
                 match key.code {
                     KeyCode::Esc => Some(Action::PmSetupPrevStep),
                     KeyCode::Char('c') => Some(Action::PmSetupComplete),
@@ -1597,11 +1621,22 @@ fn handle_pm_setup_key(
                 }
             }
         }
-        PmSetupStep::Advanced => match key.code {
-            KeyCode::Esc => Some(Action::PmSetupPrevStep),
-            KeyCode::Char('c') => Some(Action::PmSetupComplete),
-            _ => None,
-        },
+        PmSetupStep::Advanced => {
+            if is_linear {
+                // Linear skips Advanced step, treat as completion
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            }
+        }
     }
 }
 
