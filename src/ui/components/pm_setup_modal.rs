@@ -335,7 +335,7 @@ impl<'a> PmSetupModal<'a> {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  1. Go to: https://www.notion.so/my-integrations",
+                "  1. Go to: https://www.notion.so/profile/integrations/internal",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
@@ -431,7 +431,11 @@ impl<'a> PmSetupModal<'a> {
         } else {
             let selected_idx = self.state.selected_team_index;
             let db_display = if let Some(db) = self.state.teams.get(selected_idx) {
-                db.1.clone()
+                if db.2.is_empty() {
+                    db.1.clone()
+                } else {
+                    format!("{} > {}", db.2, db.1)
+                }
             } else {
                 "Select database...".to_string()
             };
@@ -621,19 +625,21 @@ impl<'a> PmSetupModal<'a> {
         }
 
         let area = Rect::new(
-            frame.area().x + frame.area().width / 3,
+            frame.area().x + frame.area().width / 4,
             frame.area().y + 12,
-            30,
+            50,
             (self.state.teams.len() + 2) as u16,
         );
         frame.render_widget(Clear, area);
+
+        let is_notion = matches!(self.provider, ProjectMgmtProvider::Notion);
 
         let lines: Vec<Line> = self
             .state
             .teams
             .iter()
             .enumerate()
-            .map(|(i, (_, name, key))| {
+            .map(|(i, (_, name, parent))| {
                 let style = if i == self.state.dropdown_index {
                     Style::default()
                         .fg(Color::Black)
@@ -642,10 +648,12 @@ impl<'a> PmSetupModal<'a> {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                let display = if key.is_empty() {
-                    format!(" {} ", name)
+                let display = if is_notion && !parent.is_empty() {
+                    format!(" {} > {} ", parent, name)
+                } else if !parent.is_empty() {
+                    format!(" {} ({}) ", name, parent)
                 } else {
-                    format!(" {} ({}) ", name, key)
+                    format!(" {} ", name)
                 };
                 Line::from(Span::styled(display, style))
             })

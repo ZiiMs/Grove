@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
     NotionBlock, NotionDatabaseResponse, NotionPageData, NotionPageResponse, NotionPropertySchema,
-    NotionQueryResponse,
+    NotionQueryResponse, NotionTitleProperty,
 };
 
 pub struct NotionClient {
@@ -575,11 +575,59 @@ struct NotionSearchResult {
     #[serde(rename = "object")]
     object: String,
     title: Option<Vec<NotionRichTextTitle>>,
+    parent: Option<NotionSearchParent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotionSearchParent {
+    page_id: Option<String>,
+    database_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct NotionRichTextTitle {
     plain_text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotionPageTitleProperties {
+    #[serde(rename = "Name")]
+    name: Option<NotionTitleProperty>,
+    #[serde(rename = "title")]
+    title: Option<NotionTitleProperty>,
+    #[serde(flatten)]
+    other: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl NotionPageTitleProperties {
+    fn get_title(&self) -> Option<String> {
+        self.name
+            .as_ref()
+            .and_then(|t| t.title.first().map(|rt| rt.plain_text.clone()))
+            .or_else(|| {
+                self.title
+                    .as_ref()
+                    .and_then(|t| t.title.first().map(|rt| rt.plain_text.clone()))
+            })
+            .or_else(|| {
+                for value in self.other.values() {
+                    if let Some(obj) = value.as_object() {
+                        if obj.get("type").and_then(|v| v.as_str()) == Some("title") {
+                            if let Some(title_arr) = obj.get("title").and_then(|v| v.as_array()) {
+                                if let Some(first) = title_arr.first() {
+                                    if let Some(text) =
+                                        first.get("plain_text").and_then(|v| v.as_str())
+                                    {
+                                        return Some(text.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            })
+    }
 }
 
 pub async fn fetch_databases(token: &str) -> Result<Vec<(String, String, String)>> {
@@ -638,7 +686,7 @@ pub async fn fetch_databases(token: &str) -> Result<Vec<(String, String, String)
     let search_response: NotionSearchResponse =
         serde_json::from_str(&response_text).context("Failed to parse Notion search response")?;
 
-    let databases: Vec<(String, String, String)> = search_response
+    let databases_with_parents: Vec<(String, String, Option<String>)> = search_response
         .results
         .into_iter()
         .filter(|r| r.object == "database")
@@ -649,7 +697,52 @@ pub async fn fetch_databases(token: &str) -> Result<Vec<(String, String, String)
                 .and_then(|t| t.first())
                 .map(|t| t.plain_text.clone())
                 .unwrap_or_else(|| "Untitled".to_string());
-            (r.id, title, String::new())
+            let parent_id = r.parent.and_then(|p| p.page_id.or(p.database_id));
+            (r.id, title, parent_id)
+        })
+        .collect();
+
+    let parent_ids: std::collections::HashSet<String> = databases_with_parents
+        .iter()
+        .filter_map(|(_, _, pid)| pid.clone())
+        .collect();
+
+    let mut parent_titles: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    for parent_id in parent_ids {
+        let page_url = format!("{}/pages/{}", NotionClient::BASE_URL, parent_id);
+        match client.get(&page_url).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    if let Ok(page_text) = resp.text().await {
+                        if let Ok(page) = serde_json::from_str::<serde_json::Value>(&page_text) {
+                            if let Some(props) = page.get("properties") {
+                                if let Ok(props) = serde_json::from_value::<NotionPageTitleProperties>(
+                                    props.clone(),
+                                ) {
+                                    if let Some(title) = props.get_title() {
+                                        parent_titles.insert(parent_id.clone(), title);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch parent page {}: {}", parent_id, e);
+            }
+        }
+    }
+
+    let databases: Vec<(String, String, String)> = databases_with_parents
+        .into_iter()
+        .map(|(id, title, parent_id)| {
+            let parent_title = parent_id
+                .and_then(|pid| parent_titles.get(&pid).cloned())
+                .unwrap_or_default();
+            (id, title, parent_title)
         })
         .collect();
 
