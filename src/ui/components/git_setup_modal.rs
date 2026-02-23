@@ -210,24 +210,53 @@ impl<'a> GitSetupModal<'a> {
             lines.push(Line::from(""));
         }
 
-        let project_id_display = if self.state.editing_text && self.state.field_index == 0 {
-            format!("{}█", self.state.text_buffer)
-        } else if self.state.project_id.is_empty() {
-            "(auto-fetch or enter manually)".to_string()
+        let owner_display = if self.state.editing_text && self.state.field_index == 0 {
+            if self.state.text_buffer.is_empty() {
+                "Enter owner...█".to_string()
+            } else {
+                format!("{}█", self.state.text_buffer)
+            }
+        } else if self.state.owner.is_empty() {
+            "Enter owner...".to_string()
         } else {
-            self.state.project_id.clone()
+            self.state.owner.clone()
         };
+        let owner_selected = self.state.field_index == 0;
+        lines.push(self.render_field_line("Owner", &owner_display, owner_selected));
 
-        let is_selected = self.state.field_index == 0;
-        lines.push(self.render_field_line("Project ID", &project_id_display, is_selected));
+        let repo_display = if self.state.editing_text && self.state.field_index == 1 {
+            if self.state.text_buffer.is_empty() {
+                "Enter repo...█".to_string()
+            } else {
+                format!("{}█", self.state.text_buffer)
+            }
+        } else if self.state.repo.is_empty() {
+            "Enter repo...".to_string()
+        } else {
+            self.state.repo.clone()
+        };
+        let repo_selected = self.state.field_index == 1;
+        lines.push(self.render_field_line("Repo", &repo_display, repo_selected));
 
+        // Show project ID field if manually entered or as read-only
+        if !self.state.project_id.is_empty() {
+            let project_id_selected = self.state.field_index == 2;
+            lines.push(self.render_field_line(
+                "Project ID",
+                &self.state.project_id,
+                project_id_selected,
+            ));
+        }
+
+        // Auto-fetch hint
         if self.state.project_id.is_empty()
             && Config::gitlab_token().is_some()
             && !self.state.owner.is_empty()
             && !self.state.repo.is_empty()
         {
+            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "  [f] Auto-fetch from GitLab",
+                "  [f] Auto-fetch Project ID from GitLab",
                 Style::default().fg(Color::Cyan),
             )));
         }
@@ -251,19 +280,25 @@ impl<'a> GitSetupModal<'a> {
                 Style::default().fg(Color::DarkGray),
             )));
 
-            let base_url_display = if self.state.editing_text && self.state.field_index == 1 {
-                if self.state.text_buffer.is_empty() {
-                    "(default: gitlab.com)█".to_string()
-                } else {
-                    format!("{}█", self.state.text_buffer)
-                }
-            } else if self.state.base_url.is_empty() {
-                "(default: gitlab.com)".to_string()
+            let base_url_idx = if !self.state.project_id.is_empty() {
+                3
             } else {
-                self.state.base_url.clone()
+                2
             };
+            let base_url_display =
+                if self.state.editing_text && self.state.field_index == base_url_idx {
+                    if self.state.text_buffer.is_empty() {
+                        "(default: gitlab.com)█".to_string()
+                    } else {
+                        format!("{}█", self.state.text_buffer)
+                    }
+                } else if self.state.base_url.is_empty() {
+                    "(default: gitlab.com)".to_string()
+                } else {
+                    self.state.base_url.clone()
+                };
 
-            let base_url_selected = self.state.field_index == 1;
+            let base_url_selected = self.state.field_index == base_url_idx;
             lines.push(self.render_field_line("Base URL", &base_url_display, base_url_selected));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
