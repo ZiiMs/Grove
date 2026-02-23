@@ -8317,6 +8317,10 @@ async fn process_action(
                     }
                 }
                 grove::app::config::GitProvider::GitHub => {
+                    state.log_debug(format!(
+                        "GitHub setup: owner='{}', repo='{}'",
+                        state.git_setup.owner, state.git_setup.repo
+                    ));
                     state.settings.repo_config.git.github.owner =
                         Some(state.git_setup.owner.clone());
                     state.settings.repo_config.git.github.repo = Some(state.git_setup.repo.clone());
