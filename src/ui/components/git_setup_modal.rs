@@ -47,11 +47,11 @@ impl<'a> GitSetupModal<'a> {
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let step_count = 3;
+        let step_count = 2;
         let current_step = match self.state.step {
             GitSetupStep::Token => 1,
             GitSetupStep::Repository => 2,
-            GitSetupStep::Advanced => 3,
+            GitSetupStep::Advanced => 2,
         };
 
         let step_text = format!(
@@ -210,6 +210,7 @@ impl<'a> GitSetupModal<'a> {
             lines.push(Line::from(""));
         }
 
+        // Field 0: Owner
         let owner_display = if self.state.editing_text && self.state.field_index == 0 {
             if self.state.text_buffer.is_empty() {
                 "Enter owner...█".to_string()
@@ -224,6 +225,7 @@ impl<'a> GitSetupModal<'a> {
         let owner_selected = self.state.field_index == 0;
         lines.push(self.render_field_line("Owner", &owner_display, owner_selected));
 
+        // Field 1: Repo
         let repo_display = if self.state.editing_text && self.state.field_index == 1 {
             if self.state.text_buffer.is_empty() {
                 "Enter repo...█".to_string()
@@ -238,15 +240,21 @@ impl<'a> GitSetupModal<'a> {
         let repo_selected = self.state.field_index == 1;
         lines.push(self.render_field_line("Repo", &repo_display, repo_selected));
 
-        // Show project ID field if manually entered or as read-only
-        if !self.state.project_id.is_empty() {
-            let project_id_selected = self.state.field_index == 2;
-            lines.push(self.render_field_line(
-                "Project ID",
-                &self.state.project_id,
-                project_id_selected,
-            ));
-        }
+        // Field 2: Project ID (always visible)
+        let project_id_display = if self.state.editing_text
+            && self.state.field_index == 2
+            && self.state.project_id.is_empty()
+        {
+            "(auto or enter manually)█".to_string()
+        } else if self.state.editing_text && self.state.field_index == 2 {
+            format!("{}█", self.state.text_buffer)
+        } else if self.state.project_id.is_empty() {
+            "(auto or enter manually)".to_string()
+        } else {
+            self.state.project_id.clone()
+        };
+        let project_id_selected = self.state.field_index == 2;
+        lines.push(self.render_field_line("Project ID", &project_id_display, project_id_selected));
 
         // Auto-fetch hint
         if self.state.project_id.is_empty()
@@ -254,7 +262,6 @@ impl<'a> GitSetupModal<'a> {
             && !self.state.owner.is_empty()
             && !self.state.repo.is_empty()
         {
-            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  [f] Auto-fetch Project ID from GitLab",
                 Style::default().fg(Color::Cyan),
@@ -280,25 +287,20 @@ impl<'a> GitSetupModal<'a> {
                 Style::default().fg(Color::DarkGray),
             )));
 
-            let base_url_idx = if !self.state.project_id.is_empty() {
-                3
-            } else {
-                2
-            };
-            let base_url_display =
-                if self.state.editing_text && self.state.field_index == base_url_idx {
-                    if self.state.text_buffer.is_empty() {
-                        "(default: gitlab.com)█".to_string()
-                    } else {
-                        format!("{}█", self.state.text_buffer)
-                    }
-                } else if self.state.base_url.is_empty() {
-                    "(default: gitlab.com)".to_string()
+            // Field 3: Base URL (when advanced expanded)
+            let base_url_display = if self.state.editing_text && self.state.field_index == 3 {
+                if self.state.text_buffer.is_empty() {
+                    "(default: gitlab.com)█".to_string()
                 } else {
-                    self.state.base_url.clone()
-                };
+                    format!("{}█", self.state.text_buffer)
+                }
+            } else if self.state.base_url.is_empty() {
+                "(default: gitlab.com)".to_string()
+            } else {
+                self.state.base_url.clone()
+            };
 
-            let base_url_selected = self.state.field_index == base_url_idx;
+            let base_url_selected = self.state.field_index == 3;
             lines.push(self.render_field_line("Base URL", &base_url_display, base_url_selected));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
@@ -703,9 +705,9 @@ impl<'a> GitSetupModal<'a> {
                 GitSetupStep::Token => "[Enter] Continue  [Esc] Cancel",
                 GitSetupStep::Repository => {
                     if self.state.advanced_expanded {
-                        "[↑/k][↓/j] Navigate  [Enter] Edit  [Tab] Collapse Advanced  [→/l] Next  [Esc] Cancel"
+                        "[↑/k][↓/j] Navigate  [Enter] Edit  [a] Collapse Advanced  [→/l] Finish  [Esc] Cancel"
                     } else {
-                        "[↑/k][↓/j] Navigate  [Enter] Edit  [a] Expand Advanced  [→/l] Next  [Esc] Cancel"
+                        "[↑/k][↓/j] Navigate  [Enter] Edit  [a] Expand Advanced  [→/l] Finish  [Esc] Cancel"
                     }
                 }
                 GitSetupStep::Advanced => "[←/h] Back  [Enter] Finish  [Esc] Cancel",

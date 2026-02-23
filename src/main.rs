@@ -1640,15 +1640,21 @@ fn handle_git_setup_key(
             _ => None,
         },
         GitSetupStep::Repository => {
-            // Fields: 0=Owner, 1=Repo, 2=BaseURL(if advanced)
-            let max_field = if git_setup.advanced_expanded { 2 } else { 1 };
+            // Fields: 0=Owner, 1=Repo, 2=ProjectID, 3=BaseURL(if advanced)
+            let max_field = if git_setup.advanced_expanded {
+                3
+            } else if matches!(provider, grove::app::config::GitProvider::GitLab) {
+                2 // GitLab has 3 fields (owner, repo, project_id)
+            } else {
+                1 // GitHub/Codeberg have 2 fields (owner, repo)
+            };
             match key.code {
                 KeyCode::Esc => Some(Action::GitSetupPrevStep),
                 KeyCode::Enter => {
                     if git_setup.field_index < max_field {
                         Some(Action::GitSetupStartEdit)
                     } else {
-                        Some(Action::GitSetupNextStep)
+                        Some(Action::GitSetupComplete)
                     }
                 }
                 KeyCode::Char('a') if !git_setup.advanced_expanded => {
@@ -1665,7 +1671,7 @@ fn handle_git_setup_key(
                 }
                 KeyCode::Up | KeyCode::Char('k') => Some(Action::GitSetupNavigatePrev),
                 KeyCode::Down | KeyCode::Char('j') => Some(Action::GitSetupNavigateNext),
-                KeyCode::Right | KeyCode::Char('l') => Some(Action::GitSetupNextStep),
+                KeyCode::Right | KeyCode::Char('l') => Some(Action::GitSetupComplete),
                 KeyCode::Left | KeyCode::Char('h') if git_setup.advanced_expanded => {
                     Some(Action::GitSetupToggleAdvanced)
                 }
@@ -7992,7 +7998,7 @@ async fn process_action(
                 }
             }
             grove::app::state::GitSetupStep::Repository => {
-                state.git_setup.step = grove::app::state::GitSetupStep::Advanced;
+                // Skip Advanced step - just complete setup
             }
             grove::app::state::GitSetupStep::Advanced => {}
         },
@@ -8012,7 +8018,10 @@ async fn process_action(
             state.git_setup.advanced_expanded = !state.git_setup.advanced_expanded;
         }
         Action::GitSetupNavigateNext => {
+            let provider = state.settings.repo_config.git.provider;
             let max_field = if state.git_setup.advanced_expanded {
+                3
+            } else if matches!(provider, grove::app::config::GitProvider::GitLab) {
                 2
             } else {
                 1
@@ -8031,6 +8040,7 @@ async fn process_action(
             state.git_setup.text_buffer = match state.git_setup.field_index {
                 0 => state.git_setup.owner.clone(),
                 1 => state.git_setup.repo.clone(),
+                2 => state.git_setup.project_id.clone(),
                 _ => state.git_setup.base_url.clone(),
             };
         }
@@ -8042,6 +8052,7 @@ async fn process_action(
             match state.git_setup.field_index {
                 0 => state.git_setup.owner = state.git_setup.text_buffer.clone(),
                 1 => state.git_setup.repo = state.git_setup.text_buffer.clone(),
+                2 => state.git_setup.project_id = state.git_setup.text_buffer.clone(),
                 _ => state.git_setup.base_url = state.git_setup.text_buffer.clone(),
             }
             state.git_setup.editing_text = false;
