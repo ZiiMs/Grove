@@ -322,6 +322,7 @@ impl<'a> AppWidget<'a> {
                 TaskListModal::new(
                     &self.state.task_list,
                     self.state.task_list_selected,
+                    self.state.task_list_scroll,
                     self.state.task_list_loading,
                     provider_name,
                     &assigned_tasks,

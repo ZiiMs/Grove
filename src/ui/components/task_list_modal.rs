@@ -13,6 +13,7 @@ use crate::app::{TaskItemStatus, TaskListItem};
 pub struct TaskListModal<'a> {
     tasks: &'a [TaskListItem],
     selected_actual_idx: usize,
+    scroll_offset: usize,
     loading: bool,
     provider_name: &'a str,
     assigned_tasks: &'a HashMap<String, String>,
@@ -23,6 +24,7 @@ impl<'a> TaskListModal<'a> {
     pub fn new(
         tasks: &'a [TaskListItem],
         selected_actual_idx: usize,
+        scroll_offset: usize,
         loading: bool,
         provider_name: &'a str,
         assigned_tasks: &'a HashMap<String, String>,
@@ -31,6 +33,7 @@ impl<'a> TaskListModal<'a> {
         Self {
             tasks,
             selected_actual_idx,
+            scroll_offset,
             loading,
             provider_name,
             assigned_tasks,
@@ -138,10 +141,60 @@ impl<'a> TaskListModal<'a> {
 
         let visible_tasks = self.compute_visible_tasks();
 
+        if visible_tasks.is_empty() {
+            let empty_text = Paragraph::new("No visible tasks")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(ratatui::layout::Alignment::Center);
+            frame.render_widget(empty_text, chunks[0]);
+            return;
+        }
+
+        let total_tasks = visible_tasks.len();
         let selected_visible_pos = visible_tasks
             .iter()
             .position(|(actual_idx, _, _)| *actual_idx == self.selected_actual_idx)
             .unwrap_or(0);
+
+        let available_height = chunks[0].height as usize;
+
+        let mut scroll_offset = self.scroll_offset.min(total_tasks.saturating_sub(1));
+
+        for _ in 0..3 {
+            if selected_visible_pos < scroll_offset {
+                scroll_offset = selected_visible_pos;
+            }
+
+            let has_above = scroll_offset > 0;
+            let has_below_estimate = scroll_offset + available_height < total_tasks;
+            let indicator_rows =
+                (if has_above { 1 } else { 0 }) + (if has_below_estimate { 1 } else { 0 });
+
+            let max_visible = available_height.saturating_sub(indicator_rows);
+
+            let max_scroll = total_tasks.saturating_sub(max_visible);
+            scroll_offset = scroll_offset.min(max_scroll);
+
+            if selected_visible_pos >= scroll_offset + max_visible {
+                scroll_offset = selected_visible_pos.saturating_sub(max_visible - 1);
+            }
+        }
+
+        let has_above = scroll_offset > 0;
+        let max_visible_final = available_height.saturating_sub(if has_above { 1 } else { 0 });
+        let has_below = scroll_offset + max_visible_final < total_tasks;
+        let effective_visible = available_height
+            .saturating_sub(if has_above { 1 } else { 0 } + if has_below { 1 } else { 0 });
+
+        if has_below && selected_visible_pos >= scroll_offset + effective_visible {
+            scroll_offset =
+                selected_visible_pos.saturating_sub(effective_visible.saturating_sub(1));
+        }
+
+        let has_above = scroll_offset > 0;
+        let has_below = scroll_offset + effective_visible < total_tasks;
+
+        let end_index = (scroll_offset + effective_visible).min(total_tasks);
+        let visible_slice = &visible_tasks[scroll_offset..end_index];
 
         let content_based_width = visible_tasks
             .iter()
@@ -154,88 +207,106 @@ impl<'a> TaskListModal<'a> {
         let max_allowed = (available_width.saturating_sub(25)).min(60);
         let max_name_width = content_based_width.clamp(min_width, max_allowed);
 
-        let items: Vec<ListItem> = visible_tasks
-            .iter()
-            .enumerate()
-            .map(|(visible_pos, (_actual_idx, task, depth))| {
-                let (status_icon, status_color) = match &task.status {
-                    TaskItemStatus::NotStarted => ("○", Color::Gray),
-                    TaskItemStatus::InProgress => ("◐", Color::Yellow),
-                    TaskItemStatus::Completed => ("✓", Color::Green),
-                };
+        let mut items: Vec<ListItem> = Vec::new();
 
-                let is_selected = visible_pos == selected_visible_pos;
+        if has_above {
+            let hidden_above = scroll_offset;
+            let indicator = ListItem::new(Line::from(vec![Span::styled(
+                format!("▲ {} more above", hidden_above),
+                Style::default().fg(Color::Yellow),
+            )]));
+            items.push(indicator);
+        }
 
-                let style = if is_selected {
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
+        for (i, (_actual_idx, task, depth)) in visible_slice.iter().enumerate() {
+            let visible_pos = scroll_offset + i;
+            let is_selected = visible_pos == selected_visible_pos;
+
+            let (status_icon, status_color) = match &task.status {
+                TaskItemStatus::NotStarted => ("○", Color::Gray),
+                TaskItemStatus::InProgress => ("◐", Color::Yellow),
+                TaskItemStatus::Completed => ("✓", Color::Green),
+            };
+
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let status_style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(status_color)
+            };
+
+            let status_name_style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            let normalized_id = task.id.replace('-', "").to_lowercase();
+            let assigned_info = self.assigned_tasks.get(&normalized_id);
+            let assigned_style = if is_selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+
+            let indent = " ".repeat(*depth * 2);
+            let expand_indicator = if task.has_children {
+                if self.expanded_ids.contains(&task.id) {
+                    "▼ "
                 } else {
-                    Style::default().fg(Color::White)
-                };
-
-                let status_style = if is_selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    Style::default().fg(status_color)
-                };
-
-                let status_name_style = if is_selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-
-                let normalized_id = task.id.replace('-', "").to_lowercase();
-                let assigned_info = self.assigned_tasks.get(&normalized_id);
-                let assigned_style = if is_selected {
-                    Style::default().fg(Color::Black).bg(Color::Cyan)
-                } else {
-                    Style::default().fg(Color::Green)
-                };
-
-                let indent = " ".repeat(*depth * 2);
-                let expand_indicator = if task.has_children {
-                    if self.expanded_ids.contains(&task.id) {
-                        "▼ "
-                    } else {
-                        "► "
-                    }
-                } else {
-                    "  "
-                };
-
-                let display_name = format!("{}{}{}", indent, expand_indicator, task.name);
-                let truncated_name = if display_name.chars().count() > max_name_width {
-                    format!(
-                        "{}…",
-                        display_name
-                            .chars()
-                            .take(max_name_width - 1)
-                            .collect::<String>()
-                    )
-                } else {
-                    format!("{:width$}", display_name, width = max_name_width)
-                };
-
-                let mut spans = vec![
-                    Span::styled(format!("{} ", status_icon), status_style),
-                    Span::styled(truncated_name, style),
-                    Span::styled("  ", Style::default()),
-                    Span::styled(format!("[{}]", task.status_name), status_name_style),
-                ];
-
-                if let Some(agent_name) = assigned_info {
-                    spans.push(Span::styled("  ", Style::default()));
-                    spans.push(Span::styled(format!("✓ @{}", agent_name), assigned_style));
+                    "► "
                 }
+            } else {
+                "  "
+            };
 
-                let line = Line::from(spans);
+            let display_name = format!("{}{}{}", indent, expand_indicator, task.name);
+            let truncated_name = if display_name.chars().count() > max_name_width {
+                format!(
+                    "{}…",
+                    display_name
+                        .chars()
+                        .take(max_name_width - 1)
+                        .collect::<String>()
+                )
+            } else {
+                format!("{:width$}", display_name, width = max_name_width)
+            };
 
-                ListItem::new(line)
-            })
-            .collect();
+            let mut spans = vec![
+                Span::styled(format!("{} ", status_icon), status_style),
+                Span::styled(truncated_name, style),
+                Span::styled("  ", Style::default()),
+                Span::styled(format!("[{}]", task.status_name), status_name_style),
+            ];
+
+            if let Some(agent_name) = assigned_info {
+                spans.push(Span::styled("  ", Style::default()));
+                spans.push(Span::styled(format!("✓ @{}", agent_name), assigned_style));
+            }
+
+            let line = Line::from(spans);
+            items.push(ListItem::new(line));
+        }
+
+        if has_below {
+            let hidden_below = total_tasks - scroll_offset - effective_visible;
+            if hidden_below > 0 {
+                let indicator = ListItem::new(Line::from(vec![Span::styled(
+                    format!("▼ {} more below", hidden_below),
+                    Style::default().fg(Color::Yellow),
+                )]));
+                items.push(indicator);
+            }
+        }
 
         let list = List::new(items);
         frame.render_widget(list, chunks[0]);
