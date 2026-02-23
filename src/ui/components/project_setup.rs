@@ -45,10 +45,10 @@ impl<'a> ProjectSetupWizard<'a> {
         self.render_footer(frame, chunks[2]);
 
         if self.state.git_provider_dropdown_open {
-            self.render_git_dropdown(frame);
+            self.render_git_dropdown(frame, area);
         }
         if self.state.pm_provider_dropdown_open {
-            self.render_pm_dropdown(frame);
+            self.render_pm_dropdown(frame, area);
         }
     }
 
@@ -251,16 +251,16 @@ impl<'a> ProjectSetupWizard<'a> {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_git_dropdown(&self, frame: &mut Frame) {
+    fn render_git_dropdown(&self, frame: &mut Frame, popup_area: Rect) {
         let options: Vec<&str> = GitProvider::all()
             .iter()
             .map(|g| g.display_name())
             .collect();
 
         let area = Rect::new(
-            frame.area().x + 15,
-            frame.area().y + 6,
-            15,
+            popup_area.x + 18,
+            popup_area.y + 6,
+            12,
             (options.len() + 2) as u16,
         );
         frame.render_widget(Clear, area);
@@ -289,16 +289,16 @@ impl<'a> ProjectSetupWizard<'a> {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_pm_dropdown(&self, frame: &mut Frame) {
+    fn render_pm_dropdown(&self, frame: &mut Frame, popup_area: Rect) {
         let options: Vec<&str> = ProjectMgmtProvider::all()
             .iter()
             .map(|p| p.display_name())
             .collect();
 
         let area = Rect::new(
-            frame.area().x + 15,
-            frame.area().y + 11,
-            15,
+            popup_area.x + 18,
+            popup_area.y + 10,
+            12,
             (options.len() + 2) as u16,
         );
         frame.render_widget(Clear, area);

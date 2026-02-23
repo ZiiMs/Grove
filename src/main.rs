@@ -7364,7 +7364,8 @@ async fn process_action(
                         state.git_setup.base_url.clear();
                         state.git_setup.detected_from_remote = false;
                         state.git_setup.project_name = None;
-                        state.git_setup.ci_provider = grove::app::config::CodebergCiProvider::default();
+                        state.git_setup.ci_provider =
+                            grove::app::config::CodebergCiProvider::default();
                         state.git_setup.woodpecker_repo_id.clear();
 
                         // Try to auto-detect from git remote
