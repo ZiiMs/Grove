@@ -130,7 +130,7 @@ impl<'a> PmSetupModal<'a> {
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
-                "  2. Click \"New Key\"",
+                "  2. Click \"New API Key\"",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
@@ -138,7 +138,11 @@ impl<'a> PmSetupModal<'a> {
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
-                "  4. Copy the generated token",
+                "  4. Scope: Full access, or Read & Write + Issues",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  5. Teams: All teams, or select specific ones",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(""),
