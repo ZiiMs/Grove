@@ -110,6 +110,7 @@ pub enum SettingsField {
     MainBranch,
     WorktreeSymlinks,
     ProjectMgmtProvider,
+    SetupPm,
     AsanaProjectGid,
     AsanaInProgressGid,
     AsanaDoneGid,
@@ -193,6 +194,7 @@ pub enum SettingsCategory {
 pub enum ActionButtonType {
     ResetTab,
     ResetAll,
+    SetupPm,
 }
 
 impl ActionButtonType {
@@ -200,8 +202,37 @@ impl ActionButtonType {
         match self {
             ActionButtonType::ResetTab => "Reset Tab to Defaults",
             ActionButtonType::ResetAll => "Reset All Settings",
+            ActionButtonType::SetupPm => "Setup Integration",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PmSetupStep {
+    #[default]
+    Token,
+    Workspace,
+    Project,
+    Advanced,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PmSetupState {
+    pub active: bool,
+    pub step: PmSetupStep,
+    pub advanced_expanded: bool,
+    pub teams: Vec<(String, String, String)>,
+    pub all_databases: Vec<(String, String, String)>,
+    pub teams_loading: bool,
+    pub selected_team_index: usize,
+    pub selected_workspace_gid: Option<String>,
+    pub manual_team_id: String,
+    pub in_progress_state: String,
+    pub done_state: String,
+    pub dropdown_open: bool,
+    pub dropdown_index: usize,
+    pub field_index: usize,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,6 +301,7 @@ impl SettingsField {
             | SettingsField::BranchPrefix
             | SettingsField::MainBranch => SettingsTab::Git,
             SettingsField::ProjectMgmtProvider
+            | SettingsField::SetupPm
             | SettingsField::AsanaProjectGid
             | SettingsField::AsanaInProgressGid
             | SettingsField::AsanaDoneGid
@@ -461,6 +493,7 @@ impl SettingsItem {
                 let mut items = vec![
                     SettingsItem::Category(SettingsCategory::ProjectMgmt),
                     SettingsItem::Field(SettingsField::ProjectMgmtProvider),
+                    SettingsItem::Field(SettingsField::SetupPm),
                 ];
                 match pm_provider {
                     ProjectMgmtProvider::Asana => {
@@ -860,6 +893,7 @@ pub struct AppState {
     pub global_setup: Option<GlobalSetupState>,
     pub show_project_setup: bool,
     pub project_setup: Option<ProjectSetupState>,
+    pub pm_setup: PmSetupState,
     pub worktree_base: std::path::PathBuf,
     pub preview_tab: PreviewTab,
     pub devserver_scroll: usize,
@@ -1017,6 +1051,7 @@ impl AppState {
             global_setup: None,
             show_project_setup: false,
             project_setup: None,
+            pm_setup: PmSetupState::default(),
             worktree_base,
             preview_tab: PreviewTab::default(),
             devserver_scroll: 0,

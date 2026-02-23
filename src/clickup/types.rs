@@ -199,3 +199,98 @@ pub fn parse_clickup_task_id(input: &str) -> String {
 
     trimmed.to_string()
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ClickUpTeamsResponse {
+    pub teams: Vec<ClickUpTeam>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClickUpTeam {
+    pub id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub avatar: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClickUpSpacesResponse {
+    pub spaces: Vec<ClickUpSpace>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClickUpSpace {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub features: Option<ClickUpSpaceFeatures>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClickUpSpaceFeatures {
+    pub due_dates: Option<ClickUpSpaceFeatureEnabled>,
+    pub sprints: Option<ClickUpSpaceFeatureEnabled>,
+    pub time_tracking: Option<ClickUpSpaceFeatureEnabled>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClickUpSpaceFeatureEnabled {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClickUpFoldersResponse {
+    pub folders: Vec<ClickUpFolder>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClickUpFolder {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub lists: Vec<ClickUpList>,
+    pub hidden: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClickUpListsResponse {
+    pub lists: Vec<ClickUpList>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClickUpList {
+    pub id: String,
+    pub name: String,
+    pub space: Option<ClickUpSpaceRef>,
+    pub folder: Option<ClickUpFolderRef>,
+    pub archived: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClickUpSpaceRef {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ClickUpFolderRef {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClickUpListWithLocation {
+    pub id: String,
+    pub name: String,
+    pub space_name: String,
+    pub folder_name: Option<String>,
+}
+
+impl ClickUpListWithLocation {
+    pub fn display_path(&self) -> String {
+        match &self.folder_name {
+            Some(folder) => format!("{} > {} > {}", self.space_name, folder, self.name),
+            None => format!("{} > {}", self.space_name, self.name),
+        }
+    }
+}

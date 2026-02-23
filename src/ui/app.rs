@@ -16,8 +16,8 @@ use crate::devserver::DevServerStatus;
 use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
     DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GlobalSetupWizard, HelpOverlay,
-    LoadingOverlay, OutputViewWidget, ProjectSetupWizard, SettingsModal, StatusBarWidget,
-    StatusDropdown, SubtaskStatusDropdown, SystemMetricsWidget, TaskListModal,
+    LoadingOverlay, OutputViewWidget, PmSetupModal, ProjectSetupWizard, SettingsModal,
+    StatusBarWidget, StatusDropdown, SubtaskStatusDropdown, SystemMetricsWidget, TaskListModal,
     TaskReassignmentWarningModal, ToastWidget,
 };
 
@@ -155,6 +155,11 @@ impl<'a> AppWidget<'a> {
                 let wizard = ProjectSetupWizard::new(wizard_state, repo_name);
                 wizard.render(frame);
             }
+        }
+
+        if self.state.pm_setup.active {
+            let provider = self.state.settings.repo_config.project_mgmt.provider;
+            PmSetupModal::new(&self.state.pm_setup, provider).render(frame);
         }
 
         if let Some(message) = &self.state.loading_message {

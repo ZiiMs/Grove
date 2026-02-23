@@ -3,8 +3,8 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
-    AsanaSectionsResponse, AsanaTaskData, AsanaTaskListResponse, AsanaTaskResponse,
-    AsanaTaskSummary, SectionOption,
+    AsanaProjectsResponse, AsanaSectionsResponse, AsanaTaskData, AsanaTaskListResponse,
+    AsanaTaskResponse, AsanaTaskSummary, AsanaWorkspacesResponse, SectionOption,
 };
 
 /// Asana API client.
@@ -71,6 +71,86 @@ impl AsanaClient {
             serde_json::from_str(&response_text).context("Failed to parse Asana task response")?;
 
         Ok(task_resp.data)
+    }
+
+    /// Fetch all workspaces the user has access to.
+    /// Returns Vec<(gid, name, "")> - empty third element for consistency with teams format.
+    pub async fn fetch_workspaces(&self) -> Result<Vec<(String, String, String)>> {
+        let url = "https://app.asana.com/api/1.0/workspaces";
+
+        tracing::debug!("Asana fetch_workspaces: url={}", url);
+
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .context("Failed to fetch Asana workspaces")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Asana fetch_workspaces response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            anyhow::bail!("Asana API error: {} - {}", status, response_text);
+        }
+
+        let workspaces: AsanaWorkspacesResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse Asana workspaces response")?;
+
+        Ok(workspaces
+            .data
+            .into_iter()
+            .map(|ws| (ws.gid, ws.name, String::new()))
+            .collect())
+    }
+
+    /// Fetch all projects in a workspace.
+    /// Returns Vec<(gid, name, workspace_name)>.
+    pub async fn fetch_projects(
+        &self,
+        workspace_gid: &str,
+    ) -> Result<Vec<(String, String, String)>> {
+        let url = format!(
+            "https://app.asana.com/api/1.0/workspaces/{}/projects",
+            workspace_gid
+        );
+
+        tracing::debug!("Asana fetch_projects: url={}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch Asana projects")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Asana fetch_projects response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            anyhow::bail!("Asana API error: {} - {}", status, response_text);
+        }
+
+        let projects: AsanaProjectsResponse = serde_json::from_str(&response_text)
+            .context("Failed to parse Asana projects response")?;
+
+        Ok(projects
+            .data
+            .into_iter()
+            .map(|p| (p.gid, p.name, String::new()))
+            .collect())
     }
 
     /// Fetch subtasks of a parent task.
@@ -488,6 +568,25 @@ impl OptionalAsanaClient {
 
     pub async fn is_configured(&self) -> bool {
         self.client.read().await.is_some()
+    }
+
+    pub async fn fetch_workspaces(&self) -> Result<Vec<(String, String, String)>> {
+        let guard = self.client.read().await;
+        match &*guard {
+            Some(c) => c.fetch_workspaces().await,
+            None => anyhow::bail!("Asana not configured"),
+        }
+    }
+
+    pub async fn fetch_projects(
+        &self,
+        workspace_gid: &str,
+    ) -> Result<Vec<(String, String, String)>> {
+        let guard = self.client.read().await;
+        match &*guard {
+            Some(c) => c.fetch_projects(workspace_gid).await,
+            None => anyhow::bail!("Asana not configured"),
+        }
     }
 
     pub async fn get_task(&self, gid: &str) -> Result<AsanaTaskData> {

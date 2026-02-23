@@ -317,6 +317,32 @@ pub enum Action {
     ProjectSetupConfirmDropdown,
     ProjectSetupSkip,
     ProjectSetupComplete,
+
+    // PM Setup Wizard
+    OpenPmSetup,
+    ClosePmSetup,
+    PmSetupNextStep,
+    PmSetupPrevStep,
+    PmSetupToggleAdvanced,
+    PmSetupNavigateNext,
+    PmSetupNavigatePrev,
+    PmSetupToggleDropdown,
+    PmSetupDropdownNext,
+    PmSetupDropdownPrev,
+    PmSetupConfirmDropdown,
+    PmSetupInputChar(char),
+    PmSetupBackspace,
+    PmSetupTeamsLoaded {
+        teams: Vec<(String, String, String)>,
+    },
+    PmSetupNotionDatabasesLoaded {
+        databases: Vec<(String, String, String)>,
+        parent_pages: Vec<(String, String, String)>,
+    },
+    PmSetupTeamsError {
+        message: String,
+    },
+    PmSetupComplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

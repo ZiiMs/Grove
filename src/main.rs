@@ -886,6 +886,12 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return handle_settings_key(key, state);
     }
 
+    // Handle PM setup modal
+    if state.pm_setup.active {
+        let provider = state.settings.repo_config.project_mgmt.provider;
+        return handle_pm_setup_key(key, &state.pm_setup, provider);
+    }
+
     // Handle task reassignment warning modal
     if state.task_reassignment_warning.is_some() {
         return match key.code {
@@ -1482,11 +1488,15 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::Enter => {
             if let Some(btn) = state.settings.current_action_button() {
                 use grove::app::ActionButtonType;
-                let reset_type = match btn {
-                    ActionButtonType::ResetTab => grove::app::ResetType::CurrentTab,
-                    ActionButtonType::ResetAll => grove::app::ResetType::AllSettings,
-                };
-                Some(Action::SettingsRequestReset { reset_type })
+                match btn {
+                    ActionButtonType::ResetTab => Some(Action::SettingsRequestReset {
+                        reset_type: grove::app::ResetType::CurrentTab,
+                    }),
+                    ActionButtonType::ResetAll => Some(Action::SettingsRequestReset {
+                        reset_type: grove::app::ResetType::AllSettings,
+                    }),
+                    ActionButtonType::SetupPm => Some(Action::SettingsSelectField),
+                }
             } else {
                 let field = state.settings.current_field();
                 if field.is_keybind_field() {
@@ -1497,6 +1507,136 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
             }
         }
         _ => None,
+    }
+}
+
+fn handle_pm_setup_key(
+    key: crossterm::event::KeyEvent,
+    pm_setup: &grove::app::state::PmSetupState,
+    provider: grove::app::config::ProjectMgmtProvider,
+) -> Option<Action> {
+    use grove::app::state::PmSetupStep;
+    let is_linear = matches!(provider, grove::app::config::ProjectMgmtProvider::Linear);
+
+    if pm_setup.dropdown_open {
+        return match key.code {
+            KeyCode::Esc => Some(Action::PmSetupToggleDropdown),
+            KeyCode::Enter => Some(Action::PmSetupConfirmDropdown),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupDropdownPrev),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupDropdownNext),
+            _ => None,
+        };
+    }
+
+    match pm_setup.step {
+        PmSetupStep::Token => match key.code {
+            KeyCode::Esc => Some(Action::ClosePmSetup),
+            KeyCode::Enter => Some(Action::PmSetupNextStep),
+            _ => None,
+        },
+        PmSetupStep::Workspace => {
+            if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => {
+                        if is_linear {
+                            Some(Action::PmSetupComplete)
+                        } else {
+                            Some(Action::PmSetupNextStep)
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
+                    KeyCode::Backspace => Some(Action::PmSetupBackspace),
+                    KeyCode::Char(ch) if ch != 'c' && ch != 'j' && ch != 'k' => {
+                        Some(Action::PmSetupInputChar(ch))
+                    }
+                    KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
+                    _ => None,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Enter => {
+                        if pm_setup.field_index == 0 && !pm_setup.teams.is_empty() {
+                            Some(Action::PmSetupToggleDropdown)
+                        } else if is_linear {
+                            Some(Action::PmSetupComplete)
+                        } else {
+                            None
+                        }
+                    }
+                    KeyCode::Char('c') => {
+                        if is_linear {
+                            Some(Action::PmSetupComplete)
+                        } else {
+                            Some(Action::PmSetupNextStep)
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
+                    KeyCode::Right => Some(Action::PmSetupToggleAdvanced),
+                    KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
+                    _ => None,
+                }
+            }
+        }
+        PmSetupStep::Project => {
+            if is_linear {
+                // Linear skips Project step, treat as completion
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            } else if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
+                    KeyCode::Backspace => Some(Action::PmSetupBackspace),
+                    KeyCode::Char(ch) if ch != 'c' && ch != 'j' && ch != 'k' => {
+                        Some(Action::PmSetupInputChar(ch))
+                    }
+                    KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
+                    _ => None,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Enter => {
+                        if pm_setup.field_index == 0 && !pm_setup.teams.is_empty() {
+                            Some(Action::PmSetupToggleDropdown)
+                        } else {
+                            None
+                        }
+                    }
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
+                    KeyCode::Right => Some(Action::PmSetupToggleAdvanced),
+                    KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
+                    _ => None,
+                }
+            }
+        }
+        PmSetupStep::Advanced => {
+            if is_linear {
+                // Linear skips Advanced step, treat as completion
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc => Some(Action::PmSetupPrevStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupComplete),
+                    _ => None,
+                }
+            }
+        }
     }
 }
 
@@ -6064,6 +6204,19 @@ async fn process_action(
                         .clone()
                         .unwrap_or_default();
                 }
+                grove::app::SettingsField::SetupPm => {
+                    state.settings.active = false;
+                    state.pm_setup.active = true;
+                    state.pm_setup.step = grove::app::state::PmSetupStep::Token;
+                    state.pm_setup.teams.clear();
+                    state.pm_setup.error = None;
+                    state.pm_setup.selected_team_index = 0;
+                    state.pm_setup.field_index = 0;
+                    state.pm_setup.advanced_expanded = false;
+                    state.pm_setup.manual_team_id.clear();
+                    state.pm_setup.in_progress_state.clear();
+                    state.pm_setup.done_state.clear();
+                }
                 grove::app::SettingsField::LinearTeamId => {
                     state.settings.editing_text = true;
                     state.settings.text_buffer = state
@@ -7112,6 +7265,624 @@ async fn process_action(
                 }
             }
             state.show_project_setup = false;
+        }
+
+        // PM Setup Wizard Actions
+        Action::OpenPmSetup => {
+            state.pm_setup.active = true;
+            state.pm_setup.step = grove::app::state::PmSetupStep::Token;
+            state.pm_setup.teams.clear();
+            state.pm_setup.all_databases.clear();
+            state.pm_setup.error = None;
+            state.pm_setup.selected_team_index = 0;
+            state.pm_setup.field_index = 0;
+            state.pm_setup.advanced_expanded = false;
+            state.pm_setup.manual_team_id.clear();
+            state.pm_setup.in_progress_state.clear();
+            state.pm_setup.done_state.clear();
+        }
+        Action::ClosePmSetup => {
+            state.pm_setup.active = false;
+            state.settings.active = true;
+        }
+        Action::PmSetupNextStep => match state.pm_setup.step {
+            grove::app::state::PmSetupStep::Token => {
+                state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                let provider = state.settings.repo_config.project_mgmt.provider;
+                if state.pm_setup.teams.is_empty() {
+                    match provider {
+                        grove::app::config::ProjectMgmtProvider::Linear
+                            if grove::app::Config::linear_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let linear_client = Arc::clone(linear_client);
+                            tokio::spawn(async move {
+                                match linear_client.get_teams().await {
+                                    Ok(teams) => {
+                                        let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                        grove::app::config::ProjectMgmtProvider::Notion
+                            if grove::app::Config::notion_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::notion_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::notion::fetch_databases(&token).await {
+                                    Ok(databases) => {
+                                        let parent_pages =
+                                            grove::notion::extract_parent_pages(&databases);
+                                        let _ = tx.send(Action::PmSetupNotionDatabasesLoaded {
+                                            databases,
+                                            parent_pages,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                        grove::app::config::ProjectMgmtProvider::Asana
+                            if grove::app::Config::asana_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let asana_client = Arc::clone(asana_client);
+                            tokio::spawn(async move {
+                                match asana_client.fetch_workspaces().await {
+                                    Ok(workspaces) => {
+                                        let _ = tx
+                                            .send(Action::PmSetupTeamsLoaded { teams: workspaces });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                        grove::app::config::ProjectMgmtProvider::Clickup
+                            if grove::app::Config::clickup_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::clickup_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::clickup::fetch_teams(&token).await {
+                                    Ok(teams) => {
+                                        let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                        grove::app::config::ProjectMgmtProvider::Airtable
+                            if grove::app::Config::airtable_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::airtable_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::airtable::fetch_bases(&token).await {
+                                    Ok(bases) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: bases });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            grove::app::state::PmSetupStep::Workspace => {
+                let provider = state.settings.repo_config.project_mgmt.provider;
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        if let Some(parent_page) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(parent_page.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            let filtered: Vec<(String, String, String)> = state
+                                .pm_setup
+                                .all_databases
+                                .iter()
+                                .filter(|(_, _, parent)| parent == &parent_page)
+                                .map(|(id, title, _)| (id.clone(), title.clone(), String::new()))
+                                .collect();
+                            state.pm_setup.teams = filtered;
+                            state.pm_setup.selected_team_index = 0;
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Asana => {
+                        if let Some(ws_gid) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(ws_gid.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            state.pm_setup.teams.clear();
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let asana_client = Arc::clone(asana_client);
+                            tokio::spawn(async move {
+                                match asana_client.fetch_projects(&ws_gid).await {
+                                    Ok(projects) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: projects });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Clickup => {
+                        if let Some(team_id) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(team_id.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            state.pm_setup.teams.clear();
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::clickup_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::clickup::fetch_lists_for_team(&token, &team_id).await {
+                                    Ok(lists) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: lists });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Airtable => {
+                        if let Some(base_id) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(base_id.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            state.pm_setup.teams.clear();
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::airtable_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::airtable::fetch_tables(&token, &base_id).await {
+                                    Ok(tables) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: tables });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    _ => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Advanced;
+                    }
+                }
+            }
+            grove::app::state::PmSetupStep::Project => {
+                state.pm_setup.step = grove::app::state::PmSetupStep::Advanced;
+            }
+            grove::app::state::PmSetupStep::Advanced => {}
+        },
+        Action::PmSetupPrevStep => match state.pm_setup.step {
+            grove::app::state::PmSetupStep::Token => {
+                state.pm_setup.active = false;
+                state.settings.active = true;
+            }
+            grove::app::state::PmSetupStep::Workspace => {
+                state.pm_setup.step = grove::app::state::PmSetupStep::Token;
+            }
+            grove::app::state::PmSetupStep::Project => {
+                let provider = state.settings.repo_config.project_mgmt.provider;
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams =
+                            grove::notion::extract_parent_pages(&state.pm_setup.all_databases);
+                        state.pm_setup.selected_team_index = 0;
+                    }
+                    grove::app::config::ProjectMgmtProvider::Asana => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams.clear();
+                        state.pm_setup.selected_team_index = 0;
+                        if grove::app::Config::asana_token().is_some() {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let asana_client = Arc::clone(asana_client);
+                            tokio::spawn(async move {
+                                match asana_client.fetch_workspaces().await {
+                                    Ok(workspaces) => {
+                                        let _ = tx
+                                            .send(Action::PmSetupTeamsLoaded { teams: workspaces });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Clickup => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams.clear();
+                        state.pm_setup.selected_team_index = 0;
+                        if grove::app::Config::clickup_token().is_some() {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::clickup_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::clickup::fetch_teams(&token).await {
+                                    Ok(teams) => {
+                                        let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Airtable => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams.clear();
+                        state.pm_setup.selected_team_index = 0;
+                        if grove::app::Config::airtable_token().is_some() {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::airtable_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::airtable::fetch_bases(&token).await {
+                                    Ok(bases) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: bases });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    _ => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                    }
+                }
+            }
+            grove::app::state::PmSetupStep::Advanced => {
+                let provider = state.settings.repo_config.project_mgmt.provider;
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Asana
+                    | grove::app::config::ProjectMgmtProvider::Clickup
+                    | grove::app::config::ProjectMgmtProvider::Airtable
+                    | grove::app::config::ProjectMgmtProvider::Notion => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                    }
+                    _ => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                    }
+                }
+            }
+        },
+        Action::PmSetupToggleAdvanced => {
+            state.pm_setup.advanced_expanded = !state.pm_setup.advanced_expanded;
+        }
+        Action::PmSetupNavigateNext => {
+            let max_fields = if state.pm_setup.advanced_expanded {
+                3
+            } else {
+                0
+            };
+            if state.pm_setup.field_index < max_fields {
+                state.pm_setup.field_index += 1;
+            }
+        }
+        Action::PmSetupNavigatePrev => {
+            if state.pm_setup.field_index > 0 {
+                state.pm_setup.field_index -= 1;
+            }
+        }
+        Action::PmSetupToggleDropdown => {
+            if !state.pm_setup.teams.is_empty() && state.pm_setup.field_index == 0 {
+                state.pm_setup.dropdown_open = !state.pm_setup.dropdown_open;
+                state.pm_setup.dropdown_index = state.pm_setup.selected_team_index;
+            }
+        }
+        Action::PmSetupDropdownNext => {
+            if state.pm_setup.dropdown_index < state.pm_setup.teams.len().saturating_sub(1) {
+                state.pm_setup.dropdown_index += 1;
+            }
+        }
+        Action::PmSetupDropdownPrev => {
+            if state.pm_setup.dropdown_index > 0 {
+                state.pm_setup.dropdown_index -= 1;
+            }
+        }
+        Action::PmSetupConfirmDropdown => {
+            if state.pm_setup.dropdown_index < state.pm_setup.teams.len() {
+                state.pm_setup.selected_team_index = state.pm_setup.dropdown_index;
+            }
+            state.pm_setup.dropdown_open = false;
+        }
+        Action::PmSetupInputChar(c) => {
+            if state.pm_setup.field_index == 1 {
+                state.pm_setup.manual_team_id.push(c);
+            } else if state.pm_setup.field_index == 2 {
+                state.pm_setup.in_progress_state.push(c);
+            } else if state.pm_setup.field_index == 3 {
+                state.pm_setup.done_state.push(c);
+            }
+        }
+        Action::PmSetupBackspace => {
+            if state.pm_setup.field_index == 1 {
+                state.pm_setup.manual_team_id.pop();
+            } else if state.pm_setup.field_index == 2 {
+                state.pm_setup.in_progress_state.pop();
+            } else if state.pm_setup.field_index == 3 {
+                state.pm_setup.done_state.pop();
+            }
+        }
+        Action::PmSetupTeamsLoaded { teams } => {
+            state.pm_setup.teams = teams;
+            state.pm_setup.teams_loading = false;
+            state.pm_setup.selected_team_index = 0;
+        }
+        Action::PmSetupNotionDatabasesLoaded {
+            databases,
+            parent_pages,
+        } => {
+            state.pm_setup.all_databases = databases;
+            state.pm_setup.teams = parent_pages;
+            state.pm_setup.teams_loading = false;
+            state.pm_setup.selected_team_index = 0;
+        }
+        Action::PmSetupTeamsError { message } => {
+            state.pm_setup.teams_loading = false;
+            state.pm_setup.error = Some(message);
+        }
+        Action::PmSetupComplete => {
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            let manual_id = state.pm_setup.manual_team_id.clone();
+            let in_progress_state = state.pm_setup.in_progress_state.clone();
+            let done_state = state.pm_setup.done_state.clone();
+
+            let selected_id = if !manual_id.is_empty() {
+                Some(manual_id)
+            } else {
+                state
+                    .pm_setup
+                    .teams
+                    .get(state.pm_setup.selected_team_index)
+                    .map(|t| t.0.clone())
+            };
+
+            let selected_name = state
+                .pm_setup
+                .teams
+                .get(state.pm_setup.selected_team_index)
+                .map(|t| t.1.clone())
+                .unwrap_or_else(|| "manual".to_string());
+
+            if let Some(id) = selected_id {
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Linear => {
+                        state.settings.repo_config.project_mgmt.linear.team_id = Some(id.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .linear
+                                .in_progress_state = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state.settings.repo_config.project_mgmt.linear.done_state =
+                                Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "Linear setup complete: team '{}'",
+                                selected_name
+                            ));
+                            linear_client.reconfigure(
+                                grove::app::Config::linear_token().as_deref(),
+                                Some(id),
+                            );
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        state.settings.repo_config.project_mgmt.notion.database_id =
+                            Some(id.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .in_progress_option = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state.settings.repo_config.project_mgmt.notion.done_option =
+                                Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "Notion setup complete: database '{}'",
+                                selected_name
+                            ));
+                            notion_client.reconfigure(
+                                grove::app::Config::notion_token().as_deref(),
+                                Some(id),
+                                state
+                                    .settings
+                                    .repo_config
+                                    .project_mgmt
+                                    .notion
+                                    .status_property_name
+                                    .clone(),
+                            );
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Asana => {
+                        state.settings.repo_config.project_mgmt.asana.project_gid =
+                            Some(id.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .in_progress_section_gid = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .done_section_gid = Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "Asana setup complete: project '{}'",
+                                selected_name
+                            ));
+                            asana_client.reconfigure(
+                                grove::app::Config::asana_token().as_deref(),
+                                Some(id),
+                            );
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Clickup => {
+                        state.settings.repo_config.project_mgmt.clickup.list_id = Some(id.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .clickup
+                                .in_progress_status = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state.settings.repo_config.project_mgmt.clickup.done_status =
+                                Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "ClickUp setup complete: list '{}'",
+                                selected_name
+                            ));
+                            clickup_client.reconfigure(
+                                grove::app::Config::clickup_token().as_deref(),
+                                Some(id),
+                            );
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Airtable => {
+                        let base_id = state.pm_setup.selected_workspace_gid.clone();
+                        state.settings.repo_config.project_mgmt.airtable.base_id = base_id.clone();
+                        state.settings.repo_config.project_mgmt.airtable.table_name =
+                            Some(selected_name.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .in_progress_option = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state.settings.repo_config.project_mgmt.airtable.done_option =
+                                Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "Airtable setup complete: table '{}'",
+                                selected_name
+                            ));
+                            airtable_client.reconfigure(
+                                grove::app::Config::airtable_token().as_deref(),
+                                base_id,
+                                Some(selected_name),
+                                state
+                                    .settings
+                                    .repo_config
+                                    .project_mgmt
+                                    .airtable
+                                    .status_field_name
+                                    .clone(),
+                            );
+                        }
+                    }
+                }
+            }
+            state.pm_setup.active = false;
+            state.settings.active = true;
         }
 
         // Dev Server Actions
