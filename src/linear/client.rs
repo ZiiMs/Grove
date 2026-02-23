@@ -37,6 +37,76 @@ impl LinearClient {
         })
     }
 
+    pub async fn fetch_teams_with_token(token: &str) -> Result<Vec<(String, String, String)>> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(token).context("Invalid Linear token")?,
+        );
+
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        let query = r#"
+            query Teams {
+                teams {
+                    nodes {
+                        id
+                        name
+                        key
+                    }
+                }
+            }
+        "#;
+
+        let body = serde_json::json!({ "query": query });
+
+        tracing::debug!("Linear fetch_teams_with_token: sending request");
+
+        let response = client
+            .post(LINEAR_API_URL)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to fetch Linear teams")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Linear fetch_teams_with_token response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            tracing::error!("Linear API error: {} - {}", status, response_text);
+            bail!("Linear API error: {} - {}", status, response_text);
+        }
+
+        let data: GraphQLResponse<TeamsQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse Linear teams response: {} - body: {}",
+                    e,
+                    response_text
+                );
+                bail!("Failed to parse Linear teams response: {}", e);
+            }
+        };
+
+        Ok(data
+            .data
+            .teams
+            .nodes
+            .into_iter()
+            .map(|t| (t.id, t.name, t.key))
+            .collect())
+    }
+
     pub async fn get_teams(&self) -> Result<Vec<(String, String, String)>> {
         let query = r#"
             query Teams {
@@ -561,7 +631,13 @@ impl OptionalLinearClient {
         let guard = self.client.read().await;
         match &*guard {
             Some(c) => c.get_teams().await,
-            None => bail!("Linear not configured"),
+            None => {
+                if let Some(token) = crate::app::Config::linear_token() {
+                    LinearClient::fetch_teams_with_token(&token).await
+                } else {
+                    bail!("Linear not configured")
+                }
+            }
         }
     }
 
