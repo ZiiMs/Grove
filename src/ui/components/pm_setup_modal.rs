@@ -97,6 +97,7 @@ impl<'a> PmSetupModal<'a> {
             ProjectMgmtProvider::Linear => self.render_linear_content(),
             ProjectMgmtProvider::Notion => self.render_notion_content(),
             ProjectMgmtProvider::Asana => self.render_asana_content(),
+            ProjectMgmtProvider::Clickup => self.render_clickup_content(),
             _ => self.render_generic_content(),
         };
 
@@ -786,6 +787,262 @@ impl<'a> PmSetupModal<'a> {
             )),
             Line::from(Span::styled(
                 "  you can leave them blank and Grove will detect statuses automatically.",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+        ]
+    }
+
+    fn render_clickup_content(&self) -> Vec<Line<'static>> {
+        match self.state.step {
+            PmSetupStep::Token => self.render_clickup_token_step(),
+            PmSetupStep::Workspace => self.render_clickup_team_step(),
+            PmSetupStep::Project => self.render_clickup_list_step(),
+            PmSetupStep::Advanced => self.render_clickup_advanced_step(),
+        }
+    }
+
+    fn render_clickup_token_step(&self) -> Vec<Line<'static>> {
+        let token_exists = Config::clickup_token().is_some();
+        let (status_symbol, status_color) = if token_exists {
+            ("✓ OK", Color::Green)
+        } else {
+            ("✗ Missing", Color::Red)
+        };
+
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  ClickUp uses an API Token for authentication.",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  1. Go to: https://app.clickup.com/settings/apps",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  2. Click \"Create App\" or use an existing personal token",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  3. Give it a name (e.g., \"Grove\")",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  4. Copy the API Token (starts with \"pk_\")",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Add to your shell profile (~/.zshrc or ~/.bashrc):",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "    export CLICKUP_TOKEN=\"pk_your_token_here\"",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Then restart Grove or run: source ~/.zshrc",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Token Status: ", Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{} (CLICKUP_TOKEN)", status_symbol),
+                    Style::default().fg(status_color),
+                ),
+            ]),
+            Line::from(""),
+        ]
+    }
+
+    fn render_clickup_team_step(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Select your ClickUp team (workspace):",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.state.teams_loading {
+            lines.push(Line::from(Span::styled(
+                "  Loading teams...",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else if self.state.teams.is_empty() {
+            if Config::clickup_token().is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No token set. Go back to set CLICKUP_TOKEN first.",
+                    Style::default().fg(Color::Red),
+                )));
+            } else if let Some(ref err) = self.state.error {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  No teams found.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            let selected_idx = self.state.selected_team_index;
+            let team_display = if let Some(team) = self.state.teams.get(selected_idx) {
+                team.1.clone()
+            } else {
+                "Select team...".to_string()
+            };
+
+            let is_selected = self.state.field_index == 0;
+            lines.push(self.render_field_line("Team", &team_display, is_selected, true));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Select a team to see its lists",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    }
+
+    fn render_clickup_list_step(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Select your ClickUp list:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.state.teams_loading {
+            lines.push(Line::from(Span::styled(
+                "  Loading lists...",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else if self.state.teams.is_empty() {
+            if Config::clickup_token().is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No token set. Go back to set CLICKUP_TOKEN first.",
+                    Style::default().fg(Color::Red),
+                )));
+            } else if self.state.selected_workspace_gid.is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No team selected. Go back to select one.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            } else if let Some(ref err) = self.state.error {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  No lists found in this team.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            let selected_idx = self.state.selected_team_index;
+            let list_display = if let Some(list) = self.state.teams.get(selected_idx) {
+                list.2.clone()
+            } else {
+                "Select list...".to_string()
+            };
+
+            let is_selected = self.state.field_index == 0;
+            lines.push(self.render_field_line("List", &list_display, is_selected, true));
+            lines.push(Line::from(""));
+
+            if self.state.advanced_expanded {
+                lines.push(Line::from(Span::styled(
+                    "  ▼ Advanced (optional)",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "    ─────────────────────────────────────────────",
+                    Style::default().fg(Color::DarkGray),
+                )));
+
+                let in_progress_selected = self.state.field_index == 1;
+                let done_selected = self.state.field_index == 2;
+
+                let in_progress_val = if self.state.in_progress_state.is_empty() {
+                    "(auto-detect)".to_string()
+                } else {
+                    self.state.in_progress_state.clone()
+                };
+                let done_val = if self.state.done_state.is_empty() {
+                    "(auto-detect)".to_string()
+                } else {
+                    self.state.done_state.clone()
+                };
+
+                lines.push(self.render_field_line(
+                    "In Progress",
+                    &in_progress_val,
+                    in_progress_selected,
+                    false,
+                ));
+                lines.push(self.render_field_line("Done", &done_val, done_selected, false));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "    Tip: Leave blank to auto-detect from list statuses",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  ▶ Advanced (optional)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  List ID will be saved to .grove/project.toml",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    }
+
+    fn render_clickup_advanced_step(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Configure status overrides (optional):",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  These settings override auto-detection. In most cases,",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  you can leave them blank and Grove will detect statuses",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  by name (e.g., \"In Progress\", \"Complete\").",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(""),

@@ -4,7 +4,8 @@ use std::collections::HashSet;
 use tokio::sync::RwLock;
 
 use super::types::{
-    ClickUpListResponse, ClickUpTaskData, ClickUpTaskListResponse, ClickUpTaskSummary, StatusOption,
+    ClickUpListResponse, ClickUpListWithLocation, ClickUpTaskData, ClickUpTaskListResponse,
+    ClickUpTaskSummary, StatusOption,
 };
 
 const BASE_URL: &str = "https://api.clickup.com/api/v2";
@@ -437,4 +438,131 @@ impl OptionalClickUpClient {
         self.cached_tasks.invalidate().await;
         tracing::debug!("ClickUp cache manually invalidated");
     }
+}
+
+pub async fn fetch_teams(token: &str) -> Result<Vec<(String, String, String)>> {
+    let url = format!("{}/team", BASE_URL);
+
+    tracing::debug!("ClickUp fetch_teams: url={}", url);
+
+    let response = reqwest::Client::new()
+        .get(&url)
+        .header(AUTHORIZATION, format!("{} ", token))
+        .send()
+        .await
+        .context("Failed to fetch ClickUp teams")?;
+
+    let status = response.status();
+    let response_text = response.text().await.unwrap_or_default();
+
+    tracing::debug!(
+        "ClickUp fetch_teams response: status={}, body={}",
+        status,
+        response_text
+    );
+
+    if !status.is_success() {
+        bail!("ClickUp API error: {} - {}", status, response_text);
+    }
+
+    let teams_response: super::types::ClickUpTeamsResponse =
+        serde_json::from_str(&response_text).context("Failed to parse ClickUp teams response")?;
+
+    Ok(teams_response
+        .teams
+        .into_iter()
+        .map(|t| (t.id, t.name, String::new()))
+        .collect())
+}
+
+pub async fn fetch_lists_for_team(
+    token: &str,
+    team_id: &str,
+) -> Result<Vec<(String, String, String)>> {
+    tracing::debug!("ClickUp fetch_lists_for_team: team_id={}", team_id);
+
+    let spaces_url = format!("{}/team/{}/space", BASE_URL, team_id);
+    let spaces_response = reqwest::Client::new()
+        .get(&spaces_url)
+        .header(AUTHORIZATION, format!("{} ", token))
+        .send()
+        .await
+        .context("Failed to fetch ClickUp spaces")?;
+
+    let spaces_status = spaces_response.status();
+    let spaces_text = spaces_response.text().await.unwrap_or_default();
+
+    if !spaces_status.is_success() {
+        bail!(
+            "ClickUp API error fetching spaces: {} - {}",
+            spaces_status,
+            spaces_text
+        );
+    }
+
+    let spaces_response: super::types::ClickUpSpacesResponse =
+        serde_json::from_str(&spaces_text).context("Failed to parse ClickUp spaces response")?;
+
+    let mut all_lists: Vec<ClickUpListWithLocation> = Vec::new();
+
+    for space in spaces_response.spaces {
+        let folders_url = format!("{}/space/{}/folder", BASE_URL, space.id);
+        let folders_response = reqwest::Client::new()
+            .get(&folders_url)
+            .header(AUTHORIZATION, format!("{} ", token))
+            .send()
+            .await;
+
+        if let Ok(resp) = folders_response {
+            if resp.status().is_success() {
+                if let Ok(text) = resp.text().await {
+                    if let Ok(folders_resp) =
+                        serde_json::from_str::<super::types::ClickUpFoldersResponse>(&text)
+                    {
+                        for folder in folders_resp.folders {
+                            for list in folder.lists {
+                                all_lists.push(ClickUpListWithLocation {
+                                    id: list.id,
+                                    name: list.name,
+                                    space_name: space.name.clone(),
+                                    folder_name: Some(folder.name.clone()),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let folderless_url = format!("{}/space/{}/list", BASE_URL, space.id);
+        let folderless_response = reqwest::Client::new()
+            .get(&folderless_url)
+            .header(AUTHORIZATION, format!("{} ", token))
+            .send()
+            .await;
+
+        if let Ok(resp) = folderless_response {
+            if resp.status().is_success() {
+                if let Ok(text) = resp.text().await {
+                    if let Ok(lists_resp) =
+                        serde_json::from_str::<super::types::ClickUpListsResponse>(&text)
+                    {
+                        for list in lists_resp.lists {
+                            all_lists.push(ClickUpListWithLocation {
+                                id: list.id,
+                                name: list.name,
+                                space_name: space.name.clone(),
+                                folder_name: None,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(all_lists
+        .into_iter()
+        .map(|l| (l.id.clone(), l.name.clone(), l.display_path()))
+        .collect())
 }

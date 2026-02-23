@@ -7314,6 +7314,25 @@ async fn process_action(
                                 }
                             });
                         }
+                        grove::app::config::ProjectMgmtProvider::Clickup
+                            if grove::app::Config::clickup_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::clickup_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::clickup::fetch_teams(&token).await {
+                                    Ok(teams) => {
+                                        let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -7339,6 +7358,34 @@ async fn process_action(
                                     Ok(projects) => {
                                         let _ =
                                             tx.send(Action::PmSetupTeamsLoaded { teams: projects });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Clickup => {
+                        if let Some(team_id) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(team_id.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            state.pm_setup.teams.clear();
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::clickup_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::clickup::fetch_lists_for_team(&token, &team_id).await {
+                                    Ok(lists) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: lists });
                                     }
                                     Err(e) => {
                                         let _ = tx.send(Action::PmSetupTeamsError {
@@ -7393,6 +7440,28 @@ async fn process_action(
                             });
                         }
                     }
+                    grove::app::config::ProjectMgmtProvider::Clickup => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams.clear();
+                        state.pm_setup.selected_team_index = 0;
+                        if grove::app::Config::clickup_token().is_some() {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::clickup_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::clickup::fetch_teams(&token).await {
+                                    Ok(teams) => {
+                                        let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
                     _ => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
                     }
@@ -7401,7 +7470,8 @@ async fn process_action(
             grove::app::state::PmSetupStep::Advanced => {
                 let provider = state.settings.repo_config.project_mgmt.provider;
                 match provider {
-                    grove::app::config::ProjectMgmtProvider::Asana => {
+                    grove::app::config::ProjectMgmtProvider::Asana
+                    | grove::app::config::ProjectMgmtProvider::Clickup => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Project;
                     }
                     _ => {
@@ -7592,6 +7662,33 @@ async fn process_action(
                             ));
                             asana_client.reconfigure(
                                 grove::app::Config::asana_token().as_deref(),
+                                Some(id),
+                            );
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Clickup => {
+                        state.settings.repo_config.project_mgmt.clickup.list_id = Some(id.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .clickup
+                                .in_progress_status = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state.settings.repo_config.project_mgmt.clickup.done_status =
+                                Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "ClickUp setup complete: list '{}'",
+                                selected_name
+                            ));
+                            clickup_client.reconfigure(
+                                grove::app::Config::clickup_token().as_deref(),
                                 Some(id),
                             );
                         }
