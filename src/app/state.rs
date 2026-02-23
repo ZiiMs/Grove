@@ -111,6 +111,7 @@ pub enum SettingsField {
     WorktreeSymlinks,
     ProjectMgmtProvider,
     SetupPm,
+    SetupGit,
     AsanaProjectGid,
     AsanaInProgressGid,
     AsanaDoneGid,
@@ -195,6 +196,7 @@ pub enum ActionButtonType {
     ResetTab,
     ResetAll,
     SetupPm,
+    SetupGit,
 }
 
 impl ActionButtonType {
@@ -203,6 +205,7 @@ impl ActionButtonType {
             ActionButtonType::ResetTab => "Reset Tab to Defaults",
             ActionButtonType::ResetAll => "Reset All Settings",
             ActionButtonType::SetupPm => "Setup Integration",
+            ActionButtonType::SetupGit => "Setup Git Provider",
         }
     }
 }
@@ -213,6 +216,14 @@ pub enum PmSetupStep {
     Token,
     Workspace,
     Project,
+    Advanced,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GitSetupStep {
+    #[default]
+    Token,
+    Repository,
     Advanced,
 }
 
@@ -233,6 +244,28 @@ pub struct PmSetupState {
     pub dropdown_index: usize,
     pub field_index: usize,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GitSetupState {
+    pub active: bool,
+    pub step: GitSetupStep,
+    pub advanced_expanded: bool,
+    pub field_index: usize,
+    pub dropdown_open: bool,
+    pub dropdown_index: usize,
+    pub editing_text: bool,
+    pub text_buffer: String,
+    pub error: Option<String>,
+    pub loading: bool,
+    pub project_id: String,
+    pub owner: String,
+    pub repo: String,
+    pub base_url: String,
+    pub detected_from_remote: bool,
+    pub project_name: Option<String>,
+    pub ci_provider: crate::app::config::CodebergCiProvider,
+    pub woodpecker_repo_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,7 +332,8 @@ impl SettingsField {
             | SettingsField::CodebergBaseUrl
             | SettingsField::CodebergCiProvider
             | SettingsField::BranchPrefix
-            | SettingsField::MainBranch => SettingsTab::Git,
+            | SettingsField::MainBranch
+            | SettingsField::SetupGit => SettingsTab::Git,
             SettingsField::ProjectMgmtProvider
             | SettingsField::SetupPm
             | SettingsField::AsanaProjectGid
@@ -483,6 +517,7 @@ impl SettingsItem {
                         items.push(SettingsItem::Field(SettingsField::CodebergCiProvider));
                     }
                 }
+                items.push(SettingsItem::ActionButton(ActionButtonType::SetupGit));
                 items.push(SettingsItem::Category(SettingsCategory::GitConfig));
                 items.push(SettingsItem::Field(SettingsField::BranchPrefix));
                 items.push(SettingsItem::Field(SettingsField::MainBranch));
@@ -894,6 +929,7 @@ pub struct AppState {
     pub show_project_setup: bool,
     pub project_setup: Option<ProjectSetupState>,
     pub pm_setup: PmSetupState,
+    pub git_setup: GitSetupState,
     pub worktree_base: std::path::PathBuf,
     pub preview_tab: PreviewTab,
     pub devserver_scroll: usize,
@@ -1052,6 +1088,7 @@ impl AppState {
             show_project_setup: false,
             project_setup: None,
             pm_setup: PmSetupState::default(),
+            git_setup: GitSetupState::default(),
             worktree_base,
             preview_tab: PreviewTab::default(),
             devserver_scroll: 0,

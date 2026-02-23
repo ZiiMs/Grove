@@ -343,6 +343,34 @@ pub enum Action {
         message: String,
     },
     PmSetupComplete,
+
+    // Git Setup Wizard
+    OpenGitSetup,
+    CloseGitSetup,
+    GitSetupNextStep,
+    GitSetupPrevStep,
+    GitSetupToggleAdvanced,
+    GitSetupNavigateNext,
+    GitSetupNavigatePrev,
+    GitSetupToggleDropdown,
+    GitSetupDropdownNext,
+    GitSetupDropdownPrev,
+    GitSetupConfirmDropdown,
+    GitSetupCloseDropdown,
+    GitSetupInputChar(char),
+    GitSetupBackspace,
+    GitSetupStartEdit,
+    GitSetupCancelEdit,
+    GitSetupConfirmEdit,
+    GitSetupFetchProjectId,
+    GitSetupProjectIdFetched {
+        id: u64,
+        name: String,
+    },
+    GitSetupProjectIdError {
+        message: String,
+    },
+    GitSetupComplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

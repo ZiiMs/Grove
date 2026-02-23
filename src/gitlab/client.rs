@@ -6,6 +6,53 @@ use tracing::warn;
 use super::types::{MergeRequestListItem, MergeRequestResponse, MergeRequestStatus};
 use crate::ci::PipelineStatus;
 
+/// Fetch project info from GitLab by path (owner/repo).
+/// Returns (project_id, project_name) if found.
+pub async fn fetch_project_by_path(
+    base_url: &str,
+    path: &str,
+    token: &str,
+) -> Result<(u64, String)> {
+    let encoded_path = urlencoding::encode(path);
+    let url = format!("{}/api/v4/projects/{}", base_url, encoded_path);
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "PRIVATE-TOKEN",
+        HeaderValue::from_str(token).context("Invalid token")?,
+    );
+
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .context("Failed to fetch project")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("GitLab API error: {} - {}", status, body);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ProjectResponse {
+        id: u64,
+        name: String,
+    }
+
+    let project: ProjectResponse = response
+        .json()
+        .await
+        .context("Failed to parse project response")?;
+
+    Ok((project.id, project.name))
+}
+
 /// GitLab API client.
 pub struct GitLabClient {
     client: reqwest::Client,

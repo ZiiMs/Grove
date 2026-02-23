@@ -15,10 +15,10 @@ use crate::devserver::DevServerStatus;
 
 use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
-    DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GlobalSetupWizard, HelpOverlay,
-    LoadingOverlay, OutputViewWidget, PmSetupModal, ProjectSetupWizard, SettingsModal,
-    StatusBarWidget, StatusDropdown, SubtaskStatusDropdown, SystemMetricsWidget, TaskListModal,
-    TaskReassignmentWarningModal, ToastWidget,
+    DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GitSetupModal,
+    GlobalSetupWizard, HelpOverlay, LoadingOverlay, OutputViewWidget, PmSetupModal,
+    ProjectSetupWizard, SettingsModal, StatusBarWidget, StatusDropdown, SubtaskStatusDropdown,
+    SystemMetricsWidget, TaskListModal, TaskReassignmentWarningModal, ToastWidget,
 };
 
 #[derive(Clone)]
@@ -160,6 +160,11 @@ impl<'a> AppWidget<'a> {
         if self.state.pm_setup.active {
             let provider = self.state.settings.repo_config.project_mgmt.provider;
             PmSetupModal::new(&self.state.pm_setup, provider).render(frame);
+        }
+
+        if self.state.git_setup.active {
+            let provider = self.state.settings.repo_config.git.provider;
+            GitSetupModal::new(&self.state.git_setup, provider).render(frame);
         }
 
         if let Some(message) = &self.state.loading_message {

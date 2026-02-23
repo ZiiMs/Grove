@@ -892,6 +892,12 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return handle_pm_setup_key(key, &state.pm_setup, provider);
     }
 
+    // Handle Git setup modal
+    if state.git_setup.active {
+        let provider = state.settings.repo_config.git.provider;
+        return handle_git_setup_key(key, &state.git_setup, provider);
+    }
+
     // Handle task reassignment warning modal
     if state.task_reassignment_warning.is_some() {
         return match key.code {
@@ -1496,6 +1502,7 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
                         reset_type: grove::app::ResetType::AllSettings,
                     }),
                     ActionButtonType::SetupPm => Some(Action::SettingsSelectField),
+                    ActionButtonType::SetupGit => Some(Action::OpenGitSetup),
                 }
             } else {
                 let field = state.settings.current_field();
@@ -1637,6 +1644,130 @@ fn handle_pm_setup_key(
                 }
             }
         }
+    }
+}
+
+fn handle_git_setup_key(
+    key: crossterm::event::KeyEvent,
+    git_setup: &grove::app::state::GitSetupState,
+    provider: grove::app::config::GitProvider,
+) -> Option<Action> {
+    use grove::app::state::GitSetupStep;
+
+    if git_setup.loading {
+        return None;
+    }
+
+    if git_setup.editing_text {
+        return match key.code {
+            KeyCode::Esc => Some(Action::GitSetupCancelEdit),
+            KeyCode::Enter => Some(Action::GitSetupConfirmEdit),
+            KeyCode::Backspace => Some(Action::GitSetupBackspace),
+            KeyCode::Char(c) => Some(Action::GitSetupInputChar(c)),
+            _ => None,
+        };
+    }
+
+    match git_setup.step {
+        GitSetupStep::Token => match key.code {
+            KeyCode::Esc => Some(Action::CloseGitSetup),
+            KeyCode::Enter => Some(Action::GitSetupNextStep),
+            _ => None,
+        },
+        GitSetupStep::Repository => {
+            // Calculate max field based on provider
+            // GitLab: 0=Owner, 1=Repo, 2=ProjectID, 3=BaseURL(if advanced)
+            // GitHub: 0=Owner, 1=Repo, 2=BaseURL(if advanced)
+            // Codeberg: 0=Owner, 1=Repo, 2=CI Provider, 3=BaseURL(if advanced)
+            let max_field = if git_setup.advanced_expanded {
+                match provider {
+                    grove::app::config::GitProvider::GitLab => 3,
+                    grove::app::config::GitProvider::GitHub => 2,
+                    grove::app::config::GitProvider::Codeberg => 3,
+                }
+            } else {
+                match provider {
+                    grove::app::config::GitProvider::GitLab => 2,
+                    grove::app::config::GitProvider::GitHub => 1,
+                    grove::app::config::GitProvider::Codeberg => 3,
+                }
+            };
+
+            // Check if current field is the dropdown (field_index == 2 for Codeberg CI provider)
+            let is_dropdown_field = matches!(provider, grove::app::config::GitProvider::Codeberg)
+                && git_setup.field_index == 2
+                && !git_setup.editing_text;
+
+            match key.code {
+                KeyCode::Esc => {
+                    if git_setup.dropdown_open {
+                        Some(Action::GitSetupCloseDropdown)
+                    } else {
+                        Some(Action::GitSetupPrevStep)
+                    }
+                }
+                KeyCode::Enter => {
+                    if git_setup.dropdown_open {
+                        Some(Action::GitSetupConfirmDropdown)
+                    } else if is_dropdown_field {
+                        Some(Action::GitSetupToggleDropdown)
+                    } else if git_setup.field_index < max_field {
+                        Some(Action::GitSetupStartEdit)
+                    } else {
+                        Some(Action::GitSetupComplete)
+                    }
+                }
+                KeyCode::Char('a') if !git_setup.advanced_expanded && !git_setup.dropdown_open => {
+                    Some(Action::GitSetupToggleAdvanced)
+                }
+                KeyCode::Char('f')
+                    if matches!(provider, grove::app::config::GitProvider::GitLab)
+                        && git_setup.project_id.is_empty()
+                        && !git_setup.owner.is_empty()
+                        && !git_setup.repo.is_empty()
+                        && grove::app::Config::gitlab_token().is_some() =>
+                {
+                    Some(Action::GitSetupFetchProjectId)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if git_setup.dropdown_open {
+                        Some(Action::GitSetupDropdownPrev)
+                    } else {
+                        Some(Action::GitSetupNavigatePrev)
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if git_setup.dropdown_open {
+                        Some(Action::GitSetupDropdownNext)
+                    } else {
+                        Some(Action::GitSetupNavigateNext)
+                    }
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if git_setup.dropdown_open {
+                        None
+                    } else {
+                        Some(Action::GitSetupComplete)
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if git_setup.dropdown_open {
+                        None
+                    } else if git_setup.advanced_expanded {
+                        Some(Action::GitSetupToggleAdvanced)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+        GitSetupStep::Advanced => match key.code {
+            KeyCode::Esc => Some(Action::GitSetupPrevStep),
+            KeyCode::Enter => Some(Action::GitSetupComplete),
+            KeyCode::Left | KeyCode::Char('h') => Some(Action::GitSetupPrevStep),
+            _ => None,
+        },
     }
 }
 
@@ -7883,6 +8014,361 @@ async fn process_action(
             }
             state.pm_setup.active = false;
             state.settings.active = true;
+        }
+
+        // Git Setup Wizard Actions
+        Action::OpenGitSetup => {
+            state.settings.active = false;
+            let provider = state.settings.repo_config.git.provider;
+            state.git_setup.active = true;
+            state.git_setup.step = grove::app::state::GitSetupStep::Token;
+            state.git_setup.error = None;
+            state.git_setup.field_index = 0;
+            state.git_setup.advanced_expanded = false;
+            state.git_setup.editing_text = false;
+            state.git_setup.dropdown_open = false;
+            state.git_setup.dropdown_index = 0;
+            state.git_setup.text_buffer.clear();
+            state.git_setup.loading = false;
+            state.git_setup.project_id.clear();
+            state.git_setup.owner.clear();
+            state.git_setup.repo.clear();
+            state.git_setup.base_url.clear();
+            state.git_setup.detected_from_remote = false;
+            state.git_setup.project_name = None;
+            state.git_setup.ci_provider = grove::app::config::CodebergCiProvider::default();
+            state.git_setup.woodpecker_repo_id.clear();
+
+            // Try to auto-detect from git remote (always extract owner/repo)
+            if let Some(remote_info) = grove::git::parse_remote_info(&state.repo_path) {
+                state.git_setup.owner = remote_info.owner.clone();
+                state.git_setup.repo = remote_info.repo.clone();
+                state.git_setup.detected_from_remote = remote_info.provider == provider;
+                if remote_info.provider == provider {
+                    if let Some(url) = remote_info.base_url {
+                        state.git_setup.base_url = url;
+                    }
+                }
+            }
+
+            // Pre-fill from existing config
+            match provider {
+                grove::app::config::GitProvider::GitLab => {
+                    if let Some(id) = state.settings.repo_config.git.gitlab.project_id {
+                        state.git_setup.project_id = id.to_string();
+                    }
+                    if state.settings.repo_config.git.gitlab.base_url != "https://gitlab.com" {
+                        state.git_setup.base_url =
+                            state.settings.repo_config.git.gitlab.base_url.clone();
+                    }
+                }
+                grove::app::config::GitProvider::GitHub => {
+                    if let Some(ref owner) = state.settings.repo_config.git.github.owner {
+                        state.git_setup.owner = owner.clone();
+                    }
+                    if let Some(ref repo) = state.settings.repo_config.git.github.repo {
+                        state.git_setup.repo = repo.clone();
+                    }
+                }
+                grove::app::config::GitProvider::Codeberg => {
+                    if let Some(ref owner) = state.settings.repo_config.git.codeberg.owner {
+                        state.git_setup.owner = owner.clone();
+                    }
+                    if let Some(ref repo) = state.settings.repo_config.git.codeberg.repo {
+                        state.git_setup.repo = repo.clone();
+                    }
+                    if state.settings.repo_config.git.codeberg.base_url != "https://codeberg.org" {
+                        state.git_setup.base_url =
+                            state.settings.repo_config.git.codeberg.base_url.clone();
+                    }
+                    state.git_setup.ci_provider =
+                        state.settings.repo_config.git.codeberg.ci_provider;
+                    if let Some(wp_id) = state.settings.repo_config.git.codeberg.woodpecker_repo_id
+                    {
+                        state.git_setup.woodpecker_repo_id = wp_id.to_string();
+                    }
+                }
+            }
+        }
+        Action::CloseGitSetup => {
+            state.git_setup.active = false;
+            state.settings.active = true;
+        }
+        Action::GitSetupNextStep => match state.git_setup.step {
+            grove::app::state::GitSetupStep::Token => {
+                state.git_setup.step = grove::app::state::GitSetupStep::Repository;
+
+                // Auto-fetch GitLab project ID if conditions are met
+                let provider = state.settings.repo_config.git.provider;
+                if matches!(provider, grove::app::config::GitProvider::GitLab)
+                    && state.git_setup.project_id.is_empty()
+                    && !state.git_setup.owner.is_empty()
+                    && !state.git_setup.repo.is_empty()
+                    && grove::app::Config::gitlab_token().is_some()
+                {
+                    state.git_setup.loading = true;
+                    let owner = state.git_setup.owner.clone();
+                    let repo = state.git_setup.repo.clone();
+                    let base_url = if state.git_setup.base_url.is_empty() {
+                        "https://gitlab.com".to_string()
+                    } else {
+                        state.git_setup.base_url.clone()
+                    };
+                    let token = grove::app::Config::gitlab_token().unwrap();
+                    let tx = action_tx.clone();
+
+                    tokio::spawn(async move {
+                        let path = format!("{}/{}", owner, repo);
+                        match grove::gitlab::fetch_project_by_path(&base_url, &path, &token).await {
+                            Ok((id, name)) => {
+                                let _ = tx.send(Action::GitSetupProjectIdFetched { id, name });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Action::GitSetupProjectIdError {
+                                    message: e.to_string(),
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+            grove::app::state::GitSetupStep::Repository => {
+                // Skip Advanced step - just complete setup
+            }
+            grove::app::state::GitSetupStep::Advanced => {}
+        },
+        Action::GitSetupPrevStep => match state.git_setup.step {
+            grove::app::state::GitSetupStep::Token => {
+                state.git_setup.active = false;
+                state.settings.active = true;
+            }
+            grove::app::state::GitSetupStep::Repository => {
+                state.git_setup.step = grove::app::state::GitSetupStep::Token;
+            }
+            grove::app::state::GitSetupStep::Advanced => {
+                state.git_setup.step = grove::app::state::GitSetupStep::Repository;
+            }
+        },
+        Action::GitSetupToggleAdvanced => {
+            state.git_setup.advanced_expanded = !state.git_setup.advanced_expanded;
+        }
+        Action::GitSetupNavigateNext => {
+            let provider = state.settings.repo_config.git.provider;
+            let max_field = if state.git_setup.advanced_expanded {
+                match provider {
+                    grove::app::config::GitProvider::GitLab => 3,
+                    grove::app::config::GitProvider::GitHub => 2,
+                    grove::app::config::GitProvider::Codeberg => 3,
+                }
+            } else {
+                match provider {
+                    grove::app::config::GitProvider::GitLab => 2,
+                    grove::app::config::GitProvider::GitHub => 1,
+                    grove::app::config::GitProvider::Codeberg => 3,
+                }
+            };
+            if state.git_setup.field_index < max_field {
+                state.git_setup.field_index += 1;
+            }
+        }
+        Action::GitSetupNavigatePrev => {
+            if state.git_setup.field_index > 0 {
+                state.git_setup.field_index -= 1;
+            }
+        }
+        Action::GitSetupStartEdit => {
+            state.git_setup.editing_text = true;
+            state.git_setup.text_buffer = match state.git_setup.field_index {
+                0 => state.git_setup.owner.clone(),
+                1 => state.git_setup.repo.clone(),
+                2 => state.git_setup.project_id.clone(),
+                _ => state.git_setup.base_url.clone(),
+            };
+        }
+        Action::GitSetupCancelEdit => {
+            state.git_setup.editing_text = false;
+            state.git_setup.text_buffer.clear();
+        }
+        Action::GitSetupConfirmEdit => {
+            match state.git_setup.field_index {
+                0 => state.git_setup.owner = state.git_setup.text_buffer.clone(),
+                1 => state.git_setup.repo = state.git_setup.text_buffer.clone(),
+                2 => state.git_setup.project_id = state.git_setup.text_buffer.clone(),
+                _ => state.git_setup.base_url = state.git_setup.text_buffer.clone(),
+            }
+            state.git_setup.editing_text = false;
+            state.git_setup.text_buffer.clear();
+        }
+        Action::GitSetupInputChar(c) => {
+            state.git_setup.text_buffer.push(c);
+        }
+        Action::GitSetupBackspace => {
+            state.git_setup.text_buffer.pop();
+        }
+        Action::GitSetupComplete => {
+            let provider = state.settings.repo_config.git.provider;
+
+            match provider {
+                grove::app::config::GitProvider::GitLab => {
+                    if let Ok(id) = state.git_setup.project_id.parse::<u64>() {
+                        state.settings.repo_config.git.gitlab.project_id = Some(id);
+                    }
+                    if !state.git_setup.base_url.is_empty() {
+                        state.settings.repo_config.git.gitlab.base_url =
+                            state.git_setup.base_url.clone();
+                    }
+                    if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                        state.log_error(format!("Failed to save project config: {}", e));
+                    } else {
+                        state.log_info(format!(
+                            "GitLab setup complete: project {}",
+                            state.git_setup.project_id
+                        ));
+                        gitlab_client.reconfigure(
+                            &state.settings.repo_config.git.gitlab.base_url,
+                            state.settings.repo_config.git.gitlab.project_id,
+                            grove::app::Config::gitlab_token().as_deref(),
+                        );
+                    }
+                }
+                grove::app::config::GitProvider::GitHub => {
+                    state.settings.repo_config.git.github.owner =
+                        Some(state.git_setup.owner.clone());
+                    state.settings.repo_config.git.github.repo = Some(state.git_setup.repo.clone());
+                    if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                        state.log_error(format!("Failed to save project config: {}", e));
+                    } else {
+                        state.log_info(format!(
+                            "GitHub setup complete: {}/{}",
+                            state.git_setup.owner, state.git_setup.repo
+                        ));
+                        github_client.reconfigure(
+                            Some(&state.git_setup.owner),
+                            Some(&state.git_setup.repo),
+                            grove::app::Config::github_token().as_deref(),
+                        );
+                    }
+                }
+                grove::app::config::GitProvider::Codeberg => {
+                    state.settings.repo_config.git.codeberg.owner =
+                        Some(state.git_setup.owner.clone());
+                    state.settings.repo_config.git.codeberg.repo =
+                        Some(state.git_setup.repo.clone());
+                    state.settings.repo_config.git.codeberg.ci_provider =
+                        state.git_setup.ci_provider;
+                    if !state.git_setup.woodpecker_repo_id.is_empty() {
+                        state.settings.repo_config.git.codeberg.woodpecker_repo_id =
+                            state.git_setup.woodpecker_repo_id.parse().ok();
+                    }
+                    if !state.git_setup.base_url.is_empty() {
+                        state.settings.repo_config.git.codeberg.base_url =
+                            state.git_setup.base_url.clone();
+                    }
+                    if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                        state.log_error(format!("Failed to save project config: {}", e));
+                    } else {
+                        state.log_info(format!(
+                            "Codeberg setup complete: {}/{} (CI: {:?})",
+                            state.git_setup.owner,
+                            state.git_setup.repo,
+                            state.git_setup.ci_provider
+                        ));
+                        codeberg_client.reconfigure(
+                            Some(&state.git_setup.owner),
+                            Some(&state.git_setup.repo),
+                            Some(&state.settings.repo_config.git.codeberg.base_url),
+                            grove::app::Config::codeberg_token().as_deref(),
+                            state.git_setup.ci_provider,
+                            grove::app::Config::woodpecker_token().as_deref(),
+                            state.settings.repo_config.git.codeberg.woodpecker_repo_id,
+                        );
+                    }
+                }
+            }
+
+            state.git_setup.active = false;
+            state.settings.active = true;
+        }
+        Action::GitSetupFetchProjectId => {
+            if grove::app::Config::gitlab_token().is_some() {
+                state.git_setup.loading = true;
+                state.git_setup.error = None;
+
+                let owner = state.git_setup.owner.clone();
+                let repo = state.git_setup.repo.clone();
+                let base_url = if state.git_setup.base_url.is_empty() {
+                    "https://gitlab.com".to_string()
+                } else {
+                    state.git_setup.base_url.clone()
+                };
+                let token = grove::app::Config::gitlab_token().unwrap();
+                let tx = action_tx.clone();
+
+                tokio::spawn(async move {
+                    let path = format!("{}/{}", owner, repo);
+                    match grove::gitlab::fetch_project_by_path(&base_url, &path, &token).await {
+                        Ok((id, name)) => {
+                            let _ = tx.send(Action::GitSetupProjectIdFetched { id, name });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Action::GitSetupProjectIdError {
+                                message: e.to_string(),
+                            });
+                        }
+                    }
+                });
+            }
+        }
+        Action::GitSetupProjectIdFetched { id, name } => {
+            state.git_setup.loading = false;
+            state.git_setup.project_id = id.to_string();
+            state.git_setup.project_name = Some(name);
+        }
+        Action::GitSetupProjectIdError { message } => {
+            state.git_setup.loading = false;
+            state.git_setup.error = Some(message);
+        }
+        Action::GitSetupToggleDropdown => {
+            if state.git_setup.dropdown_open {
+                // Confirm the selection
+                state.git_setup.dropdown_open = false;
+                if state.git_setup.dropdown_index == 0 {
+                    state.git_setup.ci_provider =
+                        grove::app::config::CodebergCiProvider::ForgejoActions;
+                } else {
+                    state.git_setup.ci_provider =
+                        grove::app::config::CodebergCiProvider::Woodpecker;
+                }
+            } else {
+                // Open the dropdown
+                state.git_setup.dropdown_open = true;
+                state.git_setup.dropdown_index = match state.git_setup.ci_provider {
+                    grove::app::config::CodebergCiProvider::ForgejoActions => 0,
+                    grove::app::config::CodebergCiProvider::Woodpecker => 1,
+                };
+            }
+        }
+        Action::GitSetupDropdownNext => {
+            state.git_setup.dropdown_index = (state.git_setup.dropdown_index + 1) % 2;
+        }
+        Action::GitSetupDropdownPrev => {
+            state.git_setup.dropdown_index = if state.git_setup.dropdown_index == 0 {
+                1
+            } else {
+                0
+            };
+        }
+        Action::GitSetupConfirmDropdown => {
+            state.git_setup.dropdown_open = false;
+            if state.git_setup.dropdown_index == 0 {
+                state.git_setup.ci_provider =
+                    grove::app::config::CodebergCiProvider::ForgejoActions;
+            } else {
+                state.git_setup.ci_provider = grove::app::config::CodebergCiProvider::Woodpecker;
+            }
+        }
+        Action::GitSetupCloseDropdown => {
+            state.git_setup.dropdown_open = false;
         }
 
         // Dev Server Actions
