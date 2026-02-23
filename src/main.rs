@@ -7333,6 +7333,26 @@ async fn process_action(
                                 }
                             });
                         }
+                        grove::app::config::ProjectMgmtProvider::Airtable
+                            if grove::app::Config::airtable_token().is_some() =>
+                        {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::airtable_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::airtable::fetch_bases(&token).await {
+                                    Ok(bases) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: bases });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -7386,6 +7406,34 @@ async fn process_action(
                                     Ok(lists) => {
                                         let _ =
                                             tx.send(Action::PmSetupTeamsLoaded { teams: lists });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    grove::app::config::ProjectMgmtProvider::Airtable => {
+                        if let Some(base_id) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(base_id.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            state.pm_setup.teams.clear();
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::airtable_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::airtable::fetch_tables(&token, &base_id).await {
+                                    Ok(tables) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: tables });
                                     }
                                     Err(e) => {
                                         let _ = tx.send(Action::PmSetupTeamsError {
@@ -7462,6 +7510,29 @@ async fn process_action(
                             });
                         }
                     }
+                    grove::app::config::ProjectMgmtProvider::Airtable => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams.clear();
+                        state.pm_setup.selected_team_index = 0;
+                        if grove::app::Config::airtable_token().is_some() {
+                            state.pm_setup.teams_loading = true;
+                            let tx = action_tx.clone();
+                            let token = grove::app::Config::airtable_token().unwrap();
+                            tokio::spawn(async move {
+                                match grove::airtable::fetch_bases(&token).await {
+                                    Ok(bases) => {
+                                        let _ =
+                                            tx.send(Action::PmSetupTeamsLoaded { teams: bases });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::PmSetupTeamsError {
+                                            message: e.to_string(),
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
                     _ => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
                     }
@@ -7471,7 +7542,8 @@ async fn process_action(
                 let provider = state.settings.repo_config.project_mgmt.provider;
                 match provider {
                     grove::app::config::ProjectMgmtProvider::Asana
-                    | grove::app::config::ProjectMgmtProvider::Clickup => {
+                    | grove::app::config::ProjectMgmtProvider::Clickup
+                    | grove::app::config::ProjectMgmtProvider::Airtable => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Project;
                     }
                     _ => {
@@ -7693,8 +7765,43 @@ async fn process_action(
                             );
                         }
                     }
-                    _ => {
-                        state.log_error(format!("PM setup not implemented for {:?}", provider));
+                    grove::app::config::ProjectMgmtProvider::Airtable => {
+                        let base_id = state.pm_setup.selected_workspace_gid.clone();
+                        state.settings.repo_config.project_mgmt.airtable.base_id = base_id.clone();
+                        state.settings.repo_config.project_mgmt.airtable.table_name =
+                            Some(selected_name.clone());
+                        if !in_progress_state.is_empty() {
+                            state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .airtable
+                                .in_progress_option = Some(in_progress_state);
+                        }
+                        if !done_state.is_empty() {
+                            state.settings.repo_config.project_mgmt.airtable.done_option =
+                                Some(done_state);
+                        }
+                        if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                            state.log_error(format!("Failed to save project config: {}", e));
+                        } else {
+                            state.log_info(format!(
+                                "Airtable setup complete: table '{}'",
+                                selected_name
+                            ));
+                            airtable_client.reconfigure(
+                                grove::app::Config::airtable_token().as_deref(),
+                                base_id,
+                                Some(selected_name),
+                                state
+                                    .settings
+                                    .repo_config
+                                    .project_mgmt
+                                    .airtable
+                                    .status_field_name
+                                    .clone(),
+                            );
+                        }
                     }
                 }
             }

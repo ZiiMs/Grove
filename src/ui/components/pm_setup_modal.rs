@@ -84,11 +84,19 @@ impl<'a> PmSetupModal<'a> {
     }
 
     fn step_name(&self) -> &'static str {
-        match self.state.step {
-            PmSetupStep::Token => "API Token",
-            PmSetupStep::Workspace => "Workspace",
-            PmSetupStep::Project => "Project",
-            PmSetupStep::Advanced => "Advanced Settings",
+        match self.provider {
+            ProjectMgmtProvider::Airtable => match self.state.step {
+                PmSetupStep::Token => "API Token",
+                PmSetupStep::Workspace => "Base",
+                PmSetupStep::Project => "Table",
+                PmSetupStep::Advanced => "Advanced Settings",
+            },
+            _ => match self.state.step {
+                PmSetupStep::Token => "API Token",
+                PmSetupStep::Workspace => "Workspace",
+                PmSetupStep::Project => "Project",
+                PmSetupStep::Advanced => "Advanced Settings",
+            },
         }
     }
 
@@ -98,7 +106,7 @@ impl<'a> PmSetupModal<'a> {
             ProjectMgmtProvider::Notion => self.render_notion_content(),
             ProjectMgmtProvider::Asana => self.render_asana_content(),
             ProjectMgmtProvider::Clickup => self.render_clickup_content(),
-            _ => self.render_generic_content(),
+            ProjectMgmtProvider::Airtable => self.render_airtable_content(),
         };
 
         let paragraph = Paragraph::new(lines);
@@ -1049,19 +1057,268 @@ impl<'a> PmSetupModal<'a> {
         ]
     }
 
-    fn render_generic_content(&self) -> Vec<Line<'static>> {
+    fn render_airtable_content(&self) -> Vec<Line<'static>> {
+        match self.state.step {
+            PmSetupStep::Token => self.render_airtable_token_step(),
+            PmSetupStep::Workspace => self.render_airtable_base_step(),
+            PmSetupStep::Project => self.render_airtable_table_step(),
+            PmSetupStep::Advanced => self.render_airtable_advanced_step(),
+        }
+    }
+
+    fn render_airtable_token_step(&self) -> Vec<Line<'static>> {
+        let token_exists = Config::airtable_token().is_some();
+        let (status_symbol, status_color) = if token_exists {
+            ("✓ OK", Color::Green)
+        } else {
+            ("✗ Missing", Color::Red)
+        };
+
         vec![
             Line::from(""),
             Line::from(Span::styled(
-                format!(
-                    "  Setup for {} is not yet implemented.",
-                    self.provider.display_name()
-                ),
-                Style::default().fg(Color::Yellow),
+                "  Airtable uses a Personal Access Token for authentication.",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Please configure manually in the settings.",
+                "  1. Go to: https://airtable.com/create/tokens",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  2. Click \"Create new token\"",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  3. Give it a name (e.g., \"Grove\")",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  4. Add access: All current and future bases in workspace",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "     Or grant read access to specific bases",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  5. Copy the token (starts with \"pat\")",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Add to your shell profile (~/.zshrc or ~/.bashrc):",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "    export AIRTABLE_TOKEN=\"pat_your_token_here\"",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Then restart Grove or run: source ~/.zshrc",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Token Status: ", Style::default().fg(Color::White)),
+                Span::styled(
+                    format!("{} (AIRTABLE_TOKEN)", status_symbol),
+                    Style::default().fg(status_color),
+                ),
+            ]),
+            Line::from(""),
+        ]
+    }
+
+    fn render_airtable_base_step(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Select your Airtable base:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.state.teams_loading {
+            lines.push(Line::from(Span::styled(
+                "  Loading bases...",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else if self.state.teams.is_empty() {
+            if Config::airtable_token().is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No token set. Go back to set AIRTABLE_TOKEN first.",
+                    Style::default().fg(Color::Red),
+                )));
+            } else if let Some(ref err) = self.state.error {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  No bases found.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            let selected_idx = self.state.selected_team_index;
+            let base_display = if let Some(base) = self.state.teams.get(selected_idx) {
+                if base.2.is_empty() {
+                    base.1.clone()
+                } else {
+                    format!("{} ({})", base.1, base.2)
+                }
+            } else {
+                "Select base...".to_string()
+            };
+
+            let is_selected = self.state.field_index == 0;
+            lines.push(self.render_field_line("Base", &base_display, is_selected, true));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Select a base to see its tables",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    }
+
+    fn render_airtable_table_step(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Select your Airtable table:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.state.teams_loading {
+            lines.push(Line::from(Span::styled(
+                "  Loading tables...",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else if self.state.teams.is_empty() {
+            if Config::airtable_token().is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No token set. Go back to set AIRTABLE_TOKEN first.",
+                    Style::default().fg(Color::Red),
+                )));
+            } else if self.state.selected_workspace_gid.is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No base selected. Go back to select one.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            } else if let Some(ref err) = self.state.error {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  No tables found in this base.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            let selected_idx = self.state.selected_team_index;
+            let table_display = if let Some(table) = self.state.teams.get(selected_idx) {
+                table.1.clone()
+            } else {
+                "Select table...".to_string()
+            };
+
+            let is_selected = self.state.field_index == 0;
+            lines.push(self.render_field_line("Table", &table_display, is_selected, true));
+            lines.push(Line::from(""));
+
+            if self.state.advanced_expanded {
+                lines.push(Line::from(Span::styled(
+                    "  ▼ Advanced (optional)",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "    ─────────────────────────────────────────────",
+                    Style::default().fg(Color::DarkGray),
+                )));
+
+                let in_progress_selected = self.state.field_index == 1;
+                let done_selected = self.state.field_index == 2;
+
+                let in_progress_val = if self.state.in_progress_state.is_empty() {
+                    "(auto-detect)".to_string()
+                } else {
+                    self.state.in_progress_state.clone()
+                };
+                let done_val = if self.state.done_state.is_empty() {
+                    "(auto-detect)".to_string()
+                } else {
+                    self.state.done_state.clone()
+                };
+
+                lines.push(self.render_field_line(
+                    "In Progress",
+                    &in_progress_val,
+                    in_progress_selected,
+                    false,
+                ));
+                lines.push(self.render_field_line("Done", &done_val, done_selected, false));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "    Tip: Leave blank to auto-detect from status options",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  ▶ Advanced (optional)",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Table name will be saved to .grove/project.toml",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    }
+
+    fn render_airtable_advanced_step(&self) -> Vec<Line<'static>> {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Configure status options (optional):",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  These settings override auto-detection. In most cases,",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  you can leave them blank and Grove will detect statuses",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "  by name (e.g., \"In Progress\", \"Done\").",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(""),

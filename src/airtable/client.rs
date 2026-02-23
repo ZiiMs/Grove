@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
@@ -529,4 +530,99 @@ pub fn parse_airtable_record_id(input: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct AirtableBasesResponse {
+    bases: Vec<AirtableBaseInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AirtableBaseInfo {
+    id: String,
+    name: String,
+    permission_level: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AirtableTablesResponse {
+    tables: Vec<AirtableTableInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AirtableTableInfo {
+    id: String,
+    name: String,
+}
+
+pub async fn fetch_bases(token: &str) -> Result<Vec<(String, String, String)>> {
+    let client = reqwest::Client::new();
+
+    let url = "https://api.airtable.com/v0/meta/bases";
+    tracing::debug!("Airtable fetch_bases: url={}", url);
+
+    let response = client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("Failed to fetch Airtable bases")?;
+
+    let status = response.status();
+    let response_text = response.text().await.unwrap_or_default();
+
+    tracing::debug!(
+        "Airtable fetch_bases response: status={}, body={}",
+        status,
+        response_text
+    );
+
+    if !status.is_success() {
+        bail!("Airtable API error: {} - {}", status, response_text);
+    }
+
+    let bases_response: AirtableBasesResponse =
+        serde_json::from_str(&response_text).context("Failed to parse Airtable bases response")?;
+
+    Ok(bases_response
+        .bases
+        .into_iter()
+        .map(|b| (b.id, b.name, b.permission_level.unwrap_or_default()))
+        .collect())
+}
+
+pub async fn fetch_tables(token: &str, base_id: &str) -> Result<Vec<(String, String, String)>> {
+    let client = reqwest::Client::new();
+
+    let url = format!("https://api.airtable.com/v0/meta/bases/{}/tables", base_id);
+    tracing::debug!("Airtable fetch_tables: url={}", url);
+
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("Failed to fetch Airtable tables")?;
+
+    let status = response.status();
+    let response_text = response.text().await.unwrap_or_default();
+
+    tracing::debug!(
+        "Airtable fetch_tables response: status={}, body={}",
+        status,
+        response_text
+    );
+
+    if !status.is_success() {
+        bail!("Airtable API error: {} - {}", status, response_text);
+    }
+
+    let tables_response: AirtableTablesResponse =
+        serde_json::from_str(&response_text).context("Failed to parse Airtable tables response")?;
+
+    Ok(tables_response
+        .tables
+        .into_iter()
+        .map(|t| (t.id, t.name, String::new()))
+        .collect())
 }
