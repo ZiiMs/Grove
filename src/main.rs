@@ -1654,7 +1654,7 @@ fn handle_git_setup_key(
                 match provider {
                     grove::app::config::GitProvider::GitLab => 2,
                     grove::app::config::GitProvider::GitHub => 1,
-                    grove::app::config::GitProvider::Codeberg => 2,
+                    grove::app::config::GitProvider::Codeberg => 3,
                 }
             };
 
@@ -8068,7 +8068,7 @@ async fn process_action(
                 match provider {
                     grove::app::config::GitProvider::GitLab => 2,
                     grove::app::config::GitProvider::GitHub => 1,
-                    grove::app::config::GitProvider::Codeberg => 2,
+                    grove::app::config::GitProvider::Codeberg => 3,
                 }
             };
             if state.git_setup.field_index < max_field {

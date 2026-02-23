@@ -20,10 +20,10 @@ pub fn parse_remote_info(repo_path: &str) -> Option<RemoteInfo> {
 fn parse_git_url(url: &str) -> Option<RemoteInfo> {
     let url = url.trim_end_matches(".git");
 
-    if url.starts_with("git@") {
-        parse_ssh_url(url)
-    } else if url.starts_with("ssh://") {
+    if url.starts_with("ssh://") {
         parse_ssh_url_with_scheme(url)
+    } else if url.starts_with("git@") {
+        parse_ssh_url(url)
     } else if url.starts_with("https://") || url.starts_with("http://") {
         parse_https_url(url)
     } else {
@@ -60,27 +60,23 @@ fn parse_ssh_url(url: &str) -> Option<RemoteInfo> {
 }
 
 fn parse_ssh_url_with_scheme(url: &str) -> Option<RemoteInfo> {
+    // Format: ssh://git@codeberg.org/ziim/aitickets
     let url = url.strip_prefix("ssh://")?;
 
+    // Split by '/' to get parts
     let parts: Vec<&str> = url.split('/').collect();
-    if parts.len() < 2 {
+
+    // Need at least: host/owner/repo (3 parts)
+    if parts.len() < 3 {
         return None;
     }
 
-    let host_with_user = parts[0];
-    let host = host_with_user
-        .strip_prefix("git@")
-        .unwrap_or(host_with_user);
+    // First part is host (may have user@ prefix like git@codeberg.org)
+    let host_part = parts[0];
+    let host = host_part.strip_prefix("git@").unwrap_or(host_part);
 
-    let path = parts[1..].join("/");
-    let path_parts: Vec<&str> = path.split('/').collect();
-
-    if path_parts.len() < 2 {
-        return None;
-    }
-
-    let owner = path_parts[0].to_string();
-    let repo = path_parts[path_parts.len() - 1].to_string();
+    let owner = parts[1].to_string();
+    let repo = parts[parts.len() - 1].to_string();
 
     let (provider, base_url) = detect_provider_from_host(host);
 
@@ -133,5 +129,34 @@ fn detect_provider_from_host(host: &str) -> (GitProvider, Option<String>) {
         (GitProvider::GitHub, Some(format!("https://{}", host)))
     } else {
         (GitProvider::GitLab, Some(format!("https://{}", host)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ssh_url_with_scheme() {
+        let url = "ssh://git@codeberg.org/ziim/aitickets.git";
+        let result = parse_git_url(url);
+        
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.owner, "ziim");
+        assert_eq!(info.repo, "aitickets");
+        assert!(matches!(info.provider, GitProvider::Codeberg));
+    }
+
+    #[test]
+    fn test_parse_ssh_url_classic() {
+        let url = "git@codeberg.org:ziim/aitickets.git";
+        let result = parse_git_url(url);
+        
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.owner, "ziim");
+        assert_eq!(info.repo, "aitickets");
+        assert!(matches!(info.provider, GitProvider::Codeberg));
     }
 }
