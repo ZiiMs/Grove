@@ -648,27 +648,6 @@ impl<'a> GitSetupModal<'a> {
         let ci_selected = self.state.field_index == 2;
         lines.push(self.render_field_line("CI Provider", &ci_display, ci_selected));
 
-        // Field 3: Woodpecker Repo ID (only if Woodpecker selected)
-        if matches!(self.state.ci_provider, CodebergCiProvider::Woodpecker) {
-            let wp_display = if self.state.editing_text && self.state.field_index == 3 {
-                if self.state.text_buffer.is_empty() {
-                    "Enter repo ID...█".to_string()
-                } else {
-                    format!("{}█", self.state.text_buffer)
-                }
-            } else if self.state.woodpecker_repo_id.is_empty() {
-                "Enter repo ID...".to_string()
-            } else {
-                self.state.woodpecker_repo_id.clone()
-            };
-            let wp_selected = self.state.field_index == 3;
-            lines.push(self.render_field_line("Woodpecker ID", &wp_display, wp_selected));
-            lines.push(Line::from(Span::styled(
-                "  Find in Woodpecker → Repo Settings",
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  Owner is your username or organization name",
@@ -688,11 +667,7 @@ impl<'a> GitSetupModal<'a> {
                 Style::default().fg(Color::DarkGray),
             )));
 
-            let base_url_idx = if matches!(self.state.ci_provider, CodebergCiProvider::Woodpecker) {
-                4
-            } else {
-                3
-            };
+            let base_url_idx = 3;
             let base_url_display =
                 if self.state.editing_text && self.state.field_index == base_url_idx {
                     if self.state.text_buffer.is_empty() {

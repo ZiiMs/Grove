@@ -1643,36 +1643,18 @@ fn handle_git_setup_key(
             // Calculate max field based on provider
             // GitLab: 0=Owner, 1=Repo, 2=ProjectID, 3=BaseURL(if advanced)
             // GitHub: 0=Owner, 1=Repo, 2=BaseURL(if advanced)
-            // Codeberg: 0=Owner, 1=Repo, 2=CI Provider, 3=WoodpeckerID(if Woodpecker), 4=BaseURL(if advanced)
+            // Codeberg: 0=Owner, 1=Repo, 2=CI Provider, 3=BaseURL(if advanced)
             let max_field = if git_setup.advanced_expanded {
                 match provider {
                     grove::app::config::GitProvider::GitLab => 3,
                     grove::app::config::GitProvider::GitHub => 2,
-                    grove::app::config::GitProvider::Codeberg => {
-                        if matches!(
-                            git_setup.ci_provider,
-                            grove::app::config::CodebergCiProvider::Woodpecker
-                        ) {
-                            4
-                        } else {
-                            3
-                        }
-                    }
+                    grove::app::config::GitProvider::Codeberg => 3,
                 }
             } else {
                 match provider {
                     grove::app::config::GitProvider::GitLab => 2,
                     grove::app::config::GitProvider::GitHub => 1,
-                    grove::app::config::GitProvider::Codeberg => {
-                        if matches!(
-                            git_setup.ci_provider,
-                            grove::app::config::CodebergCiProvider::Woodpecker
-                        ) {
-                            3
-                        } else {
-                            2
-                        }
-                    }
+                    grove::app::config::GitProvider::Codeberg => 2,
                 }
             };
 
@@ -7961,12 +7943,12 @@ async fn process_action(
             state.git_setup.ci_provider = grove::app::config::CodebergCiProvider::default();
             state.git_setup.woodpecker_repo_id.clear();
 
-            // Try to auto-detect from git remote
+            // Try to auto-detect from git remote (always extract owner/repo)
             if let Some(remote_info) = grove::git::parse_remote_info(&state.repo_path) {
+                state.git_setup.owner = remote_info.owner.clone();
+                state.git_setup.repo = remote_info.repo.clone();
+                state.git_setup.detected_from_remote = remote_info.provider == provider;
                 if remote_info.provider == provider {
-                    state.git_setup.owner = remote_info.owner;
-                    state.git_setup.repo = remote_info.repo;
-                    state.git_setup.detected_from_remote = true;
                     if let Some(url) = remote_info.base_url {
                         state.git_setup.base_url = url;
                     }
