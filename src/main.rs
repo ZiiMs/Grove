@@ -7348,6 +7348,7 @@ async fn process_action(
                     }
                     1 => {
                         state.git_setup.active = true;
+                        state.git_setup.source = grove::app::state::SetupSource::ProjectSetup;
                         state.git_setup.step = grove::app::state::GitSetupStep::Token;
                         state.git_setup.field_index = 0;
                         state.git_setup.editing_text = false;
@@ -7367,6 +7368,7 @@ async fn process_action(
                     }
                     3 => {
                         state.pm_setup.active = true;
+                        state.pm_setup.source = grove::app::state::SetupSource::ProjectSetup;
                         state.pm_setup.step = grove::app::state::PmSetupStep::Token;
                         state.pm_setup.field_index = 0;
                         state.pm_setup.error = None;
@@ -7470,6 +7472,7 @@ async fn process_action(
         // PM Setup Wizard Actions
         Action::OpenPmSetup => {
             state.pm_setup.active = true;
+            state.pm_setup.source = grove::app::state::SetupSource::Settings;
             state.pm_setup.step = grove::app::state::PmSetupStep::Token;
             state.pm_setup.teams.clear();
             state.pm_setup.all_databases.clear();
@@ -7717,7 +7720,10 @@ async fn process_action(
         Action::PmSetupPrevStep => match state.pm_setup.step {
             grove::app::state::PmSetupStep::Token => {
                 state.pm_setup.active = false;
-                state.settings.active = true;
+                if state.pm_setup.source == grove::app::state::SetupSource::Settings {
+                    state.settings.active = true;
+                }
+                state.pm_setup.source = grove::app::state::SetupSource::default();
             }
             grove::app::state::PmSetupStep::Workspace => {
                 state.pm_setup.step = grove::app::state::PmSetupStep::Token;
@@ -8081,8 +8087,14 @@ async fn process_action(
                     }
                 }
             }
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.config = state.settings.repo_config.clone();
+            }
             state.pm_setup.active = false;
-            state.settings.active = true;
+            if state.pm_setup.source == grove::app::state::SetupSource::Settings {
+                state.settings.active = true;
+            }
+            state.pm_setup.source = grove::app::state::SetupSource::default();
         }
 
         // Git Setup Wizard Actions
@@ -8090,6 +8102,7 @@ async fn process_action(
             state.settings.active = false;
             let provider = state.settings.repo_config.git.provider;
             state.git_setup.active = true;
+            state.git_setup.source = grove::app::state::SetupSource::Settings;
             state.git_setup.step = grove::app::state::GitSetupStep::Token;
             state.git_setup.error = None;
             state.git_setup.field_index = 0;
@@ -8209,7 +8222,10 @@ async fn process_action(
         Action::GitSetupPrevStep => match state.git_setup.step {
             grove::app::state::GitSetupStep::Token => {
                 state.git_setup.active = false;
-                state.settings.active = true;
+                if state.git_setup.source == grove::app::state::SetupSource::Settings {
+                    state.settings.active = true;
+                }
+                state.git_setup.source = grove::app::state::SetupSource::default();
             }
             grove::app::state::GitSetupStep::Repository => {
                 state.git_setup.step = grove::app::state::GitSetupStep::Token;
@@ -8319,6 +8335,14 @@ async fn process_action(
                     }
                 }
                 grove::app::config::GitProvider::Codeberg => {
+                    state.log_debug(format!(
+                        "Codeberg setup: owner='{}', repo='{}', base_url='{}', ci_provider={:?}, woodpecker_id='{}'",
+                        state.git_setup.owner,
+                        state.git_setup.repo,
+                        state.git_setup.base_url,
+                        state.git_setup.ci_provider,
+                        state.git_setup.woodpecker_repo_id
+                    ));
                     state.settings.repo_config.git.codeberg.owner =
                         Some(state.git_setup.owner.clone());
                     state.settings.repo_config.git.codeberg.repo =
@@ -8355,8 +8379,15 @@ async fn process_action(
                 }
             }
 
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.config = state.settings.repo_config.clone();
+            }
+
             state.git_setup.active = false;
-            state.settings.active = true;
+            if state.git_setup.source == grove::app::state::SetupSource::Settings {
+                state.settings.active = true;
+            }
+            state.git_setup.source = grove::app::state::SetupSource::default();
         }
         Action::GitSetupFetchProjectId => {
             if grove::app::Config::gitlab_token().is_some() {

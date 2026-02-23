@@ -227,9 +227,17 @@ pub enum GitSetupStep {
     Advanced,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SetupSource {
+    #[default]
+    Settings,
+    ProjectSetup,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PmSetupState {
     pub active: bool,
+    pub source: SetupSource,
     pub step: PmSetupStep,
     pub advanced_expanded: bool,
     pub teams: Vec<(String, String, String)>,
@@ -249,6 +257,7 @@ pub struct PmSetupState {
 #[derive(Debug, Clone, Default)]
 pub struct GitSetupState {
     pub active: bool,
+    pub source: SetupSource,
     pub step: GitSetupStep,
     pub advanced_expanded: bool,
     pub field_index: usize,
