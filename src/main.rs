@@ -7350,13 +7350,35 @@ async fn process_action(
                         state.git_setup.active = true;
                         state.git_setup.source = grove::app::state::SetupSource::ProjectSetup;
                         state.git_setup.step = grove::app::state::GitSetupStep::Token;
+                        state.git_setup.error = None;
                         state.git_setup.field_index = 0;
+                        state.git_setup.advanced_expanded = false;
                         state.git_setup.editing_text = false;
                         state.git_setup.dropdown_open = false;
                         state.git_setup.dropdown_index = 0;
                         state.git_setup.text_buffer.clear();
                         state.git_setup.loading = false;
-                        state.git_setup.error = None;
+                        state.git_setup.project_id.clear();
+                        state.git_setup.owner.clear();
+                        state.git_setup.repo.clear();
+                        state.git_setup.base_url.clear();
+                        state.git_setup.detected_from_remote = false;
+                        state.git_setup.project_name = None;
+                        state.git_setup.ci_provider = grove::app::config::CodebergCiProvider::default();
+                        state.git_setup.woodpecker_repo_id.clear();
+
+                        // Try to auto-detect from git remote
+                        let provider = wizard.config.git.provider;
+                        if let Some(remote_info) = grove::git::parse_remote_info(&state.repo_path) {
+                            state.git_setup.owner = remote_info.owner.clone();
+                            state.git_setup.repo = remote_info.repo.clone();
+                            state.git_setup.detected_from_remote = remote_info.provider == provider;
+                            if remote_info.provider == provider {
+                                if let Some(url) = remote_info.base_url {
+                                    state.git_setup.base_url = url;
+                                }
+                            }
+                        }
                     }
                     2 => {
                         wizard.pm_provider_dropdown_open = true;
@@ -7374,18 +7396,13 @@ async fn process_action(
                         state.pm_setup.error = None;
                     }
                     4 => {
-                        state.log_info("Save button pressed".to_string());
                         if let Some(wizard) = state.project_setup.take() {
-                            state.log_info(format!("Saving config: github.owner={:?}, github.repo={:?}",
-                                wizard.config.git.github.owner, wizard.config.git.github.repo));
                             if let Err(e) = wizard.config.save(&state.repo_path) {
                                 state.log_error(format!("Failed to save project config: {}", e));
                             } else {
                                 state.settings.repo_config = wizard.config.clone();
                                 state.log_info("Project setup complete".to_string());
                             }
-                        } else {
-                            state.log_error("No wizard config to save".to_string());
                         }
                         state.show_project_setup = false;
                     }
@@ -8391,11 +8408,6 @@ async fn process_action(
             if let Some(wizard) = &mut state.project_setup {
                 wizard.config = state.settings.repo_config.clone();
             }
-            state.log_info(format!(
-                "Synced to wizard: github.owner={:?}, github.repo={:?}",
-                state.settings.repo_config.git.github.owner,
-                state.settings.repo_config.git.github.repo
-            ));
 
             state.git_setup.active = false;
             if state.git_setup.source == grove::app::state::SetupSource::Settings {

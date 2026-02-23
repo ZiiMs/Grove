@@ -1115,21 +1115,12 @@ pub struct DevServerConfig {
 impl RepoConfig {
     pub fn load(repo_path: &str) -> Result<Self> {
         let config_path = Self::config_path(repo_path)?;
-        eprintln!("[DEBUG] Looking for repo config at {:?}", config_path);
-        eprintln!("[DEBUG] Config path exists: {}", config_path.exists());
 
         if config_path.exists() {
             let content =
                 std::fs::read_to_string(&config_path).context("Failed to read repo config")?;
-            eprintln!(
-                "[DEBUG] Loading repo config from {:?}, content:\n{}",
-                config_path, content
-            );
 
             if let Ok(config) = toml::from_str::<RepoConfig>(&content) {
-                eprintln!("[DEBUG] Loaded repo config: github.owner={:?}, github.repo={:?}, codeberg.owner={:?}, codeberg.repo={:?}",
-                    config.git.github.owner, config.git.github.repo,
-                    config.git.codeberg.owner, config.git.codeberg.repo);
                 return Ok(config);
             }
 
@@ -1158,7 +1149,6 @@ impl RepoConfig {
 
             anyhow::bail!("Failed to parse repo config (neither new nor legacy format)")
         } else {
-            eprintln!("[DEBUG] Config file doesn't exist, returning default");
             Ok(Self::default())
         }
     }
@@ -1170,10 +1160,6 @@ impl RepoConfig {
         }
         let config_path = Self::config_path(repo_path)?;
         let content = toml::to_string_pretty(self).context("Failed to serialize repo config")?;
-        eprintln!(
-            "[DEBUG] Saving repo config to {:?}, content:\n{}",
-            config_path, content
-        );
         std::fs::write(&config_path, content).context("Failed to write repo config")
     }
 
