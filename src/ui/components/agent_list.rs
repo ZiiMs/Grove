@@ -102,19 +102,36 @@ impl<'a> AgentListWidget<'a> {
 
         let available_height = area.height.saturating_sub(3) as usize;
 
-        let max_visible = if available_height <= 1 {
-            1
-        } else {
-            available_height.div_ceil(2)
-        };
+        let mut scroll_offset = self.scroll_offset;
 
-        let max_scroll = total_agents.saturating_sub(max_visible);
-        let mut scroll_offset = self.scroll_offset.min(max_scroll);
+        let mut max_visible = 1;
+        for _ in 0..3 {
+            scroll_offset = scroll_offset.min(total_agents.saturating_sub(1));
 
-        if self.selected < scroll_offset {
-            scroll_offset = self.selected;
-        } else if self.selected >= scroll_offset + max_visible {
-            scroll_offset = self.selected.saturating_sub(max_visible - 1);
+            if self.selected < scroll_offset {
+                scroll_offset = self.selected;
+            }
+
+            let has_above = scroll_offset > 0;
+
+            let has_below_estimate = scroll_offset + max_visible < total_agents;
+            let indicator_rows =
+                (if has_above { 1 } else { 0 }) + (if has_below_estimate { 1 } else { 0 });
+
+            let rows_for_agents = available_height.saturating_sub(indicator_rows);
+
+            max_visible = if rows_for_agents <= 1 {
+                1
+            } else {
+                rows_for_agents.div_ceil(2)
+            };
+
+            let max_scroll = total_agents.saturating_sub(max_visible);
+            scroll_offset = scroll_offset.min(max_scroll);
+
+            if self.selected >= scroll_offset + max_visible {
+                scroll_offset = self.selected.saturating_sub(max_visible - 1);
+            }
         }
 
         let has_above = scroll_offset > 0;
@@ -122,6 +139,7 @@ impl<'a> AgentListWidget<'a> {
 
         let end_index = (scroll_offset + max_visible).min(total_agents);
         let visible_slice = &self.agents[scroll_offset..end_index];
+        let last_visible_index = end_index.saturating_sub(1);
 
         let mut rows: Vec<Row> = Vec::new();
 
@@ -139,7 +157,8 @@ impl<'a> AgentListWidget<'a> {
         for (i, agent) in visible_slice.iter().enumerate() {
             let actual_index = scroll_offset + i;
             let is_selected = actual_index == self.selected;
-            let is_last = actual_index == total_agents - 1;
+            let is_last_overall = actual_index == total_agents - 1;
+            let is_last_visible = actual_index == last_visible_index;
 
             let mut agent_row = self.render_agent_row(agent, is_selected);
             if is_selected {
@@ -148,7 +167,7 @@ impl<'a> AgentListWidget<'a> {
 
             rows.push(agent_row);
 
-            if !is_last {
+            if !is_last_overall && !is_last_visible {
                 let separator = Row::new(vec![
                     Cell::from("──"),
                     Cell::from("──"),
