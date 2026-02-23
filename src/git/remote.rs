@@ -22,6 +22,8 @@ fn parse_git_url(url: &str) -> Option<RemoteInfo> {
 
     if url.starts_with("git@") {
         parse_ssh_url(url)
+    } else if url.starts_with("ssh://") {
+        parse_ssh_url_with_scheme(url)
     } else if url.starts_with("https://") || url.starts_with("http://") {
         parse_https_url(url)
     } else {
@@ -40,6 +42,39 @@ fn parse_ssh_url(url: &str) -> Option<RemoteInfo> {
     let path = parts[1];
 
     let path_parts: Vec<&str> = path.split('/').collect();
+    if path_parts.len() < 2 {
+        return None;
+    }
+
+    let owner = path_parts[0].to_string();
+    let repo = path_parts[path_parts.len() - 1].to_string();
+
+    let (provider, base_url) = detect_provider_from_host(host);
+
+    Some(RemoteInfo {
+        owner,
+        repo,
+        provider,
+        base_url,
+    })
+}
+
+fn parse_ssh_url_with_scheme(url: &str) -> Option<RemoteInfo> {
+    let url = url.strip_prefix("ssh://")?;
+
+    let parts: Vec<&str> = url.split('/').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let host_with_user = parts[0];
+    let host = host_with_user
+        .strip_prefix("git@")
+        .unwrap_or(host_with_user);
+
+    let path = parts[1..].join("/");
+    let path_parts: Vec<&str> = path.split('/').collect();
+
     if path_parts.len() < 2 {
         return None;
     }

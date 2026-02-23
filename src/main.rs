@@ -8059,11 +8059,17 @@ async fn process_action(
         Action::GitSetupNavigateNext => {
             let provider = state.settings.repo_config.git.provider;
             let max_field = if state.git_setup.advanced_expanded {
-                3
-            } else if matches!(provider, grove::app::config::GitProvider::GitLab) {
-                2
+                match provider {
+                    grove::app::config::GitProvider::GitLab => 3,
+                    grove::app::config::GitProvider::GitHub => 2,
+                    grove::app::config::GitProvider::Codeberg => 3,
+                }
             } else {
-                1
+                match provider {
+                    grove::app::config::GitProvider::GitLab => 2,
+                    grove::app::config::GitProvider::GitHub => 1,
+                    grove::app::config::GitProvider::Codeberg => 2,
+                }
             };
             if state.git_setup.field_index < max_field {
                 state.git_setup.field_index += 1;
