@@ -7237,6 +7237,7 @@ async fn process_action(
             state.pm_setup.active = true;
             state.pm_setup.step = grove::app::state::PmSetupStep::Token;
             state.pm_setup.teams.clear();
+            state.pm_setup.all_databases.clear();
             state.pm_setup.error = None;
             state.pm_setup.selected_team_index = 0;
             state.pm_setup.field_index = 0;
@@ -7283,8 +7284,12 @@ async fn process_action(
                             tokio::spawn(async move {
                                 match grove::notion::fetch_databases(&token).await {
                                     Ok(databases) => {
-                                        let _ = tx
-                                            .send(Action::PmSetupTeamsLoaded { teams: databases });
+                                        let parent_pages =
+                                            grove::notion::extract_parent_pages(&databases);
+                                        let _ = tx.send(Action::PmSetupNotionDatabasesLoaded {
+                                            databases,
+                                            parent_pages,
+                                        });
                                     }
                                     Err(e) => {
                                         let _ = tx.send(Action::PmSetupTeamsError {
@@ -7360,6 +7365,26 @@ async fn process_action(
             grove::app::state::PmSetupStep::Workspace => {
                 let provider = state.settings.repo_config.project_mgmt.provider;
                 match provider {
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        if let Some(parent_page) = state
+                            .pm_setup
+                            .teams
+                            .get(state.pm_setup.selected_team_index)
+                            .map(|t| t.0.clone())
+                        {
+                            state.pm_setup.selected_workspace_gid = Some(parent_page.clone());
+                            state.pm_setup.step = grove::app::state::PmSetupStep::Project;
+                            let filtered: Vec<(String, String, String)> = state
+                                .pm_setup
+                                .all_databases
+                                .iter()
+                                .filter(|(_, _, parent)| parent == &parent_page)
+                                .map(|(id, title, _)| (id.clone(), title.clone(), String::new()))
+                                .collect();
+                            state.pm_setup.teams = filtered;
+                            state.pm_setup.selected_team_index = 0;
+                        }
+                    }
                     grove::app::config::ProjectMgmtProvider::Asana => {
                         if let Some(ws_gid) = state
                             .pm_setup
@@ -7465,6 +7490,12 @@ async fn process_action(
             grove::app::state::PmSetupStep::Project => {
                 let provider = state.settings.repo_config.project_mgmt.provider;
                 match provider {
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
+                        state.pm_setup.teams =
+                            grove::notion::extract_parent_pages(&state.pm_setup.all_databases);
+                        state.pm_setup.selected_team_index = 0;
+                    }
                     grove::app::config::ProjectMgmtProvider::Asana => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
                         state.pm_setup.teams.clear();
@@ -7543,7 +7574,8 @@ async fn process_action(
                 match provider {
                     grove::app::config::ProjectMgmtProvider::Asana
                     | grove::app::config::ProjectMgmtProvider::Clickup
-                    | grove::app::config::ProjectMgmtProvider::Airtable => {
+                    | grove::app::config::ProjectMgmtProvider::Airtable
+                    | grove::app::config::ProjectMgmtProvider::Notion => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Project;
                     }
                     _ => {
@@ -7612,6 +7644,15 @@ async fn process_action(
         }
         Action::PmSetupTeamsLoaded { teams } => {
             state.pm_setup.teams = teams;
+            state.pm_setup.teams_loading = false;
+            state.pm_setup.selected_team_index = 0;
+        }
+        Action::PmSetupNotionDatabasesLoaded {
+            databases,
+            parent_pages,
+        } => {
+            state.pm_setup.all_databases = databases;
+            state.pm_setup.teams = parent_pages;
             state.pm_setup.teams_loading = false;
             state.pm_setup.selected_team_index = 0;
         }

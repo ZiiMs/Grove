@@ -335,6 +335,10 @@ pub enum Action {
     PmSetupTeamsLoaded {
         teams: Vec<(String, String, String)>,
     },
+    PmSetupNotionDatabasesLoaded {
+        databases: Vec<(String, String, String)>,
+        parent_pages: Vec<(String, String, String)>,
+    },
     PmSetupTeamsError {
         message: String,
     },

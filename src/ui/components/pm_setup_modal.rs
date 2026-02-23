@@ -91,6 +91,12 @@ impl<'a> PmSetupModal<'a> {
                 PmSetupStep::Project => "Table",
                 PmSetupStep::Advanced => "Advanced Settings",
             },
+            ProjectMgmtProvider::Notion => match self.state.step {
+                PmSetupStep::Token => "API Token",
+                PmSetupStep::Workspace => "Parent Page",
+                PmSetupStep::Project => "Database",
+                PmSetupStep::Advanced => "Advanced Settings",
+            },
             _ => match self.state.step {
                 PmSetupStep::Token => "API Token",
                 PmSetupStep::Workspace => "Workspace",
@@ -372,7 +378,8 @@ impl<'a> PmSetupModal<'a> {
     fn render_notion_content(&self) -> Vec<Line<'static>> {
         match self.state.step {
             PmSetupStep::Token => self.render_notion_token_step(),
-            PmSetupStep::Workspace | PmSetupStep::Project => self.render_notion_database_step(),
+            PmSetupStep::Workspace => self.render_notion_parent_page_step(),
+            PmSetupStep::Project => self.render_notion_database_step(),
             PmSetupStep::Advanced => self.render_notion_advanced_step(),
         }
     }
@@ -658,6 +665,65 @@ impl<'a> PmSetupModal<'a> {
         ]
     }
 
+    fn render_notion_parent_page_step(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Select the parent page containing your database:",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if self.state.teams_loading {
+            lines.push(Line::from(Span::styled(
+                "  Loading pages...",
+                Style::default().fg(Color::Yellow),
+            )));
+        } else if self.state.teams.is_empty() {
+            if Config::notion_token().is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No token set. Go back to set NOTION_TOKEN first.",
+                    Style::default().fg(Color::Red),
+                )));
+            } else if let Some(ref err) = self.state.error {
+                lines.push(Line::from(Span::styled(
+                    format!("  Error: {}", err),
+                    Style::default().fg(Color::Red),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "  No parent pages found with databases.",
+                    Style::default().fg(Color::Yellow),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  Make sure you've shared a database with your integration.",
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        } else {
+            let selected_idx = self.state.selected_team_index;
+            let page_display = if let Some(page) = self.state.teams.get(selected_idx) {
+                page.1.clone()
+            } else {
+                "Select page...".to_string()
+            };
+
+            let is_selected = self.state.field_index == 0;
+            lines.push(self.render_field_line("Parent Page", &page_display, is_selected, true));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  Select a parent page to see its databases",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        lines
+    }
+
     fn render_notion_database_step(&self) -> Vec<Line<'static>> {
         let mut lines = vec![
             Line::from(""),
@@ -681,6 +747,11 @@ impl<'a> PmSetupModal<'a> {
                     "  No token set. Go back to set NOTION_TOKEN first.",
                     Style::default().fg(Color::Red),
                 )));
+            } else if self.state.selected_workspace_gid.is_none() {
+                lines.push(Line::from(Span::styled(
+                    "  No parent page selected. Go back to select one.",
+                    Style::default().fg(Color::Yellow),
+                )));
             } else if let Some(ref err) = self.state.error {
                 lines.push(Line::from(Span::styled(
                     format!("  Error: {}", err),
@@ -688,22 +759,14 @@ impl<'a> PmSetupModal<'a> {
                 )));
             } else {
                 lines.push(Line::from(Span::styled(
-                    "  No databases found.",
-                    Style::default().fg(Color::Yellow),
-                )));
-                lines.push(Line::from(Span::styled(
-                    "  Make sure you've shared a database with your integration.",
+                    "  No databases found under this page.",
                     Style::default().fg(Color::Yellow),
                 )));
             }
         } else {
             let selected_idx = self.state.selected_team_index;
             let db_display = if let Some(db) = self.state.teams.get(selected_idx) {
-                if db.2.is_empty() {
-                    db.1.clone()
-                } else {
-                    format!("{} > {}", db.2, db.1)
-                }
+                db.1.clone()
             } else {
                 "Select database...".to_string()
             };

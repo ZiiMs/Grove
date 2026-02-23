@@ -222,6 +222,7 @@ pub struct PmSetupState {
     pub step: PmSetupStep,
     pub advanced_expanded: bool,
     pub teams: Vec<(String, String, String)>,
+    pub all_databases: Vec<(String, String, String)>,
     pub teams_loading: bool,
     pub selected_team_index: usize,
     pub selected_workspace_gid: Option<String>,
