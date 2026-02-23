@@ -965,11 +965,11 @@ pub struct GlobalSetupState {
 #[derive(Debug, Clone, Default)]
 pub struct ProjectSetupState {
     pub config: RepoConfig,
-    pub field_index: usize,
-    pub dropdown_open: bool,
-    pub dropdown_index: usize,
-    pub editing_text: bool,
-    pub text_buffer: String,
+    pub selected_index: usize,
+    pub git_provider_dropdown_open: bool,
+    pub git_provider_dropdown_index: usize,
+    pub pm_provider_dropdown_open: bool,
+    pub pm_provider_dropdown_index: usize,
 }
 
 #[derive(Debug, Clone)]

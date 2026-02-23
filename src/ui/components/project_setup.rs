@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::config::GitProvider;
+use crate::app::config::{GitProvider, ProjectMgmtProvider};
 use crate::app::ProjectSetupState;
 
 pub struct ProjectSetupWizard<'a> {
@@ -15,18 +15,13 @@ pub struct ProjectSetupWizard<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectField {
+pub enum SetupRow {
     GitProvider,
-    GitLabProjectId,
-    GitLabBaseUrl,
-    GitHubOwner,
-    GitHubRepo,
-    CodebergOwner,
-    CodebergRepo,
-    CodebergBaseUrl,
-    BranchPrefix,
-    MainBranch,
-    AsanaProjectGid,
+    GitSetup,
+    PmProvider,
+    PmSetup,
+    Save,
+    Close,
 }
 
 impl<'a> ProjectSetupWizard<'a> {
@@ -34,31 +29,8 @@ impl<'a> ProjectSetupWizard<'a> {
         Self { state, repo_name }
     }
 
-    pub fn fields(&self) -> Vec<ProjectField> {
-        let mut fields = vec![ProjectField::GitProvider];
-        match self.state.config.git.provider {
-            GitProvider::GitLab => {
-                fields.push(ProjectField::GitLabProjectId);
-                fields.push(ProjectField::GitLabBaseUrl);
-            }
-            GitProvider::GitHub => {
-                fields.push(ProjectField::GitHubOwner);
-                fields.push(ProjectField::GitHubRepo);
-            }
-            GitProvider::Codeberg => {
-                fields.push(ProjectField::CodebergOwner);
-                fields.push(ProjectField::CodebergRepo);
-                fields.push(ProjectField::CodebergBaseUrl);
-            }
-        }
-        fields.push(ProjectField::BranchPrefix);
-        fields.push(ProjectField::MainBranch);
-        fields.push(ProjectField::AsanaProjectGid);
-        fields
-    }
-
     pub fn render(&self, frame: &mut Frame) {
-        let area = centered_rect(60, 60, frame.area());
+        let area = centered_rect(60, 50, frame.area());
         frame.render_widget(Clear, area);
 
         let block = Block::default()
@@ -74,16 +46,19 @@ impl<'a> ProjectSetupWizard<'a> {
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(10),
-                Constraint::Length(2),
+                Constraint::Length(3),
             ])
             .split(inner);
 
         self.render_header(frame, chunks[0]);
-        self.render_fields(frame, chunks[1]);
+        self.render_rows(frame, chunks[1]);
         self.render_footer(frame, chunks[2]);
 
-        if self.state.dropdown_open {
-            self.render_dropdown(frame);
+        if self.state.git_provider_dropdown_open {
+            self.render_git_dropdown(frame);
+        }
+        if self.state.pm_provider_dropdown_open {
+            self.render_pm_dropdown(frame);
         }
     }
 
@@ -105,41 +80,26 @@ impl<'a> ProjectSetupWizard<'a> {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_fields(&self, frame: &mut Frame, area: Rect) {
-        let fields = self.fields();
-        let mut lines = vec![Line::from("")];
+    fn render_rows(&self, frame: &mut Frame, area: Rect) {
+        let git_configured = self.is_git_configured();
+        let pm_configured = self.is_pm_configured();
 
-        lines.push(Line::from(Span::styled(
-            "  Git Provider",
-            Style::default().fg(Color::DarkGray),
-        )));
-
-        for (idx, field) in fields.iter().enumerate() {
-            let is_selected = idx == self.state.field_index;
-            // Add section headers
-            if matches!(field, ProjectField::BranchPrefix) {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  Configuration",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            if matches!(field, ProjectField::AsanaProjectGid) {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    "  Asana (optional)",
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            lines.push(self.render_field_line(field, is_selected));
-        }
+        let lines = vec![
+            Line::from(""),
+            self.render_git_row(git_configured),
+            Line::from(""),
+            self.render_pm_row(pm_configured),
+            Line::from(""),
+            self.render_buttons(),
+        ];
 
         let paragraph = Paragraph::new(lines);
         frame.render_widget(paragraph, area);
     }
 
-    fn render_field_line(&self, field: &ProjectField, is_selected: bool) -> Line<'static> {
-        let (label, value) = self.get_field_display(field);
+    fn render_git_row(&self, configured: bool) -> Line<'static> {
+        let is_selected = matches!(self.state.selected_index, 0 | 1);
+        let provider_name = self.state.config.git.provider.display_name();
 
         let label_style = if is_selected {
             Style::default()
@@ -149,7 +109,7 @@ impl<'a> ProjectSetupWizard<'a> {
             Style::default().fg(Color::White)
         };
 
-        let value_style = if is_selected {
+        let dropdown_style = if self.state.selected_index == 0 && is_selected {
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
@@ -157,121 +117,124 @@ impl<'a> ProjectSetupWizard<'a> {
             Style::default().fg(Color::Gray)
         };
 
-        let cursor = if is_selected && self.state.editing_text {
-            "█"
-        } else if is_selected {
-            " ◀"
+        let button_style = if self.state.selected_index == 1 && is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
-            ""
+            Style::default().fg(Color::Cyan)
         };
 
-        let display_value = if self.state.editing_text && is_selected {
-            self.state.text_buffer.clone()
+        let status_style = if configured {
+            Style::default().fg(Color::Green)
         } else {
-            value
+            Style::default().fg(Color::Red)
+        };
+
+        let status_text = if configured {
+            "✓ Configured"
+        } else {
+            "✗ Not configured"
+        };
+
+        Line::from(vec![
+            Span::styled("  Git Provider: ", label_style),
+            Span::styled(format!("[{} ▼]", provider_name), dropdown_style),
+            Span::styled("  ", Style::default()),
+            Span::styled("[ Setup ]", button_style),
+            Span::styled("  ", Style::default()),
+            Span::styled(status_text, status_style),
+        ])
+    }
+
+    fn render_pm_row(&self, configured: bool) -> Line<'static> {
+        let is_selected = matches!(self.state.selected_index, 2 | 3);
+        let provider_name = self.state.config.project_mgmt.provider.display_name();
+
+        let label_style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let dropdown_style = if self.state.selected_index == 2 && is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        let button_style = if self.state.selected_index == 3 && is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+
+        let status_style = if configured {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Red)
+        };
+
+        let status_text = if configured {
+            "✓ Configured"
+        } else {
+            "✗ Not configured"
+        };
+
+        Line::from(vec![
+            Span::styled("  Project Mgmt: ", label_style),
+            Span::styled(format!("[{} ▼]", provider_name), dropdown_style),
+            Span::styled("  ", Style::default()),
+            Span::styled("[ Setup ]", button_style),
+            Span::styled("  ", Style::default()),
+            Span::styled(status_text, status_style),
+        ])
+    }
+
+    fn render_buttons(&self) -> Line<'static> {
+        let save_selected = self.state.selected_index == 4;
+        let close_selected = self.state.selected_index == 5;
+
+        let save_style = if save_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+
+        let close_style = if close_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Red)
         };
 
         Line::from(vec![
             Span::styled("    ", Style::default()),
-            Span::styled(format!("{:14}", label), label_style),
-            Span::styled(": ", Style::default().fg(Color::DarkGray)),
-            Span::styled(display_value, value_style),
-            Span::styled(cursor.to_string(), Style::default().fg(Color::White)),
+            Span::styled("[ Save ]", save_style),
+            Span::styled("      ", Style::default()),
+            Span::styled("[ Close ]", close_style),
         ])
     }
 
-    fn get_field_display(&self, field: &ProjectField) -> (String, String) {
-        match field {
-            ProjectField::GitProvider => (
-                "Provider".to_string(),
-                self.state.config.git.provider.display_name().to_string(),
-            ),
-            ProjectField::GitLabProjectId => (
-                "Project ID".to_string(),
-                self.state
-                    .config
-                    .git
-                    .gitlab
-                    .project_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_default(),
-            ),
-            ProjectField::GitLabBaseUrl => (
-                "Base URL".to_string(),
-                self.state.config.git.gitlab.base_url.clone(),
-            ),
-            ProjectField::GitHubOwner => (
-                "Owner".to_string(),
-                self.state
-                    .config
-                    .git
-                    .github
-                    .owner
-                    .clone()
-                    .unwrap_or_default(),
-            ),
-            ProjectField::GitHubRepo => (
-                "Repo".to_string(),
-                self.state
-                    .config
-                    .git
-                    .github
-                    .repo
-                    .clone()
-                    .unwrap_or_default(),
-            ),
-            ProjectField::CodebergOwner => (
-                "Owner".to_string(),
-                self.state
-                    .config
-                    .git
-                    .codeberg
-                    .owner
-                    .clone()
-                    .unwrap_or_default(),
-            ),
-            ProjectField::CodebergRepo => (
-                "Repo".to_string(),
-                self.state
-                    .config
-                    .git
-                    .codeberg
-                    .repo
-                    .clone()
-                    .unwrap_or_default(),
-            ),
-            ProjectField::CodebergBaseUrl => (
-                "Base URL".to_string(),
-                self.state.config.git.codeberg.base_url.clone(),
-            ),
-            ProjectField::BranchPrefix => (
-                "Branch Prefix".to_string(),
-                self.state.config.git.branch_prefix.clone(),
-            ),
-            ProjectField::MainBranch => (
-                "Main Branch".to_string(),
-                self.state.config.git.main_branch.clone(),
-            ),
-            ProjectField::AsanaProjectGid => (
-                "Project GID".to_string(),
-                self.state
-                    .config
-                    .project_mgmt
-                    .asana
-                    .project_gid
-                    .clone()
-                    .unwrap_or_default(),
-            ),
-        }
-    }
-
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let hint = if self.state.editing_text {
-            "[Enter] Save  [Esc] Cancel"
-        } else if self.state.dropdown_open {
+        let hint = if self.state.git_provider_dropdown_open || self.state.pm_provider_dropdown_open
+        {
             "[↑/k][↓/j] Navigate  [Enter] Select  [Esc] Cancel"
         } else {
-            "[↑/k][↓/j] Navigate  [Enter] Edit  [c] Save  [Esc] Skip"
+            "[↑/k][↓/j] Navigate  [Enter] Select/Dropdown  [c] Save  [Esc] Close"
         };
 
         let paragraph = Paragraph::new(Line::from(Span::styled(
@@ -282,20 +245,17 @@ impl<'a> ProjectSetupWizard<'a> {
         frame.render_widget(paragraph, area);
     }
 
-    fn render_dropdown(&self, frame: &mut Frame) {
-        let options: Vec<&str> = match self.fields().get(self.state.field_index) {
-            Some(ProjectField::GitProvider) => GitProvider::all()
-                .iter()
-                .map(|g| g.display_name())
-                .collect(),
-            _ => return,
-        };
+    fn render_git_dropdown(&self, frame: &mut Frame) {
+        let options: Vec<&str> = GitProvider::all()
+            .iter()
+            .map(|g| g.display_name())
+            .collect();
 
         let area = Rect::new(
-            frame.area().x + frame.area().width / 3,
-            frame.area().y + 10,
-            20,
-            6,
+            frame.area().x + 15,
+            frame.area().y + 6,
+            15,
+            (options.len() + 2) as u16,
         );
         frame.render_widget(Clear, area);
 
@@ -303,7 +263,7 @@ impl<'a> ProjectSetupWizard<'a> {
             .iter()
             .enumerate()
             .map(|(i, opt)| {
-                let style = if i == self.state.dropdown_index {
+                let style = if i == self.state.git_provider_dropdown_index {
                     Style::default()
                         .fg(Color::Black)
                         .bg(Color::Cyan)
@@ -321,6 +281,76 @@ impl<'a> ProjectSetupWizard<'a> {
 
         let paragraph = Paragraph::new(lines).block(block);
         frame.render_widget(paragraph, area);
+    }
+
+    fn render_pm_dropdown(&self, frame: &mut Frame) {
+        let options: Vec<&str> = ProjectMgmtProvider::all()
+            .iter()
+            .map(|p| p.display_name())
+            .collect();
+
+        let area = Rect::new(
+            frame.area().x + 15,
+            frame.area().y + 10,
+            15,
+            (options.len() + 2) as u16,
+        );
+        frame.render_widget(Clear, area);
+
+        let lines: Vec<Line> = options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                let style = if i == self.state.pm_provider_dropdown_index {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Line::from(Span::styled(format!(" {} ", opt), style))
+            })
+            .collect();
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let paragraph = Paragraph::new(lines).block(block);
+        frame.render_widget(paragraph, area);
+    }
+
+    fn is_git_configured(&self) -> bool {
+        match self.state.config.git.provider {
+            GitProvider::GitLab => self.state.config.git.gitlab.project_id.is_some(),
+            GitProvider::GitHub => {
+                self.state.config.git.github.owner.is_some()
+                    && self.state.config.git.github.repo.is_some()
+            }
+            GitProvider::Codeberg => {
+                self.state.config.git.codeberg.owner.is_some()
+                    && self.state.config.git.codeberg.repo.is_some()
+            }
+        }
+    }
+
+    fn is_pm_configured(&self) -> bool {
+        match self.state.config.project_mgmt.provider {
+            ProjectMgmtProvider::Asana => {
+                self.state.config.project_mgmt.asana.project_gid.is_some()
+            }
+            ProjectMgmtProvider::Notion => {
+                self.state.config.project_mgmt.notion.database_id.is_some()
+            }
+            ProjectMgmtProvider::Clickup => {
+                self.state.config.project_mgmt.clickup.list_id.is_some()
+            }
+            ProjectMgmtProvider::Airtable => {
+                self.state.config.project_mgmt.airtable.base_id.is_some()
+            }
+            ProjectMgmtProvider::Linear => self.state.config.project_mgmt.linear.team_id.is_some(),
+        }
     }
 }
 
