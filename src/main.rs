@@ -7374,13 +7374,18 @@ async fn process_action(
                         state.pm_setup.error = None;
                     }
                     4 => {
+                        state.log_info("Save button pressed".to_string());
                         if let Some(wizard) = state.project_setup.take() {
+                            state.log_info(format!("Saving config: github.owner={:?}, github.repo={:?}",
+                                wizard.config.git.github.owner, wizard.config.git.github.repo));
                             if let Err(e) = wizard.config.save(&state.repo_path) {
                                 state.log_error(format!("Failed to save project config: {}", e));
                             } else {
                                 state.settings.repo_config = wizard.config.clone();
                                 state.log_info("Project setup complete".to_string());
                             }
+                        } else {
+                            state.log_error("No wizard config to save".to_string());
                         }
                         state.show_project_setup = false;
                     }
@@ -8386,6 +8391,11 @@ async fn process_action(
             if let Some(wizard) = &mut state.project_setup {
                 wizard.config = state.settings.repo_config.clone();
             }
+            state.log_info(format!(
+                "Synced to wizard: github.owner={:?}, github.repo={:?}",
+                state.settings.repo_config.git.github.owner,
+                state.settings.repo_config.git.github.repo
+            ));
 
             state.git_setup.active = false;
             if state.git_setup.source == grove::app::state::SetupSource::Settings {

@@ -1115,6 +1115,8 @@ pub struct DevServerConfig {
 impl RepoConfig {
     pub fn load(repo_path: &str) -> Result<Self> {
         let config_path = Self::config_path(repo_path)?;
+        eprintln!("[DEBUG] Looking for repo config at {:?}", config_path);
+        eprintln!("[DEBUG] Config path exists: {}", config_path.exists());
 
         if config_path.exists() {
             let content =
@@ -1156,6 +1158,7 @@ impl RepoConfig {
 
             anyhow::bail!("Failed to parse repo config (neither new nor legacy format)")
         } else {
+            eprintln!("[DEBUG] Config file doesn't exist, returning default");
             Ok(Self::default())
         }
     }
