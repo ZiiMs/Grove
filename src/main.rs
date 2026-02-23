@@ -7395,6 +7395,7 @@ async fn process_action(
                         state.pm_setup.step = grove::app::state::PmSetupStep::Token;
                         state.pm_setup.teams.clear();
                         state.pm_setup.all_databases.clear();
+                        state.pm_setup.teams_loading = false;
                         state.pm_setup.error = None;
                         state.pm_setup.selected_team_index = 0;
                         state.pm_setup.field_index = 0;
@@ -7516,7 +7517,10 @@ async fn process_action(
         }
         Action::ClosePmSetup => {
             state.pm_setup.active = false;
-            state.settings.active = true;
+            if state.pm_setup.source == grove::app::state::SetupSource::Settings {
+                state.settings.active = true;
+            }
+            state.pm_setup.source = grove::app::state::SetupSource::default();
         }
         Action::PmSetupNextStep => match state.pm_setup.step {
             grove::app::state::PmSetupStep::Token => {
