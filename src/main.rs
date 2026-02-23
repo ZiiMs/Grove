@@ -1539,7 +1539,9 @@ fn handle_pm_setup_key(
                     KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
                     KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
                     KeyCode::Backspace => Some(Action::PmSetupBackspace),
-                    KeyCode::Char(ch) if ch != 'c' && ch != 'j' && ch != 'k' => Some(Action::PmSetupInputChar(ch)),
+                    KeyCode::Char(ch) if ch != 'c' && ch != 'j' && ch != 'k' => {
+                        Some(Action::PmSetupInputChar(ch))
+                    }
                     KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
                     _ => None,
                 }
