@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::config::{Config, GitProvider};
+use crate::app::config::{CodebergCiProvider, Config, GitProvider};
 use crate::app::state::{GitSetupState, GitSetupStep};
 
 pub struct GitSetupModal<'a> {
@@ -596,12 +596,13 @@ impl<'a> GitSetupModal<'a> {
 
         if self.state.detected_from_remote {
             lines.push(Line::from(Span::styled(
-                "  ↳ Detected from git remote",
+                format!("  ↳ Detected: {}/{}", self.state.owner, self.state.repo),
                 Style::default().fg(Color::Green),
             )));
             lines.push(Line::from(""));
         }
 
+        // Field 0: Owner
         let owner_display = if self.state.editing_text && self.state.field_index == 0 {
             if self.state.text_buffer.is_empty() {
                 "Enter owner...█".to_string()
@@ -613,7 +614,10 @@ impl<'a> GitSetupModal<'a> {
         } else {
             self.state.owner.clone()
         };
+        let owner_selected = self.state.field_index == 0;
+        lines.push(self.render_field_line("Owner", &owner_display, owner_selected));
 
+        // Field 1: Repo
         let repo_display = if self.state.editing_text && self.state.field_index == 1 {
             if self.state.text_buffer.is_empty() {
                 "Enter repo...█".to_string()
@@ -625,18 +629,97 @@ impl<'a> GitSetupModal<'a> {
         } else {
             self.state.repo.clone()
         };
-
-        let owner_selected = self.state.field_index == 0;
         let repo_selected = self.state.field_index == 1;
-
-        lines.push(self.render_field_line("Owner", &owner_display, owner_selected));
         lines.push(self.render_field_line("Repo", &repo_display, repo_selected));
+
+        // Field 2: CI Provider (dropdown)
+        let ci_options = ["Forgejo Actions", "Woodpecker CI"];
+        let ci_current = match self.state.ci_provider {
+            CodebergCiProvider::ForgejoActions => "Forgejo Actions",
+            CodebergCiProvider::Woodpecker => "Woodpecker CI",
+        };
+
+        let ci_display = if self.state.dropdown_open && self.state.field_index == 2 {
+            let idx = self.state.dropdown_index % ci_options.len();
+            format!("{} ▼", ci_options[idx])
+        } else {
+            format!("{} ▼", ci_current)
+        };
+        let ci_selected = self.state.field_index == 2;
+        lines.push(self.render_field_line("CI Provider", &ci_display, ci_selected));
+
+        // Field 3: Woodpecker Repo ID (only if Woodpecker selected)
+        if matches!(self.state.ci_provider, CodebergCiProvider::Woodpecker) {
+            let wp_display = if self.state.editing_text && self.state.field_index == 3 {
+                if self.state.text_buffer.is_empty() {
+                    "Enter repo ID...█".to_string()
+                } else {
+                    format!("{}█", self.state.text_buffer)
+                }
+            } else if self.state.woodpecker_repo_id.is_empty() {
+                "Enter repo ID...".to_string()
+            } else {
+                self.state.woodpecker_repo_id.clone()
+            };
+            let wp_selected = self.state.field_index == 3;
+            lines.push(self.render_field_line("Woodpecker ID", &wp_display, wp_selected));
+            lines.push(Line::from(Span::styled(
+                "  Find in Woodpecker → Repo Settings",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
 
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  Owner is your username or organization name",
             Style::default().fg(Color::DarkGray),
         )));
+
+        if self.state.advanced_expanded {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ▼ Advanced (optional)",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "    ─────────────────────────────────────────────",
+                Style::default().fg(Color::DarkGray),
+            )));
+
+            let base_url_idx = if matches!(self.state.ci_provider, CodebergCiProvider::Woodpecker) {
+                4
+            } else {
+                3
+            };
+            let base_url_display =
+                if self.state.editing_text && self.state.field_index == base_url_idx {
+                    if self.state.text_buffer.is_empty() {
+                        "(default: codeberg.org)█".to_string()
+                    } else {
+                        format!("{}█", self.state.text_buffer)
+                    }
+                } else if self.state.base_url.is_empty() {
+                    "(default: codeberg.org)".to_string()
+                } else {
+                    self.state.base_url.clone()
+                };
+
+            let base_url_selected = self.state.field_index == base_url_idx;
+            lines.push(self.render_field_line("Base URL", &base_url_display, base_url_selected));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "    For self-hosted Codeberg/Forgejo",
+                Style::default().fg(Color::DarkGray),
+            )));
+        } else {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  ▶ Advanced (optional)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
 
         lines
     }

@@ -263,6 +263,8 @@ pub struct GitSetupState {
     pub base_url: String,
     pub detected_from_remote: bool,
     pub project_name: Option<String>,
+    pub ci_provider: crate::app::config::CodebergCiProvider,
+    pub woodpecker_repo_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1640,18 +1640,53 @@ fn handle_git_setup_key(
             _ => None,
         },
         GitSetupStep::Repository => {
-            // Fields: 0=Owner, 1=Repo, 2=ProjectID, 3=BaseURL(if advanced)
+            // Calculate max field based on provider
+            // GitLab: 0=Owner, 1=Repo, 2=ProjectID, 3=BaseURL(if advanced)
+            // GitHub: 0=Owner, 1=Repo, 2=BaseURL(if advanced)
+            // Codeberg: 0=Owner, 1=Repo, 2=CI Provider, 3=WoodpeckerID(if Woodpecker), 4=BaseURL(if advanced)
             let max_field = if git_setup.advanced_expanded {
-                3
-            } else if matches!(provider, grove::app::config::GitProvider::GitLab) {
-                2 // GitLab has 3 fields (owner, repo, project_id)
+                match provider {
+                    grove::app::config::GitProvider::GitLab => 3,
+                    grove::app::config::GitProvider::GitHub => 2,
+                    grove::app::config::GitProvider::Codeberg => {
+                        if matches!(
+                            git_setup.ci_provider,
+                            grove::app::config::CodebergCiProvider::Woodpecker
+                        ) {
+                            4
+                        } else {
+                            3
+                        }
+                    }
+                }
             } else {
-                1 // GitHub/Codeberg have 2 fields (owner, repo)
+                match provider {
+                    grove::app::config::GitProvider::GitLab => 2,
+                    grove::app::config::GitProvider::GitHub => 1,
+                    grove::app::config::GitProvider::Codeberg => {
+                        if matches!(
+                            git_setup.ci_provider,
+                            grove::app::config::CodebergCiProvider::Woodpecker
+                        ) {
+                            3
+                        } else {
+                            2
+                        }
+                    }
+                }
             };
+
+            // Check if current field is the dropdown (field_index == 2 for Codeberg CI provider)
+            let is_dropdown = matches!(provider, grove::app::config::GitProvider::Codeberg)
+                && git_setup.field_index == 2
+                && !git_setup.editing_text;
+
             match key.code {
                 KeyCode::Esc => Some(Action::GitSetupPrevStep),
                 KeyCode::Enter => {
-                    if git_setup.field_index < max_field {
+                    if is_dropdown {
+                        Some(Action::GitSetupToggleDropdown)
+                    } else if git_setup.field_index < max_field {
                         Some(Action::GitSetupStartEdit)
                     } else {
                         Some(Action::GitSetupComplete)
@@ -1671,9 +1706,21 @@ fn handle_git_setup_key(
                 }
                 KeyCode::Up | KeyCode::Char('k') => Some(Action::GitSetupNavigatePrev),
                 KeyCode::Down | KeyCode::Char('j') => Some(Action::GitSetupNavigateNext),
-                KeyCode::Right | KeyCode::Char('l') => Some(Action::GitSetupComplete),
-                KeyCode::Left | KeyCode::Char('h') if git_setup.advanced_expanded => {
-                    Some(Action::GitSetupToggleAdvanced)
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if is_dropdown {
+                        Some(Action::GitSetupDropdownNext)
+                    } else {
+                        Some(Action::GitSetupComplete)
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if is_dropdown {
+                        Some(Action::GitSetupDropdownPrev)
+                    } else if git_setup.advanced_expanded {
+                        Some(Action::GitSetupToggleAdvanced)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             }
@@ -7901,6 +7948,8 @@ async fn process_action(
             state.git_setup.field_index = 0;
             state.git_setup.advanced_expanded = false;
             state.git_setup.editing_text = false;
+            state.git_setup.dropdown_open = false;
+            state.git_setup.dropdown_index = 0;
             state.git_setup.text_buffer.clear();
             state.git_setup.loading = false;
             state.git_setup.project_id.clear();
@@ -7909,6 +7958,8 @@ async fn process_action(
             state.git_setup.base_url.clear();
             state.git_setup.detected_from_remote = false;
             state.git_setup.project_name = None;
+            state.git_setup.ci_provider = grove::app::config::CodebergCiProvider::default();
+            state.git_setup.woodpecker_repo_id.clear();
 
             // Try to auto-detect from git remote
             if let Some(remote_info) = grove::git::parse_remote_info(&state.repo_path) {
@@ -7951,6 +8002,12 @@ async fn process_action(
                     if state.settings.repo_config.git.codeberg.base_url != "https://codeberg.org" {
                         state.git_setup.base_url =
                             state.settings.repo_config.git.codeberg.base_url.clone();
+                    }
+                    state.git_setup.ci_provider =
+                        state.settings.repo_config.git.codeberg.ci_provider;
+                    if let Some(wp_id) = state.settings.repo_config.git.codeberg.woodpecker_repo_id
+                    {
+                        state.git_setup.woodpecker_repo_id = wp_id.to_string();
                     }
                 }
             }
@@ -8113,6 +8170,12 @@ async fn process_action(
                         Some(state.git_setup.owner.clone());
                     state.settings.repo_config.git.codeberg.repo =
                         Some(state.git_setup.repo.clone());
+                    state.settings.repo_config.git.codeberg.ci_provider =
+                        state.git_setup.ci_provider;
+                    if !state.git_setup.woodpecker_repo_id.is_empty() {
+                        state.settings.repo_config.git.codeberg.woodpecker_repo_id =
+                            state.git_setup.woodpecker_repo_id.parse().ok();
+                    }
                     if !state.git_setup.base_url.is_empty() {
                         state.settings.repo_config.git.codeberg.base_url =
                             state.git_setup.base_url.clone();
@@ -8121,15 +8184,17 @@ async fn process_action(
                         state.log_error(format!("Failed to save project config: {}", e));
                     } else {
                         state.log_info(format!(
-                            "Codeberg setup complete: {}/{}",
-                            state.git_setup.owner, state.git_setup.repo
+                            "Codeberg setup complete: {}/{} (CI: {:?})",
+                            state.git_setup.owner,
+                            state.git_setup.repo,
+                            state.git_setup.ci_provider
                         ));
                         codeberg_client.reconfigure(
                             Some(&state.git_setup.owner),
                             Some(&state.git_setup.repo),
                             Some(&state.settings.repo_config.git.codeberg.base_url),
                             grove::app::Config::codeberg_token().as_deref(),
-                            state.settings.repo_config.git.codeberg.ci_provider,
+                            state.git_setup.ci_provider,
                             grove::app::Config::woodpecker_token().as_deref(),
                             state.settings.repo_config.git.codeberg.woodpecker_repo_id,
                         );
@@ -8179,10 +8244,45 @@ async fn process_action(
             state.git_setup.loading = false;
             state.git_setup.error = Some(message);
         }
-        Action::GitSetupToggleDropdown => {}
-        Action::GitSetupDropdownNext => {}
-        Action::GitSetupDropdownPrev => {}
-        Action::GitSetupConfirmDropdown => {}
+        Action::GitSetupToggleDropdown => {
+            if state.git_setup.dropdown_open {
+                // Confirm the selection
+                state.git_setup.dropdown_open = false;
+                if state.git_setup.dropdown_index == 0 {
+                    state.git_setup.ci_provider =
+                        grove::app::config::CodebergCiProvider::ForgejoActions;
+                } else {
+                    state.git_setup.ci_provider =
+                        grove::app::config::CodebergCiProvider::Woodpecker;
+                }
+            } else {
+                // Open the dropdown
+                state.git_setup.dropdown_open = true;
+                state.git_setup.dropdown_index = match state.git_setup.ci_provider {
+                    grove::app::config::CodebergCiProvider::ForgejoActions => 0,
+                    grove::app::config::CodebergCiProvider::Woodpecker => 1,
+                };
+            }
+        }
+        Action::GitSetupDropdownNext => {
+            state.git_setup.dropdown_index = (state.git_setup.dropdown_index + 1) % 2;
+        }
+        Action::GitSetupDropdownPrev => {
+            state.git_setup.dropdown_index = if state.git_setup.dropdown_index == 0 {
+                1
+            } else {
+                0
+            };
+        }
+        Action::GitSetupConfirmDropdown => {
+            state.git_setup.dropdown_open = false;
+            if state.git_setup.dropdown_index == 0 {
+                state.git_setup.ci_provider =
+                    grove::app::config::CodebergCiProvider::ForgejoActions;
+            } else {
+                state.git_setup.ci_provider = grove::app::config::CodebergCiProvider::Woodpecker;
+            }
+        }
 
         // Dev Server Actions
         Action::RequestStartDevServer => {
