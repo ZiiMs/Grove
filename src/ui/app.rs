@@ -17,8 +17,9 @@ use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
     DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GitSetupModal,
     GlobalSetupWizard, HelpOverlay, LoadingOverlay, OutputViewWidget, PmSetupModal,
-    ProjectSetupWizard, SettingsModal, StatusBarWidget, StatusDropdown, SubtaskStatusDropdown,
-    SystemMetricsWidget, TaskListModal, TaskReassignmentWarningModal, ToastWidget,
+    ProjectSetupWizard, SettingsModal, StatusBarWidget, StatusDebugOverlay, StatusDropdown,
+    SubtaskStatusDropdown, SystemMetricsWidget, TaskListModal, TaskReassignmentWarningModal,
+    ToastWidget,
 };
 
 #[derive(Clone)]
@@ -126,6 +127,12 @@ impl<'a> AppWidget<'a> {
 
         if self.state.show_help {
             HelpOverlay::new(&self.state.config.keybinds).render(frame, size);
+        }
+
+        if self.state.show_status_debug {
+            if let Some(agent) = self.state.selected_agent() {
+                StatusDebugOverlay::new(agent).render(frame, size);
+            }
         }
 
         if self.state.settings.active {

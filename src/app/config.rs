@@ -228,6 +228,8 @@ pub struct GlobalConfig {
     pub worktree_location: WorktreeLocation,
     #[serde(default = "default_editor")]
     pub editor: String,
+    #[serde(default)]
+    pub debug_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -561,6 +563,8 @@ pub struct Keybinds {
     pub show_tasks: Keybind,
     #[serde(default = "default_refresh_task_list")]
     pub refresh_task_list: Keybind,
+    #[serde(default = "default_debug_status")]
+    pub debug_status: Keybind,
 }
 
 fn default_nav_down() -> Keybind {
@@ -644,6 +648,9 @@ fn default_show_tasks() -> Keybind {
 fn default_refresh_task_list() -> Keybind {
     Keybind::new("r")
 }
+fn default_debug_status() -> Keybind {
+    Keybind::new("D")
+}
 
 impl Default for Keybinds {
     fn default() -> Self {
@@ -675,6 +682,7 @@ impl Default for Keybinds {
             open_editor: default_open_editor(),
             show_tasks: default_show_tasks(),
             refresh_task_list: default_refresh_task_list(),
+            debug_status: default_debug_status(),
         }
     }
 }
@@ -709,6 +717,7 @@ impl Keybinds {
             ("open_editor", &self.open_editor),
             ("show_tasks", &self.show_tasks),
             ("refresh_task_list", &self.refresh_task_list),
+            ("debug_status", &self.debug_status),
         ]
     }
 

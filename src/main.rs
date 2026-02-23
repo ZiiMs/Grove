@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use grove::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
-    AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
+    AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus, StatusDetection,
 };
 use grove::airtable::{parse_airtable_record_id, AirtableTaskStatus, OptionalAirtableClient};
 use grove::app::{
@@ -309,12 +309,20 @@ async fn main() -> Result<()> {
     let agent_poll_tx = action_tx.clone();
     let selected_rx_clone = selected_watch_rx.clone();
     let ai_agent = config.global.ai_agent.clone();
+    let debug_mode = config.global.debug_mode;
     tokio::spawn(async move {
         use futures::future::FutureExt;
         use std::panic::AssertUnwindSafe;
 
         let result = AssertUnwindSafe(async {
-            poll_agents(agent_watch_rx, selected_rx_clone, agent_poll_tx, ai_agent).await
+            poll_agents(
+                agent_watch_rx,
+                selected_rx_clone,
+                agent_poll_tx,
+                ai_agent,
+                debug_mode,
+            )
+            .await
         })
         .catch_unwind()
         .await;
@@ -1228,6 +1236,12 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     if matches_keybind(key, &kb.show_tasks) {
         return Some(Action::EnterInputMode(InputMode::BrowseTasks));
     }
+
+    // Status debug
+    if matches_keybind(key, &kb.debug_status) {
+        return Some(Action::ToggleStatusDebug);
+    }
+
     match key.code {
         KeyCode::Char('T') => {
             let selected_id = state.selected_agent_id();
@@ -2046,7 +2060,11 @@ async fn process_action(
         }
 
         // Status updates
-        Action::UpdateAgentStatus { id, status } => {
+        Action::UpdateAgentStatus {
+            id,
+            status,
+            status_reason,
+        } => {
             if let Some(agent) = state.agents.get_mut(&id) {
                 if matches!(agent.status, grove::agent::AgentStatus::Paused) {
                     return Ok(false);
@@ -2058,6 +2076,9 @@ async fn process_action(
                 let changed = old_label != new_label;
 
                 agent.set_status(status);
+                if let Some(reason) = status_reason {
+                    agent.status_reason = Some(reason);
+                }
                 if changed {
                     state.log_debug(format!("Agent '{}': {} -> {}", name, old_label, new_label));
                 }
@@ -5365,6 +5386,14 @@ async fn process_action(
             state.show_logs = !state.show_logs;
         }
 
+        Action::ToggleStatusDebug => {
+            if state.config.global.debug_mode {
+                state.show_status_debug = !state.show_status_debug;
+            } else {
+                state.show_info("Debug mode is disabled. Enable it in Settings > General.");
+            }
+        }
+
         Action::ShowError(msg) => {
             state.toast = Some(Toast::new(msg, ToastLevel::Error));
         }
@@ -8667,6 +8696,7 @@ async fn poll_agents(
     mut selected_rx: watch::Receiver<Option<Uuid>>,
     tx: mpsc::UnboundedSender<Action>,
     ai_agent: grove::app::config::AiAgent,
+    debug_mode: bool,
 ) {
     use std::collections::HashMap;
 
@@ -8789,10 +8819,20 @@ async fn poll_agents(
                     }))
                     .unwrap_or_else(|e| {
                         tracing::warn!("detect_status_for_agent panicked: {:?}", e);
-                        AgentStatus::Idle
+                        StatusDetection::new(AgentStatus::Idle)
                     });
 
-                    let _ = tx.send(Action::UpdateAgentStatus { id, status });
+                    let status_reason = if debug_mode {
+                        status.to_status_reason()
+                    } else {
+                        None
+                    };
+
+                    let _ = tx.send(Action::UpdateAgentStatus {
+                        id,
+                        status: status.status,
+                        status_reason,
+                    });
 
                     // Check for MR URLs detection
                     if !agents_with_mr.contains(&id) {

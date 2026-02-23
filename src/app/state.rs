@@ -165,7 +165,9 @@ pub enum SettingsField {
     KbOpenEditor,
     KbShowTasks,
     KbRefreshTaskList,
+    KbDebugStatus,
     Version,
+    DebugMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,7 +332,8 @@ impl SettingsField {
             | SettingsField::Version
             | SettingsField::SummaryPrompt
             | SettingsField::MergePrompt
-            | SettingsField::PushPrompt => SettingsTab::General,
+            | SettingsField::PushPrompt
+            | SettingsField::DebugMode => SettingsTab::General,
             SettingsField::GitProvider
             | SettingsField::GitLabProjectId
             | SettingsField::GitLabBaseUrl
@@ -395,7 +398,8 @@ impl SettingsField {
             | SettingsField::KbQuit
             | SettingsField::KbOpenEditor
             | SettingsField::KbShowTasks
-            | SettingsField::KbRefreshTaskList => SettingsTab::Keybinds,
+            | SettingsField::KbRefreshTaskList
+            | SettingsField::KbDebugStatus => SettingsTab::Keybinds,
         }
     }
 
@@ -436,6 +440,7 @@ impl SettingsField {
                 | SettingsField::KbOpenEditor
                 | SettingsField::KbShowTasks
                 | SettingsField::KbRefreshTaskList
+                | SettingsField::KbDebugStatus
         )
     }
 
@@ -468,6 +473,7 @@ impl SettingsField {
             SettingsField::KbOpenEditor => Some("Open in Editor"),
             SettingsField::KbShowTasks => Some("Show Tasks"),
             SettingsField::KbRefreshTaskList => Some("Refresh Task List"),
+            SettingsField::KbDebugStatus => Some("Debug Status"),
             _ => None,
         }
     }
@@ -490,6 +496,7 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::AiAgent),
                 SettingsItem::Field(SettingsField::Editor),
                 SettingsItem::Field(SettingsField::LogLevel),
+                SettingsItem::Field(SettingsField::DebugMode),
                 SettingsItem::Category(SettingsCategory::Storage),
                 SettingsItem::Field(SettingsField::WorktreeLocation),
                 SettingsItem::Category(SettingsCategory::Prompts),
@@ -619,6 +626,7 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::KbRefreshAll),
                 SettingsItem::Field(SettingsField::KbToggleHelp),
                 SettingsItem::Field(SettingsField::KbToggleSettings),
+                SettingsItem::Field(SettingsField::KbDebugStatus),
                 SettingsItem::Field(SettingsField::KbQuit),
                 SettingsItem::ActionButton(ActionButtonType::ResetTab),
             ],
@@ -794,6 +802,7 @@ impl SettingsState {
             SettingsField::KbOpenEditor => Some(&self.pending_keybinds.open_editor),
             SettingsField::KbShowTasks => Some(&self.pending_keybinds.show_tasks),
             SettingsField::KbRefreshTaskList => Some(&self.pending_keybinds.refresh_task_list),
+            SettingsField::KbDebugStatus => Some(&self.pending_keybinds.debug_status),
             _ => None,
         }
     }
@@ -827,6 +836,7 @@ impl SettingsState {
             SettingsField::KbOpenEditor => self.pending_keybinds.open_editor = keybind,
             SettingsField::KbShowTasks => self.pending_keybinds.show_tasks = keybind,
             SettingsField::KbRefreshTaskList => self.pending_keybinds.refresh_task_list = keybind,
+            SettingsField::KbDebugStatus => self.pending_keybinds.debug_status = keybind,
             _ => {}
         }
         self.keybind_conflicts = self.pending_keybinds.find_conflicts();
@@ -951,6 +961,7 @@ pub struct AppState {
     pub task_status_dropdown: Option<TaskStatusDropdownState>,
     pub subtask_status_dropdown: Option<SubtaskStatusDropdownState>,
     pub agent_list_scroll: usize,
+    pub show_status_debug: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1110,6 +1121,7 @@ impl AppState {
             task_status_dropdown: None,
             subtask_status_dropdown: None,
             agent_list_scroll: 0,
+            show_status_debug: false,
         }
     }
 
