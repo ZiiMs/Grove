@@ -859,7 +859,7 @@ impl<'a> PmSetupModal<'a> {
         } else {
             match self.state.step {
                 PmSetupStep::Token => "[Enter] Next  [Esc] Cancel",
-                PmSetupStep::Workspace => "[Enter] Open Dropdown  [Enter] Select  [Esc] Back",
+                PmSetupStep::Workspace => "[Enter] Open Dropdown  [c] Continue  [Esc] Back",
                 PmSetupStep::Project => {
                     if self.state.advanced_expanded {
                         "[c] Finish  [←][→] Toggle Advanced  [Esc] Back"

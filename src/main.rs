@@ -1535,11 +1535,11 @@ fn handle_pm_setup_key(
             if pm_setup.field_index > 0 && pm_setup.advanced_expanded {
                 match key.code {
                     KeyCode::Esc => Some(Action::PmSetupPrevStep),
-                    KeyCode::Enter => Some(Action::PmSetupNextStep),
+                    KeyCode::Char('c') => Some(Action::PmSetupNextStep),
                     KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
                     KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
                     KeyCode::Backspace => Some(Action::PmSetupBackspace),
-                    KeyCode::Char(ch) if ch != 'j' && ch != 'k' => {
+                    KeyCode::Char(ch) if ch != 'c' && ch != 'j' && ch != 'k' => {
                         Some(Action::PmSetupInputChar(ch))
                     }
                     KeyCode::Left => Some(Action::PmSetupToggleAdvanced),
@@ -1552,9 +1552,10 @@ fn handle_pm_setup_key(
                         if pm_setup.field_index == 0 && !pm_setup.teams.is_empty() {
                             Some(Action::PmSetupToggleDropdown)
                         } else {
-                            Some(Action::PmSetupNextStep)
+                            None
                         }
                     }
+                    KeyCode::Char('c') => Some(Action::PmSetupNextStep),
                     KeyCode::Up | KeyCode::Char('k') => Some(Action::PmSetupNavigatePrev),
                     KeyCode::Down | KeyCode::Char('j') => Some(Action::PmSetupNavigateNext),
                     KeyCode::Right => Some(Action::PmSetupToggleAdvanced),
