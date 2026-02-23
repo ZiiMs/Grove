@@ -339,6 +339,25 @@ pub enum Action {
         message: String,
     },
     PmSetupComplete,
+
+    // Git Setup Wizard
+    OpenGitSetup,
+    CloseGitSetup,
+    GitSetupNextStep,
+    GitSetupPrevStep,
+    GitSetupToggleAdvanced,
+    GitSetupNavigateNext,
+    GitSetupNavigatePrev,
+    GitSetupToggleDropdown,
+    GitSetupDropdownNext,
+    GitSetupDropdownPrev,
+    GitSetupConfirmDropdown,
+    GitSetupInputChar(char),
+    GitSetupBackspace,
+    GitSetupStartEdit,
+    GitSetupCancelEdit,
+    GitSetupConfirmEdit,
+    GitSetupComplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
