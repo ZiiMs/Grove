@@ -687,6 +687,7 @@ pub struct SettingsState {
     pub pending_editor: String,
     pub pending_log_level: ConfigLogLevel,
     pub pending_worktree_location: WorktreeLocation,
+    pub pending_debug_mode: bool,
     pub pending_ui: UiConfig,
     pub repo_config: RepoConfig,
     pub pending_keybinds: Keybinds,
@@ -711,6 +712,7 @@ impl Default for SettingsState {
             pending_editor: String::new(),
             pending_log_level: ConfigLogLevel::default(),
             pending_worktree_location: WorktreeLocation::default(),
+            pending_debug_mode: false,
             pending_ui: UiConfig::default(),
             repo_config: RepoConfig::default(),
             pending_keybinds: Keybinds::default(),
@@ -879,6 +881,7 @@ impl SettingsState {
         self.pending_editor = "code {path}".to_string();
         self.pending_log_level = ConfigLogLevel::default();
         self.pending_worktree_location = WorktreeLocation::default();
+        self.pending_debug_mode = false;
         self.pending_ui = UiConfig::default();
         self.repo_config.prompts = crate::app::config::PromptsConfig::default();
     }

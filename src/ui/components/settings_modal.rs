@@ -20,7 +20,6 @@ pub struct SettingsModal<'a> {
     log_level: &'a ConfigLogLevel,
     worktree_location: &'a WorktreeLocation,
     ui_config: &'a UiConfig,
-    debug_mode: bool,
 }
 
 impl<'a> SettingsModal<'a> {
@@ -30,7 +29,6 @@ impl<'a> SettingsModal<'a> {
         log_level: &'a ConfigLogLevel,
         worktree_location: &'a WorktreeLocation,
         ui_config: &'a UiConfig,
-        debug_mode: bool,
     ) -> Self {
         Self {
             state,
@@ -38,7 +36,6 @@ impl<'a> SettingsModal<'a> {
             log_level,
             worktree_location,
             ui_config,
-            debug_mode,
         }
     }
 
@@ -405,7 +402,12 @@ impl<'a> SettingsModal<'a> {
             ),
             SettingsField::DebugMode => (
                 "Debug Mode".to_string(),
-                if self.debug_mode { "[x]" } else { "[ ]" }.to_string(),
+                if self.state.pending_debug_mode {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
                 true,
             ),
             SettingsField::GitProvider => (

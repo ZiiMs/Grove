@@ -5925,6 +5925,7 @@ async fn process_action(
                 state.settings.pending_editor = state.config.global.editor.clone();
                 state.settings.pending_log_level = state.config.global.log_level;
                 state.settings.pending_worktree_location = state.config.global.worktree_location;
+                state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
             }
         }
@@ -6241,6 +6242,10 @@ async fn process_action(
                 grove::app::SettingsField::ShowBanner => {
                     state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
                     state.config.ui.show_banner = state.settings.pending_ui.show_banner;
+                }
+                grove::app::SettingsField::DebugMode => {
+                    state.settings.pending_debug_mode = !state.settings.pending_debug_mode;
+                    state.config.global.debug_mode = state.settings.pending_debug_mode;
                 }
                 grove::app::SettingsField::ProjectMgmtProvider => {
                     let current = state.settings.repo_config.project_mgmt.provider;
@@ -6994,6 +6999,7 @@ async fn process_action(
             state.config.global.editor = state.settings.pending_editor.clone();
             state.config.global.log_level = state.settings.pending_log_level;
             state.config.global.worktree_location = state.settings.pending_worktree_location;
+            state.config.global.debug_mode = state.settings.pending_debug_mode;
             state.config.ui = state.settings.pending_ui.clone();
             state.config.keybinds = state.settings.pending_keybinds.clone();
 
