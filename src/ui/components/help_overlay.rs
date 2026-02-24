@@ -180,6 +180,10 @@ impl<'a> HelpOverlay<'a> {
                 "  {:8} Toggle this help",
                 kb.toggle_help.display_short()
             )),
+            Line::from(format!(
+                "  {:8} Debug status (when enabled)",
+                kb.debug_status.display_short()
+            )),
             Line::from(format!("  {:8} Quit", kb.quit.display_short())),
             Line::from("  Esc      Cancel/close dialogs"),
             Line::from("  C-c      Force quit"),

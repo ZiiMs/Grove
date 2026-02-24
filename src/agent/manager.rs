@@ -95,7 +95,7 @@ impl AgentManager {
     /// Detect the current status of an agent from its output.
     pub fn detect_status(&self, agent: &Agent) -> Result<AgentStatus> {
         let output = self.capture_output(agent, 50)?;
-        Ok(super::detector::detect_status(&output))
+        Ok(super::detector::detect_status(&output).status)
     }
 
     /// Send input to an agent's tmux session.

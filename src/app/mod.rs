@@ -12,7 +12,7 @@ pub use state::{
     ActionButtonType, AppState, DevServerWarning, DropdownState, GitSetupState, GitSetupStep,
     GlobalSetupState, GlobalSetupStep, LogEntry, LogLevel, PmSetupState, PmSetupStep, PreviewTab,
     ProjectSetupState, ResetType, SettingsCategory, SettingsField, SettingsItem, SettingsState,
-    SettingsTab, StatusOption, SubtaskStatusDropdownState, TaskReassignmentWarning,
+    SettingsTab, SetupSource, StatusOption, SubtaskStatusDropdownState, TaskReassignmentWarning,
     TaskStatusDropdownState, Toast, ToastLevel,
 };
 pub use task_list::{TaskItemStatus, TaskListItem};
