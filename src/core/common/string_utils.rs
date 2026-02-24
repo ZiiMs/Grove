@@ -1,8 +1,3 @@
-pub mod git;
-pub mod pm;
-
-pub use pm::{truncate_with_ellipsis, AuthType, OptionalClient};
-
 pub fn sanitize_branch_name(name: &str) -> String {
     name.split_whitespace()
         .collect::<Vec<_>>()

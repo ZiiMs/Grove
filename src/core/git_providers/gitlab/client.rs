@@ -1,4 +1,4 @@
-use crate::util::git::{
+use crate::core::git_providers::{
     create_forge_client, strip_path_from_url, test_forge_connection, ForgeAuthType,
 };
 use anyhow::{Context, Result};

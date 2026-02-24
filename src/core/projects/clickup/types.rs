@@ -1,4 +1,4 @@
-use crate::util::truncate_with_ellipsis;
+use crate::core::projects::truncate_with_ellipsis;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -1,5 +1,5 @@
 use crate::cache::Cache;
-use crate::util::pm::{create_authenticated_client, AuthType};
+use crate::core::projects::{create_authenticated_client, AuthType};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};

@@ -4,15 +4,15 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::airtable::AirtableTaskStatus;
-use crate::asana::AsanaTaskStatus;
-use crate::clickup::ClickUpTaskStatus;
-use crate::codeberg::PullRequestStatus as CodebergPullRequestStatus;
+use crate::core::git_providers::codeberg::PullRequestStatus as CodebergPullRequestStatus;
+use crate::core::git_providers::github::PullRequestStatus;
+use crate::core::git_providers::gitlab::MergeRequestStatus;
+use crate::core::projects::airtable::AirtableTaskStatus;
+use crate::core::projects::asana::AsanaTaskStatus;
+use crate::core::projects::clickup::ClickUpTaskStatus;
+use crate::core::projects::linear::LinearTaskStatus;
+use crate::core::projects::notion::NotionTaskStatus;
 use crate::git::GitSyncStatus;
-use crate::github::PullRequestStatus;
-use crate::gitlab::MergeRequestStatus;
-use crate::linear::LinearTaskStatus;
-use crate::notion::NotionTaskStatus;
 
 const ACTIVITY_HISTORY_SIZE: usize = 20;
 

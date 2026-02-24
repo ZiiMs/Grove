@@ -1,4 +1,4 @@
-use crate::util::git::{create_forge_client, test_forge_connection, ForgeAuthType};
+use crate::core::git_providers::{create_forge_client, test_forge_connection, ForgeAuthType};
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use tokio::sync::RwLock;

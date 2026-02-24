@@ -5,3 +5,7 @@ pub use helpers::{
     forge_get_with_query, strip_path_from_url, test_forge_connection, ForgeAuthType,
     OptionalForgeClient,
 };
+
+pub mod codeberg;
+pub mod github;
+pub mod gitlab;

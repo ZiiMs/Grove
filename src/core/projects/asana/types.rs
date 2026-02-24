@@ -1,4 +1,4 @@
-use crate::util::truncate_with_ellipsis;
+use crate::core::projects::truncate_with_ellipsis;
 use serde::{Deserialize, Serialize};
 
 /// Represents the Asana task tracking status for an agent.

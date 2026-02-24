@@ -6,7 +6,7 @@ use super::types::{
     AsanaTaskResponse, AsanaTaskSummary, AsanaWorkspacesResponse, SectionOption,
 };
 use crate::cache::Cache;
-use crate::util::pm::{create_authenticated_client, AuthType};
+use crate::core::projects::{create_authenticated_client, AuthType};
 
 /// Asana API client.
 #[allow(clippy::type_complexity)]
