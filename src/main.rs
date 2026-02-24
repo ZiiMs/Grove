@@ -2912,6 +2912,12 @@ async fn process_action(
                             Ok(issue) => {
                                 if let Some(ref team_id) = configured_team_id {
                                     if &issue.team_id != team_id {
+                                        tracing::warn!(
+                                            "Linear issue {} belongs to team '{}', but this project is configured for team '{}'",
+                                            issue_id,
+                                            issue.team_id,
+                                            team_id
+                                        );
                                         return;
                                     }
                                 }
