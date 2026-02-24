@@ -792,10 +792,12 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> Status
             .with_pattern("question_panel");
     }
 
-    // 3. Check for working indicator ("esc interrupt" or progress animation at bottom)
-    if last_5_text.contains("esc") && last_5_text.contains("interrupt") {
+    // 3. Check for working indicator ("esc interrupt" without "to" - excludes plan mode hints)
+    // Running shows: "esc interrupt" (e.g., "⬝⬝⬝⬝  esc interrupt")
+    // Plan mode shows: "esc to interrupt" (hint text, not actual working state)
+    if last_5_text.contains("esc interrupt") && !last_5_text.contains("esc to interrupt") {
         return StatusDetection::new(AgentStatus::Running)
-            .with_reason("Found 'esc to interrupt' in last 5 lines")
+            .with_reason("Found 'esc interrupt' (not 'esc to interrupt') in last 5 lines")
             .with_pattern("esc_interrupt");
     }
     // Check for progress animation (multiple consecutive dots)
@@ -1262,6 +1264,19 @@ mod tests {
         assert!(
             matches!(status.status, AgentStatus::Idle),
             "Expected Idle with plan mode footer, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_opencode_plan_mode_hint_not_running() {
+        // Plan mode hint with "esc to interrupt" should NOT trigger Running
+        // This was causing false positives when checking "esc" && "interrupt" separately
+        let output = "  ┃  ⏸ plan mode on (shift+tab to cycle) · esc to interrupt";
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle, got {:?}",
             status
         );
     }

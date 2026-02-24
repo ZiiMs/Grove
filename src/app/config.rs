@@ -937,6 +937,7 @@ pub struct RepoAirtableConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RepoLinearConfig {
     pub team_id: Option<String>,
+    pub username: Option<String>,
     pub in_progress_state: Option<String>,
     pub done_state: Option<String>,
 }

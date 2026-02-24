@@ -29,6 +29,13 @@ impl AgentManager {
         ai_agent: &AiAgent,
         worktree_symlinks: &[String],
     ) -> Result<Agent> {
+        tracing::debug!(
+            "AgentManager::create_agent - name: {:?}, branch: {:?}, repo_path: {:?}, worktree_base: {:?}",
+            name,
+            branch,
+            self.repo_path,
+            self.worktree_base
+        );
         let worktree = Worktree::new(&self.repo_path, self.worktree_base.clone());
         let worktree_path = worktree
             .create(branch)

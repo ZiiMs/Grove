@@ -16,6 +16,13 @@ impl Worktree {
     }
 
     pub fn create(&self, branch: &str) -> Result<String> {
+        tracing::debug!(
+            "Worktree::create - repo_path: {:?}, branch: {:?}, worktree_base: {:?}",
+            self.repo_path,
+            branch,
+            self.worktree_base
+        );
+
         let repo = Repository::open(&self.repo_path).context("Failed to open repository")?;
 
         if !self.worktree_base.exists() {
@@ -26,14 +33,26 @@ impl Worktree {
         let worktree_path = self.worktree_base.join(branch.replace('/', "-"));
         let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
+        tracing::debug!("Worktree::create - worktree_path: {:?}", worktree_path_str);
+
         if worktree_path.exists() {
+            tracing::debug!("Worktree::create - worktree_path already exists, returning early");
             return Ok(worktree_path_str);
         }
 
         let branch_ref = format!("refs/heads/{}", branch);
+        tracing::debug!("Worktree::create - branch_ref: {:?}", branch_ref);
+
         let reference = match repo.find_reference(&branch_ref) {
-            Ok(r) => r,
-            Err(_) => {
+            Ok(r) => {
+                tracing::debug!("Worktree::create - found existing reference");
+                r
+            }
+            Err(e) => {
+                tracing::debug!(
+                    "Worktree::create - reference not found: {:?}, creating new branch",
+                    e
+                );
                 let head = repo.head().context("Failed to get HEAD")?;
                 let commit = head.peel_to_commit().context("Failed to get HEAD commit")?;
                 repo.branch(branch, &commit, false)
@@ -42,6 +61,7 @@ impl Worktree {
             }
         };
 
+        tracing::debug!("Worktree::create - calling repo.worktree()");
         repo.worktree(
             branch,
             &worktree_path,
@@ -49,6 +69,7 @@ impl Worktree {
         )
         .context("Failed to create worktree")?;
 
+        tracing::debug!("Worktree::create - worktree created successfully");
         Ok(worktree_path_str)
     }
 
