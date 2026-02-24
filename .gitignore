@@ -1,7 +1,8 @@
 # Rust build artifacts
 /target
 .grove/
-
+.worktree/*
+.worktree/
 # Editor files
 *.swp
 *.swo
