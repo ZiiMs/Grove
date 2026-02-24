@@ -96,6 +96,10 @@ impl<'a> HelpOverlay<'a> {
                 kb.resume.display_short()
             )),
             Line::from(format!(
+                "  {:8} Toggle auto-continue session",
+                kb.toggle_continue.display_short()
+            )),
+            Line::from(format!(
                 "  {:8} Merge main into branch",
                 kb.merge.display_short()
             )),

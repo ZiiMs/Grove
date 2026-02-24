@@ -185,10 +185,17 @@ async fn main() -> Result<()> {
         state.log_info("Project not configured - showing project setup wizard".to_string());
     }
 
+    let agent_manager = Arc::new(AgentManager::new(&repo_path, state.worktree_base.clone()));
+
+    let mut agents_to_continue: Vec<Agent> = Vec::new();
+
     if let Ok(Some(session)) = storage.load() {
         let count = session.agents.len();
         for mut agent in session.agents {
             agent.migrate_legacy();
+            if agent.continue_session {
+                agents_to_continue.push(agent.clone());
+            }
             state.add_agent(agent);
         }
         state.selected_index = session
@@ -196,8 +203,6 @@ async fn main() -> Result<()> {
             .min(state.agent_order.len().saturating_sub(1));
         state.log_info(format!("Loaded {} agents from session", count));
     }
-
-    let agent_manager = Arc::new(AgentManager::new(&repo_path, state.worktree_base.clone()));
 
     let gitlab_base_url = &state.settings.repo_config.git.gitlab.base_url;
     let gitlab_project_id = state.settings.repo_config.git.gitlab.project_id;
@@ -283,6 +288,54 @@ async fn main() -> Result<()> {
 
     // Create action channel
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
+
+    // Auto-continue agents that have continue_session enabled
+    if !agents_to_continue.is_empty() {
+        let ai_agent = config.global.ai_agent.clone();
+        let worktree_symlinks = state
+            .settings
+            .repo_config
+            .dev_server
+            .worktree_symlinks
+            .clone();
+        let worktree_base = state.worktree_base.clone();
+        let repo_path = repo_path.clone();
+        let tx = action_tx.clone();
+        tokio::spawn(async move {
+            for agent in agents_to_continue {
+                let worktree_path = agent.worktree_path.clone();
+                let tmux_session = agent.tmux_session.clone();
+                let branch = agent.branch.clone();
+                let name = agent.name.clone();
+
+                let worktree = grove::git::Worktree::new(&repo_path, worktree_base.clone());
+                if !std::path::Path::new(&worktree_path).exists() {
+                    if let Err(e) = std::process::Command::new("git")
+                        .args(["worktree", "add", &worktree_path, &branch])
+                        .output()
+                    {
+                        eprintln!("Failed to create worktree for '{}': {}", name, e);
+                        continue;
+                    }
+                    if let Err(e) = worktree.create_symlinks(&worktree_path, &worktree_symlinks) {
+                        eprintln!("Failed to create symlinks for '{}': {}", name, e);
+                    }
+                }
+
+                let session = grove::tmux::TmuxSession::new(&tmux_session);
+                if !session.exists() {
+                    if let Err(e) = session.create(&worktree_path, ai_agent.command()) {
+                        eprintln!("Failed to create tmux session for '{}': {}", name, e);
+                        continue;
+                    }
+                }
+                let _ = tx.send(Action::ShowToast {
+                    message: format!("Auto-continued '{}'", name),
+                    level: ToastLevel::Info,
+                });
+            }
+        });
+    }
 
     // Create dev server manager
     let devserver_manager = Arc::new(tokio::sync::Mutex::new(DevServerManager::new(
@@ -1108,6 +1161,13 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Refresh selected agent status (only when not paused)
     if !is_paused && matches_keybind(key, &kb.resume) && state.selected_agent_id().is_some() {
         return Some(Action::RefreshSelected);
+    }
+
+    // Toggle continue session
+    if matches_keybind(key, &kb.toggle_continue) {
+        return state
+            .selected_agent_id()
+            .map(|id| Action::ToggleContinueSession { id });
     }
 
     // Yank (copy) agent name to clipboard
@@ -2282,6 +2342,32 @@ async fn process_action(
                     });
                 });
             }
+        }
+
+        Action::ToggleContinueSession { id } => {
+            let (continue_session, agent_name) = {
+                if let Some(agent) = state.agents.get_mut(&id) {
+                    agent.continue_session = !agent.continue_session;
+                    (agent.continue_session, agent.name.clone())
+                } else {
+                    return Ok(false);
+                }
+            };
+            let status = if continue_session {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            state.log_info(format!(
+                "Continue session {} for agent '{}'",
+                status, agent_name
+            ));
+            action_tx
+                .send(Action::ShowToast {
+                    message: format!("Auto-continue {} for '{}'", status, agent_name),
+                    level: ToastLevel::Info,
+                })
+                .ok();
         }
 
         Action::MergeMain { id } => {

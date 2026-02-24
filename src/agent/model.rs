@@ -242,6 +242,9 @@ pub struct Agent {
     /// Whether a work summary has been requested for this agent
     #[serde(default)]
     pub summary_requested: bool,
+    /// Whether to auto-continue this session on app restart
+    #[serde(default)]
+    pub continue_session: bool,
     #[serde(skip)]
     pub status_reason: Option<StatusReason>,
 }
@@ -272,6 +275,7 @@ impl Agent {
             asana_task_status: AsanaTaskStatus::None,
             pm_task_status: ProjectMgmtTaskStatus::None,
             summary_requested: false,
+            continue_session: false,
             status_reason: None,
         }
     }
