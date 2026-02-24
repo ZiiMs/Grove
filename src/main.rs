@@ -2900,9 +2900,31 @@ async fn process_action(
                     let issue_id = parse_linear_issue_id(&url_or_id);
                     let client = Arc::clone(linear_client);
                     let tx = action_tx.clone();
+                    let configured_team_id = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .linear
+                        .team_id
+                        .clone();
                     tokio::spawn(async move {
                         match client.get_issue(&issue_id).await {
                             Ok(issue) => {
+                                if let Some(ref team_id) = configured_team_id {
+                                    if &issue.team_id != team_id {
+                                        let status =
+                                            ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Error {
+                                                id: issue_id,
+                                                message: format!(
+                                                    "Issue belongs to team '{}', but this project is configured for team '{}'",
+                                                    issue.team_id, team_id
+                                                ),
+                                            });
+                                        let _ =
+                                            tx.send(Action::UpdateProjectTaskStatus { id, status });
+                                        return;
+                                    }
+                                }
                                 let is_subtask = issue.parent_id.is_some();
                                 let status = match issue.state_type.as_str() {
                                     "completed" | "cancelled" => LinearTaskStatus::Completed {
