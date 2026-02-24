@@ -1,3 +1,4 @@
+use crate::core::projects::truncate_with_ellipsis;
 use serde::{Deserialize, Serialize};
 
 /// Represents the Asana task tracking status for an agent.
@@ -36,20 +37,23 @@ impl AsanaTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             AsanaTaskStatus::None => "—".to_string(),
-            AsanaTaskStatus::NotStarted { name, .. } => truncate(name, 14),
-            AsanaTaskStatus::InProgress { name, .. } => truncate(name, 14),
-            AsanaTaskStatus::Completed { name, .. } => truncate(name, 14),
-            AsanaTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
+            AsanaTaskStatus::NotStarted { name, .. } => truncate_with_ellipsis(name, 14),
+            AsanaTaskStatus::InProgress { name, .. } => truncate_with_ellipsis(name, 14),
+            AsanaTaskStatus::Completed { name, .. } => truncate_with_ellipsis(name, 14),
+            AsanaTaskStatus::Error { message, .. } => {
+                format!("err: {}", truncate_with_ellipsis(message, 10))
+            }
         }
     }
 
-    /// Display string for the status name column.
     pub fn format_status_name(&self) -> String {
         match self {
             AsanaTaskStatus::None => "—".to_string(),
             AsanaTaskStatus::NotStarted { status_name, .. }
             | AsanaTaskStatus::InProgress { status_name, .. }
-            | AsanaTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
+            | AsanaTaskStatus::Completed { status_name, .. } => {
+                truncate_with_ellipsis(status_name, 10)
+            }
             AsanaTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
@@ -97,15 +101,6 @@ impl AsanaTaskStatus {
             | AsanaTaskStatus::Completed { is_subtask, .. } => *is_subtask,
             AsanaTaskStatus::Error { .. } => false,
         }
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let t: String = s.chars().take(max - 1).collect();
-        format!("{}…", t)
     }
 }
 

@@ -21,21 +21,27 @@ use grove::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
     AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus, StatusDetection,
 };
-use grove::airtable::{parse_airtable_record_id, AirtableTaskStatus, OptionalAirtableClient};
 use grove::app::{
     Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, StatusOption,
     SubtaskStatusDropdownState, TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast,
     ToastLevel,
 };
-use grove::asana::{AsanaTaskStatus, OptionalAsanaClient};
-use grove::clickup::{parse_clickup_task_id, ClickUpTaskStatus, OptionalClickUpClient};
-use grove::codeberg::OptionalCodebergClient;
+use grove::core::git_providers::codeberg::OptionalCodebergClient;
+use grove::core::git_providers::github::OptionalGitHubClient;
+use grove::core::git_providers::gitlab::OptionalGitLabClient;
+use grove::core::projects::airtable::{
+    parse_airtable_record_id, AirtableTaskStatus, OptionalAirtableClient,
+};
+use grove::core::projects::asana::{AsanaTaskStatus, OptionalAsanaClient};
+use grove::core::projects::clickup::{
+    parse_clickup_task_id, ClickUpTaskStatus, OptionalClickUpClient,
+};
+use grove::core::projects::linear::{
+    parse_linear_issue_id, LinearTaskStatus, OptionalLinearClient,
+};
+use grove::core::projects::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
 use grove::devserver::DevServerManager;
 use grove::git::{GitSync, Worktree};
-use grove::github::OptionalGitHubClient;
-use grove::gitlab::OptionalGitLabClient;
-use grove::linear::{parse_linear_issue_id, LinearTaskStatus, OptionalLinearClient};
-use grove::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
 use grove::storage::{save_session, SessionStorage};
 use grove::tmux::is_tmux_available;
 use grove::ui::{AppWidget, DevServerRenderInfo};
@@ -2414,10 +2420,21 @@ async fn process_action(
         Action::UpdateMrStatus { id, status } => {
             // Check current state and extract needed data before mutable borrow
             let should_log = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.mr_status, grove::gitlab::MergeRequestStatus::None);
-                let is_open = matches!(&status, grove::gitlab::MergeRequestStatus::Open { .. });
+                let was_none = matches!(
+                    agent.mr_status,
+                    grove::core::git_providers::gitlab::MergeRequestStatus::None
+                );
+                let is_open = matches!(
+                    &status,
+                    grove::core::git_providers::gitlab::MergeRequestStatus::Open { .. }
+                );
                 if was_none && is_open {
-                    if let grove::gitlab::MergeRequestStatus::Open { iid, url, .. } = &status {
+                    if let grove::core::git_providers::gitlab::MergeRequestStatus::Open {
+                        iid,
+                        url,
+                        ..
+                    } = &status
+                    {
                         Some((agent.name.clone(), *iid, url.clone()))
                     } else {
                         None
@@ -2429,15 +2446,22 @@ async fn process_action(
 
             // Auto-update note based on MR transitions
             let auto_note = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.mr_status, grove::gitlab::MergeRequestStatus::None);
+                let was_none = matches!(
+                    agent.mr_status,
+                    grove::core::git_providers::gitlab::MergeRequestStatus::None
+                );
                 let was_pushing = agent.custom_note.as_deref() == Some("pushing...");
                 let was_merging = agent.custom_note.as_deref() == Some("merging main...");
 
                 match &status {
-                    grove::gitlab::MergeRequestStatus::Open { .. } if was_none || was_pushing => {
+                    grove::core::git_providers::gitlab::MergeRequestStatus::Open { .. }
+                        if was_none || was_pushing =>
+                    {
                         Some("pushed".to_string())
                     }
-                    grove::gitlab::MergeRequestStatus::Merged { .. } => Some("merged".to_string()),
+                    grove::core::git_providers::gitlab::MergeRequestStatus::Merged { .. } => {
+                        Some("merged".to_string())
+                    }
                     _ if was_merging => {
                         // If we had "merging main..." and status updates, merge is done
                         Some("main merged".to_string())
@@ -2485,10 +2509,21 @@ async fn process_action(
         // GitHub operations
         Action::UpdatePrStatus { id, status } => {
             let should_log = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.pr_status, grove::github::PullRequestStatus::None);
-                let is_open = matches!(&status, grove::github::PullRequestStatus::Open { .. });
+                let was_none = matches!(
+                    agent.pr_status,
+                    grove::core::git_providers::github::PullRequestStatus::None
+                );
+                let is_open = matches!(
+                    &status,
+                    grove::core::git_providers::github::PullRequestStatus::Open { .. }
+                );
                 if was_none && is_open {
-                    if let grove::github::PullRequestStatus::Open { number, url, .. } = &status {
+                    if let grove::core::git_providers::github::PullRequestStatus::Open {
+                        number,
+                        url,
+                        ..
+                    } = &status
+                    {
                         Some((agent.name.clone(), *number, url.clone()))
                     } else {
                         None
@@ -2499,15 +2534,22 @@ async fn process_action(
             });
 
             let auto_note = state.agents.get(&id).and_then(|agent| {
-                let was_none = matches!(agent.pr_status, grove::github::PullRequestStatus::None);
+                let was_none = matches!(
+                    agent.pr_status,
+                    grove::core::git_providers::github::PullRequestStatus::None
+                );
                 let was_pushing = agent.custom_note.as_deref() == Some("pushing...");
                 let was_merging = agent.custom_note.as_deref() == Some("merging main...");
 
                 match &status {
-                    grove::github::PullRequestStatus::Open { .. } if was_none || was_pushing => {
+                    grove::core::git_providers::github::PullRequestStatus::Open { .. }
+                        if was_none || was_pushing =>
+                    {
                         Some("pushed".to_string())
                     }
-                    grove::github::PullRequestStatus::Merged { .. } => Some("merged".to_string()),
+                    grove::core::git_providers::github::PullRequestStatus::Merged { .. } => {
+                        Some("merged".to_string())
+                    }
                     _ if was_merging => Some("main merged".to_string()),
                     _ => None,
                 }
@@ -2549,11 +2591,19 @@ async fn process_action(
             let should_log = state.agents.get(&id).and_then(|agent| {
                 let was_none = matches!(
                     agent.codeberg_pr_status,
-                    grove::codeberg::PullRequestStatus::None
+                    grove::core::git_providers::codeberg::PullRequestStatus::None
                 );
-                let is_open = matches!(&status, grove::codeberg::PullRequestStatus::Open { .. });
+                let is_open = matches!(
+                    &status,
+                    grove::core::git_providers::codeberg::PullRequestStatus::Open { .. }
+                );
                 if was_none && is_open {
-                    if let grove::codeberg::PullRequestStatus::Open { number, url, .. } = &status {
+                    if let grove::core::git_providers::codeberg::PullRequestStatus::Open {
+                        number,
+                        url,
+                        ..
+                    } = &status
+                    {
                         Some((agent.name.clone(), *number, url.clone()))
                     } else {
                         None
@@ -5247,8 +5297,11 @@ async fn process_action(
                             } else {
                                 &title_without_id
                             };
-                            let branch =
-                                grove::util::sanitize_linear_branch_name(uname, &identifier, title);
+                            let branch = grove::core::common::sanitize_linear_branch_name(
+                                uname,
+                                &identifier,
+                                title,
+                            );
                             let name = format!("{} {}", identifier, title);
                             (branch, name)
                         }
@@ -5260,7 +5313,7 @@ async fn process_action(
                         }
                     }
                 } else {
-                    let branch = grove::util::sanitize_branch_name(&task.name);
+                    let branch = grove::core::common::sanitize_branch_name(&task.name);
                     if branch.is_empty() {
                         state.show_error("Invalid task name for branch");
                         return Ok(false);
@@ -5489,7 +5542,7 @@ async fn process_action(
                 match mode {
                     InputMode::NewAgent => {
                         if !input.is_empty() {
-                            let branch = grove::util::sanitize_branch_name(&input);
+                            let branch = grove::core::common::sanitize_branch_name(&input);
                             if branch.is_empty() {
                                 action_tx.send(Action::ShowError(
                                     "Invalid name: name cannot be only spaces".to_string(),
@@ -5666,7 +5719,10 @@ async fn process_action(
                     let status = gitlab_client_clone
                         .get_mr_for_branch(&branch_for_gitlab)
                         .await;
-                    if !matches!(status, grove::gitlab::MergeRequestStatus::None) {
+                    if !matches!(
+                        status,
+                        grove::core::git_providers::gitlab::MergeRequestStatus::None
+                    ) {
                         let _ = tx_clone.send(Action::UpdateMrStatus { id, status });
                     }
                 });
@@ -5678,7 +5734,10 @@ async fn process_action(
                     let status = github_client_clone
                         .get_pr_for_branch(&branch_for_github)
                         .await;
-                    if !matches!(status, grove::github::PullRequestStatus::None) {
+                    if !matches!(
+                        status,
+                        grove::core::git_providers::github::PullRequestStatus::None
+                    ) {
                         let _ = tx_clone.send(Action::UpdatePrStatus { id, status });
                     }
                 });
@@ -5690,7 +5749,10 @@ async fn process_action(
                     let status = codeberg_client_clone
                         .get_pr_for_branch(&branch_for_codeberg)
                         .await;
-                    if !matches!(status, grove::codeberg::PullRequestStatus::None) {
+                    if !matches!(
+                        status,
+                        grove::core::git_providers::codeberg::PullRequestStatus::None
+                    ) {
                         let _ = tx_clone.send(Action::UpdateCodebergPrStatus { id, status });
                     }
                 });
@@ -5708,14 +5770,14 @@ async fn process_action(
                                     });
                                     let is_subtask = task.parent.is_some();
                                     let status = if task.completed {
-                                        grove::asana::AsanaTaskStatus::Completed {
+                                        grove::core::projects::asana::AsanaTaskStatus::Completed {
                                             gid: task.gid,
                                             name: task.name,
                                             is_subtask,
                                             status_name: "Complete".to_string(),
                                         }
                                     } else {
-                                        grove::asana::AsanaTaskStatus::InProgress {
+                                        grove::core::projects::asana::AsanaTaskStatus::InProgress {
                                             gid: task.gid,
                                             name: task.name,
                                             url,
@@ -7649,10 +7711,12 @@ async fn process_action(
                             let tx = action_tx.clone();
                             let token = grove::app::Config::notion_token().unwrap();
                             tokio::spawn(async move {
-                                match grove::notion::fetch_databases(&token).await {
+                                match grove::core::projects::notion::fetch_databases(&token).await {
                                     Ok(databases) => {
                                         let parent_pages =
-                                            grove::notion::extract_parent_pages(&databases);
+                                            grove::core::projects::notion::extract_parent_pages(
+                                                &databases,
+                                            );
                                         let _ = tx.send(Action::PmSetupNotionDatabasesLoaded {
                                             databases,
                                             parent_pages,
@@ -7693,7 +7757,7 @@ async fn process_action(
                             let tx = action_tx.clone();
                             let token = grove::app::Config::clickup_token().unwrap();
                             tokio::spawn(async move {
-                                match grove::clickup::fetch_teams(&token).await {
+                                match grove::core::projects::clickup::fetch_teams(&token).await {
                                     Ok(teams) => {
                                         let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
                                     }
@@ -7712,7 +7776,7 @@ async fn process_action(
                             let tx = action_tx.clone();
                             let token = grove::app::Config::airtable_token().unwrap();
                             tokio::spawn(async move {
-                                match grove::airtable::fetch_bases(&token).await {
+                                match grove::core::projects::airtable::fetch_bases(&token).await {
                                     Ok(bases) => {
                                         let _ =
                                             tx.send(Action::PmSetupTeamsLoaded { teams: bases });
@@ -7794,7 +7858,11 @@ async fn process_action(
                             let tx = action_tx.clone();
                             let token = grove::app::Config::clickup_token().unwrap();
                             tokio::spawn(async move {
-                                match grove::clickup::fetch_lists_for_team(&token, &team_id).await {
+                                match grove::core::projects::clickup::fetch_lists_for_team(
+                                    &token, &team_id,
+                                )
+                                .await
+                                {
                                     Ok(lists) => {
                                         let _ =
                                             tx.send(Action::PmSetupTeamsLoaded { teams: lists });
@@ -7822,7 +7890,11 @@ async fn process_action(
                             let tx = action_tx.clone();
                             let token = grove::app::Config::airtable_token().unwrap();
                             tokio::spawn(async move {
-                                match grove::airtable::fetch_tables(&token, &base_id).await {
+                                match grove::core::projects::airtable::fetch_tables(
+                                    &token, &base_id,
+                                )
+                                .await
+                                {
                                     Ok(tables) => {
                                         let _ =
                                             tx.send(Action::PmSetupTeamsLoaded { teams: tables });
@@ -7862,8 +7934,9 @@ async fn process_action(
                 match provider {
                     grove::app::config::ProjectMgmtProvider::Notion => {
                         state.pm_setup.step = grove::app::state::PmSetupStep::Workspace;
-                        state.pm_setup.teams =
-                            grove::notion::extract_parent_pages(&state.pm_setup.all_databases);
+                        state.pm_setup.teams = grove::core::projects::notion::extract_parent_pages(
+                            &state.pm_setup.all_databases,
+                        );
                         state.pm_setup.selected_team_index = 0;
                     }
                     grove::app::config::ProjectMgmtProvider::Asana => {
@@ -7898,7 +7971,7 @@ async fn process_action(
                             let tx = action_tx.clone();
                             let token = grove::app::Config::clickup_token().unwrap();
                             tokio::spawn(async move {
-                                match grove::clickup::fetch_teams(&token).await {
+                                match grove::core::projects::clickup::fetch_teams(&token).await {
                                     Ok(teams) => {
                                         let _ = tx.send(Action::PmSetupTeamsLoaded { teams });
                                     }
@@ -7920,7 +7993,7 @@ async fn process_action(
                             let tx = action_tx.clone();
                             let token = grove::app::Config::airtable_token().unwrap();
                             tokio::spawn(async move {
-                                match grove::airtable::fetch_bases(&token).await {
+                                match grove::core::projects::airtable::fetch_bases(&token).await {
                                     Ok(bases) => {
                                         let _ =
                                             tx.send(Action::PmSetupTeamsLoaded { teams: bases });
@@ -8357,7 +8430,11 @@ async fn process_action(
 
                     tokio::spawn(async move {
                         let path = format!("{}/{}", owner, repo);
-                        match grove::gitlab::fetch_project_by_path(&base_url, &path, &token).await {
+                        match grove::core::git_providers::gitlab::fetch_project_by_path(
+                            &base_url, &path, &token,
+                        )
+                        .await
+                        {
                             Ok((id, name)) => {
                                 let _ = tx.send(Action::GitSetupProjectIdFetched { id, name });
                             }
@@ -8566,7 +8643,11 @@ async fn process_action(
 
                 tokio::spawn(async move {
                     let path = format!("{}/{}", owner, repo);
-                    match grove::gitlab::fetch_project_by_path(&base_url, &path, &token).await {
+                    match grove::core::git_providers::gitlab::fetch_project_by_path(
+                        &base_url, &path, &token,
+                    )
+                    .await
+                    {
                         Ok((id, name)) => {
                             let _ = tx.send(Action::GitSetupProjectIdFetched { id, name });
                         }
@@ -9397,7 +9478,10 @@ async fn poll_gitlab_mrs(
 
         for (id, branch) in branches {
             let status = gitlab_client.get_mr_for_branch(&branch).await;
-            if !matches!(status, grove::gitlab::MergeRequestStatus::None) {
+            if !matches!(
+                status,
+                grove::core::git_providers::gitlab::MergeRequestStatus::None
+            ) {
                 let _ = tx.send(Action::UpdateMrStatus { id, status });
             }
         }
@@ -9428,7 +9512,10 @@ async fn poll_github_prs(
             tracing::info!("GitHub poll: checking branch {}", branch);
             let status = github_client.get_pr_for_branch(&branch).await;
             tracing::info!("GitHub poll: branch {} -> {:?}", branch, status);
-            if !matches!(status, grove::github::PullRequestStatus::None) {
+            if !matches!(
+                status,
+                grove::core::git_providers::github::PullRequestStatus::None
+            ) {
                 let _ = tx.send(Action::UpdatePrStatus { id, status });
             }
         }
@@ -9459,7 +9546,10 @@ async fn poll_codeberg_prs(
             tracing::info!("Codeberg poll: checking branch {}", branch);
             let status = codeberg_client.get_pr_for_branch(&branch).await;
             tracing::info!("Codeberg poll: branch {} -> {:?}", branch, status);
-            if !matches!(status, grove::codeberg::PullRequestStatus::None) {
+            if !matches!(
+                status,
+                grove::core::git_providers::codeberg::PullRequestStatus::None
+            ) {
                 let _ = tx.send(Action::UpdateCodebergPrStatus { id, status });
             }
         }

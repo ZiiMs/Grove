@@ -8,6 +8,10 @@ use ratatui::{
 
 use crate::app::config::{Config, ProjectMgmtProvider};
 use crate::app::state::{PmSetupState, PmSetupStep};
+use crate::ui::helpers::{
+    centered_rect, token_status, STYLE_LABEL, STYLE_LABEL_SELECTED, STYLE_SEPARATOR, STYLE_VALUE,
+    STYLE_VALUE_SELECTED,
+};
 
 pub struct PmSetupModal<'a> {
     state: &'a PmSetupState,
@@ -135,12 +139,7 @@ impl<'a> PmSetupModal<'a> {
     }
 
     fn render_asana_token_step(&self) -> Vec<Line<'static>> {
-        let token_exists = Config::asana_token().is_some();
-        let (status_symbol, status_color) = if token_exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
+        let (status_symbol, status_color) = token_status(Config::asana_token().is_some());
 
         vec![
             Line::from(""),
@@ -400,12 +399,7 @@ impl<'a> PmSetupModal<'a> {
     }
 
     fn render_linear_token_step(&self) -> Vec<Line<'static>> {
-        let token_exists = Config::linear_token().is_some();
-        let (status_symbol, status_color) = if token_exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
+        let (status_symbol, status_color) = token_status(Config::linear_token().is_some());
 
         vec![
             Line::from(""),
@@ -578,12 +572,7 @@ impl<'a> PmSetupModal<'a> {
     }
 
     fn render_notion_token_step(&self) -> Vec<Line<'static>> {
-        let token_exists = Config::notion_token().is_some();
-        let (status_symbol, status_color) = if token_exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
+        let (status_symbol, status_color) = token_status(Config::notion_token().is_some());
 
         vec![
             Line::from(""),
@@ -859,12 +848,7 @@ impl<'a> PmSetupModal<'a> {
     }
 
     fn render_clickup_token_step(&self) -> Vec<Line<'static>> {
-        let token_exists = Config::clickup_token().is_some();
-        let (status_symbol, status_color) = if token_exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
+        let (status_symbol, status_color) = token_status(Config::clickup_token().is_some());
 
         vec![
             Line::from(""),
@@ -1115,12 +1099,7 @@ impl<'a> PmSetupModal<'a> {
     }
 
     fn render_airtable_token_step(&self) -> Vec<Line<'static>> {
-        let token_exists = Config::airtable_token().is_some();
-        let (status_symbol, status_color) = if token_exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
+        let (status_symbol, status_color) = token_status(Config::airtable_token().is_some());
 
         vec![
             Line::from(""),
@@ -1381,19 +1360,15 @@ impl<'a> PmSetupModal<'a> {
         is_dropdown: bool,
     ) -> Line<'static> {
         let label_style = if is_selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            STYLE_LABEL_SELECTED
         } else {
-            Style::default().fg(Color::White)
+            STYLE_LABEL
         };
 
         let value_style = if is_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            STYLE_VALUE_SELECTED
         } else {
-            Style::default().fg(Color::Gray)
+            STYLE_VALUE
         };
 
         let cursor = if is_selected {
@@ -1409,7 +1384,7 @@ impl<'a> PmSetupModal<'a> {
         Line::from(vec![
             Span::styled("    ", Style::default()),
             Span::styled(format!("{:12}", label), label_style),
-            Span::styled(": ", Style::default().fg(Color::DarkGray)),
+            Span::styled(": ", STYLE_SEPARATOR),
             Span::styled(format!("{:30}", value), value_style),
             Span::styled(cursor.to_string(), Style::default().fg(Color::White)),
         ])
@@ -1503,24 +1478,4 @@ impl PmSetupState {
     pub fn editing_field(&self) -> bool {
         matches!(self.step, PmSetupStep::Project) && self.field_index > 0
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }

@@ -1,6 +1,8 @@
+use crate::cache::Cache;
+use crate::core::projects::{create_authenticated_client, AuthType};
 use anyhow::{bail, Context, Result};
 use futures::future::join_all;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 
@@ -41,24 +43,17 @@ impl NotionClient {
             status_property_name
         );
 
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", token)).context("Invalid Notion token")?,
-        );
-        headers.insert(
+        let mut extra_headers = HeaderMap::new();
+        extra_headers.insert(
             "Notion-Version",
             HeaderValue::from_static(Self::NOTION_VERSION),
         );
-        headers.insert(
+        extra_headers.insert(
             reqwest::header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         );
 
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .context("Failed to create HTTP client")?;
+        let client = create_authenticated_client(AuthType::Bearer, token, Some(extra_headers))?;
 
         Ok(Self {
             client,
@@ -414,8 +409,6 @@ fn clean_page_id(id: &str) -> String {
     }
 }
 
-use crate::cache::Cache;
-
 pub struct OptionalNotionClient {
     client: RwLock<Option<NotionClient>>,
     cached_tasks: Cache<(bool, Vec<NotionPageData>)>,
@@ -631,24 +624,17 @@ impl NotionPageTitleProperties {
 }
 
 pub async fn fetch_databases(token: &str) -> Result<Vec<(String, String, String)>> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {}", token)).context("Invalid Notion token")?,
-    );
-    headers.insert(
+    let mut extra_headers = HeaderMap::new();
+    extra_headers.insert(
         "Notion-Version",
         HeaderValue::from_static(NotionClient::NOTION_VERSION),
     );
-    headers.insert(
+    extra_headers.insert(
         reqwest::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
 
-    let client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
-        .context("Failed to create HTTP client")?;
+    let client = create_authenticated_client(AuthType::Bearer, token, Some(extra_headers))?;
 
     let body = serde_json::json!({
         "filter": {

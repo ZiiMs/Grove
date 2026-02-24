@@ -1,3 +1,4 @@
+use crate::core::git_providers::{create_forge_client, test_forge_connection, ForgeAuthType};
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use tokio::sync::RwLock;
@@ -14,25 +15,22 @@ pub struct GitHubClient {
 
 impl GitHubClient {
     pub fn new(token: &str, owner: &str, repo: &str) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "Authorization",
-            HeaderValue::from_str(&format!("Bearer {}", token)).context("Invalid token")?,
-        );
-        headers.insert(
+        let mut extra_headers = HeaderMap::new();
+        extra_headers.insert(
             "Accept",
             HeaderValue::from_static("application/vnd.github+json"),
         );
-        headers.insert(
+        extra_headers.insert(
             "X-GitHub-Api-Version",
             HeaderValue::from_static("2022-11-28"),
         );
 
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .user_agent("grove")
-            .build()
-            .context("Failed to create HTTP client")?;
+        let client = create_forge_client(
+            ForgeAuthType::Bearer,
+            token,
+            Some(extra_headers),
+            Some("grove"),
+        )?;
 
         Ok(Self {
             client,
@@ -209,20 +207,7 @@ impl GitHubClient {
 
     pub async fn test_connection(&self) -> Result<()> {
         let url = format!("{}/repos/{}/{}", GITHUB_API_URL, self.owner, self.repo);
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to connect to GitHub")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            anyhow::bail!("GitHub connection failed: {}", status);
-        }
-
-        Ok(())
+        test_forge_connection(&self.client, &url, "GitHub").await
     }
 }
 

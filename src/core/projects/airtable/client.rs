@@ -1,12 +1,12 @@
+use crate::cache::Cache;
+use crate::core::projects::{create_authenticated_client, AuthType};
 use anyhow::{bail, Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::Deserialize;
 use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
     AirtableRecord, AirtableRecordsResponse, AirtableTableSchema, AirtableTaskSummary, StatusOption,
 };
-use crate::cache::Cache;
 
 pub struct AirtableClient {
     client: reqwest::Client,
@@ -25,17 +25,7 @@ impl AirtableClient {
         table_name: String,
         status_field_name: Option<String>,
     ) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", token))
-                .context("Invalid Airtable token")?,
-        );
-
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .context("Failed to create HTTP client")?;
+        let client = create_authenticated_client(AuthType::Bearer, token, None)?;
 
         Ok(Self {
             client,

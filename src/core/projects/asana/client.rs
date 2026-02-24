@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
     AsanaProjectsResponse, AsanaSectionsResponse, AsanaTaskData, AsanaTaskListResponse,
     AsanaTaskResponse, AsanaTaskSummary, AsanaWorkspacesResponse, SectionOption,
 };
+use crate::cache::Cache;
+use crate::core::projects::{create_authenticated_client, AuthType};
 
 /// Asana API client.
 #[allow(clippy::type_complexity)]
@@ -18,16 +19,7 @@ pub struct AsanaClient {
 
 impl AsanaClient {
     pub fn new(token: &str, project_gid: Option<String>) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", token)).context("Invalid Asana token")?,
-        );
-
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .context("Failed to create HTTP client")?;
+        let client = create_authenticated_client(AuthType::Bearer, token, None)?;
 
         Ok(Self {
             client,
@@ -541,8 +533,6 @@ impl AsanaClient {
         }
     }
 }
-
-use crate::cache::Cache;
 
 /// Optional Asana client wrapper — mirrors `OptionalGitLabClient` pattern.
 pub struct OptionalAsanaClient {

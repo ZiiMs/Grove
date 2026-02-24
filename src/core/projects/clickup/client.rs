@@ -1,5 +1,7 @@
+use crate::cache::Cache;
+use crate::core::projects::{create_authenticated_client, AuthType};
 use anyhow::{bail, Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::AUTHORIZATION;
 use std::collections::HashSet;
 use tokio::sync::RwLock;
 
@@ -17,16 +19,7 @@ pub struct ClickUpClient {
 
 impl ClickUpClient {
     pub fn new(token: &str, list_id: String) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("{} ", token)).context("Invalid ClickUp token")?,
-        );
-
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .context("Failed to create HTTP client")?;
+        let client = create_authenticated_client(AuthType::Token, token, None)?;
 
         Ok(Self { client, list_id })
     }
@@ -295,8 +288,6 @@ impl ClickUpClient {
         bail!("No 'Not Started' status found in ClickUp list");
     }
 }
-
-use crate::cache::Cache;
 
 pub struct OptionalClickUpClient {
     client: RwLock<Option<ClickUpClient>>,

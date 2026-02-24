@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use super::{AgentStatus, StatusReason};
 use crate::app::config::AiAgent;
-use crate::gitlab::{MergeRequestStatus, PipelineStatus};
+use crate::core::git_providers::gitlab::{MergeRequestStatus, PipelineStatus};
 use chrono::Utc;
 
 #[derive(Debug, Clone, PartialEq)]

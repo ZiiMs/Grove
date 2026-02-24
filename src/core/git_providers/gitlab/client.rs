@@ -1,5 +1,7 @@
+use crate::core::git_providers::{
+    create_forge_client, strip_path_from_url, test_forge_connection, ForgeAuthType,
+};
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue};
 use tokio::sync::RwLock;
 use tracing::warn;
 
@@ -16,28 +18,7 @@ pub async fn fetch_project_by_path(
     let encoded_path = urlencoding::encode(path);
     let url = format!("{}/api/v4/projects/{}", base_url, encoded_path);
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "PRIVATE-TOKEN",
-        HeaderValue::from_str(token).context("Invalid token")?,
-    );
-
-    let client = reqwest::Client::builder()
-        .default_headers(headers)
-        .build()
-        .context("Failed to create HTTP client")?;
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .context("Failed to fetch project")?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("GitLab API error: {} - {}", status, body);
-    }
+    let client = create_forge_client(ForgeAuthType::PrivateToken, token, None, None)?;
 
     #[derive(serde::Deserialize)]
     struct ProjectResponse {
@@ -45,7 +26,11 @@ pub async fn fetch_project_by_path(
         name: String,
     }
 
-    let project: ProjectResponse = response
+    let project: ProjectResponse = client
+        .get(&url)
+        .send()
+        .await
+        .context("Failed to fetch project")?
         .json()
         .await
         .context("Failed to parse project response")?;
@@ -62,19 +47,15 @@ pub struct GitLabClient {
 
 impl GitLabClient {
     pub fn new(base_url: &str, project_id: u64, token: &str) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "PRIVATE-TOKEN",
-            HeaderValue::from_str(token).context("Invalid token")?,
-        );
+        let client = create_forge_client(ForgeAuthType::PrivateToken, token, None, None)?;
 
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .context("Failed to create HTTP client")?;
-
-        // Validate and clean base_url - should be just the hostname (e.g., https://gitlab.com)
-        let cleaned_url = Self::clean_base_url(base_url);
+        let cleaned_url = strip_path_from_url(base_url);
+        if cleaned_url != base_url.trim_end_matches('/') {
+            warn!(
+                "GitLab base_url contained path which was stripped to '{}'",
+                cleaned_url
+            );
+        }
 
         Ok(Self {
             client,
@@ -83,37 +64,9 @@ impl GitLabClient {
         })
     }
 
-    /// Clean base_url by stripping any path segments.
-    /// GitLab base_url should be just the hostname (e.g., https://gitlab.com),
-    /// not including any path like /namespace/project.
-    fn clean_base_url(url: &str) -> String {
-        let trimmed = url.trim_end_matches('/');
-
-        // Find the scheme and extract just scheme://host
-        if let Some(scheme_end) = trimmed.find("://") {
-            let after_scheme = &trimmed[scheme_end + 3..];
-            // Find the first / which would indicate a path
-            if let Some(path_start) = after_scheme.find('/') {
-                let host = &after_scheme[..path_start];
-                let scheme = &trimmed[..scheme_end];
-                let cleaned = format!("{}://{}", scheme, host);
-                let stripped_path = &after_scheme[path_start..];
-                warn!(
-                    "GitLab base_url contained path '{}' which was stripped to '{}'. \
-                     base_url should be just the hostname (e.g., https://gitlab.com)",
-                    stripped_path, cleaned
-                );
-                return cleaned;
-            }
-        }
-
-        trimmed.to_string()
-    }
-
     /// Get merge request status for a branch.
     /// Two-step: list MRs to find iid, then fetch individual MR for pipeline data.
     pub async fn get_mr_for_branch(&self, branch: &str) -> Result<MergeRequestStatus> {
-        // Step 1: List MRs to find the iid
         let list_url = format!(
             "{}/api/v4/projects/{}/merge_requests",
             self.base_url, self.project_id
@@ -147,7 +100,6 @@ impl GitLabClient {
             None => return Ok(MergeRequestStatus::None),
         };
 
-        // Step 2: Fetch individual MR for full data including head_pipeline
         let detail_url = format!(
             "{}/api/v4/projects/{}/merge_requests/{}",
             self.base_url, self.project_id, list_item.iid
@@ -161,7 +113,6 @@ impl GitLabClient {
             .context("Failed to fetch merge request details")?;
 
         if !response.status().is_success() {
-            // Fall back to list data if detail fetch fails
             return Ok(MergeRequestStatus::Open {
                 iid: list_item.iid,
                 url: list_item.web_url,
@@ -198,20 +149,7 @@ impl GitLabClient {
     /// Check if the client is properly configured.
     pub async fn test_connection(&self) -> Result<()> {
         let url = format!("{}/api/v4/projects/{}", self.base_url, self.project_id);
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to connect to GitLab")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            anyhow::bail!("GitLab connection failed: {}", status);
-        }
-
-        Ok(())
+        test_forge_connection(&self.client, &url, "GitLab").await
     }
 }
 

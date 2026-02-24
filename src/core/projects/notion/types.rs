@@ -1,3 +1,4 @@
+use crate::core::projects::truncate_with_ellipsis;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -21,15 +22,17 @@ impl NotionTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             NotionTaskStatus::None => "—".to_string(),
-            NotionTaskStatus::Linked { name, .. } => truncate(name, 14),
-            NotionTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
+            NotionTaskStatus::Linked { name, .. } => truncate_with_ellipsis(name, 14),
+            NotionTaskStatus::Error { message, .. } => {
+                format!("err: {}", truncate_with_ellipsis(message, 10))
+            }
         }
     }
 
     pub fn format_status_name(&self) -> String {
         match self {
             NotionTaskStatus::None => "—".to_string(),
-            NotionTaskStatus::Linked { status_name, .. } => truncate(status_name, 10),
+            NotionTaskStatus::Linked { status_name, .. } => truncate_with_ellipsis(status_name, 10),
             NotionTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
@@ -79,15 +82,6 @@ impl NotionTaskStatus {
             }
             _ => false,
         }
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let t: String = s.chars().take(max - 1).collect();
-        format!("{}…", t)
     }
 }
 

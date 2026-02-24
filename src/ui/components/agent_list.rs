@@ -9,15 +9,18 @@ use ratatui::{
 };
 
 use crate::agent::{Agent, AgentStatus, ProjectMgmtTaskStatus};
-use crate::airtable::AirtableTaskStatus;
 use crate::app::config::GitProvider;
-use crate::asana::AsanaTaskStatus;
-use crate::clickup::ClickUpTaskStatus;
+use crate::core::git_providers::codeberg::PullRequestStatus as CodebergPullRequestStatus;
+use crate::core::git_providers::github::{
+    CheckStatus, PullRequestStatus as GitHubPullRequestStatus,
+};
+use crate::core::git_providers::gitlab::{MergeRequestStatus, PipelineStatus};
+use crate::core::projects::airtable::AirtableTaskStatus;
+use crate::core::projects::asana::AsanaTaskStatus;
+use crate::core::projects::clickup::ClickUpTaskStatus;
+use crate::core::projects::linear::LinearTaskStatus;
+use crate::core::projects::notion::NotionTaskStatus;
 use crate::devserver::DevServerStatus;
-use crate::github::CheckStatus;
-use crate::gitlab::PipelineStatus;
-use crate::linear::LinearTaskStatus;
-use crate::notion::NotionTaskStatus;
 
 /// Braille spinner frames for running status
 const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -368,62 +371,34 @@ impl<'a> AgentListWidget<'a> {
             GitProvider::GitLab => {
                 let mr_text = agent.mr_status.format_short();
                 let mr_style = match &agent.mr_status {
-                    crate::gitlab::MergeRequestStatus::None => Style::default().fg(Color::DarkGray),
-                    crate::gitlab::MergeRequestStatus::Open { .. } => {
-                        Style::default().fg(Color::Green)
-                    }
-                    crate::gitlab::MergeRequestStatus::Merged { .. } => {
-                        Style::default().fg(Color::Magenta)
-                    }
-                    crate::gitlab::MergeRequestStatus::Conflicts { .. } => {
-                        Style::default().fg(Color::Red)
-                    }
-                    crate::gitlab::MergeRequestStatus::NeedsRebase { .. } => {
-                        Style::default().fg(Color::Red)
-                    }
-                    crate::gitlab::MergeRequestStatus::Approved { .. } => {
-                        Style::default().fg(Color::Cyan)
-                    }
+                    MergeRequestStatus::None => Style::default().fg(Color::DarkGray),
+                    MergeRequestStatus::Open { .. } => Style::default().fg(Color::Green),
+                    MergeRequestStatus::Merged { .. } => Style::default().fg(Color::Magenta),
+                    MergeRequestStatus::Conflicts { .. } => Style::default().fg(Color::Red),
+                    MergeRequestStatus::NeedsRebase { .. } => Style::default().fg(Color::Red),
+                    MergeRequestStatus::Approved { .. } => Style::default().fg(Color::Cyan),
                 };
                 (mr_text, mr_style)
             }
             GitProvider::GitHub => {
                 let pr_text = agent.pr_status.format_short();
                 let pr_style = match &agent.pr_status {
-                    crate::github::PullRequestStatus::None => Style::default().fg(Color::DarkGray),
-                    crate::github::PullRequestStatus::Open { .. } => {
-                        Style::default().fg(Color::Green)
-                    }
-                    crate::github::PullRequestStatus::Merged { .. } => {
-                        Style::default().fg(Color::Magenta)
-                    }
-                    crate::github::PullRequestStatus::Closed { .. } => {
-                        Style::default().fg(Color::Red)
-                    }
-                    crate::github::PullRequestStatus::Draft { .. } => {
-                        Style::default().fg(Color::Yellow)
-                    }
+                    GitHubPullRequestStatus::None => Style::default().fg(Color::DarkGray),
+                    GitHubPullRequestStatus::Open { .. } => Style::default().fg(Color::Green),
+                    GitHubPullRequestStatus::Merged { .. } => Style::default().fg(Color::Magenta),
+                    GitHubPullRequestStatus::Closed { .. } => Style::default().fg(Color::Red),
+                    GitHubPullRequestStatus::Draft { .. } => Style::default().fg(Color::Yellow),
                 };
                 (pr_text, pr_style)
             }
             GitProvider::Codeberg => {
                 let pr_text = agent.codeberg_pr_status.format_short();
                 let pr_style = match &agent.codeberg_pr_status {
-                    crate::codeberg::PullRequestStatus::None => {
-                        Style::default().fg(Color::DarkGray)
-                    }
-                    crate::codeberg::PullRequestStatus::Open { .. } => {
-                        Style::default().fg(Color::Green)
-                    }
-                    crate::codeberg::PullRequestStatus::Merged { .. } => {
-                        Style::default().fg(Color::Cyan)
-                    }
-                    crate::codeberg::PullRequestStatus::Closed { .. } => {
-                        Style::default().fg(Color::Red)
-                    }
-                    crate::codeberg::PullRequestStatus::Draft { .. } => {
-                        Style::default().fg(Color::Yellow)
-                    }
+                    CodebergPullRequestStatus::None => Style::default().fg(Color::DarkGray),
+                    CodebergPullRequestStatus::Open { .. } => Style::default().fg(Color::Green),
+                    CodebergPullRequestStatus::Merged { .. } => Style::default().fg(Color::Cyan),
+                    CodebergPullRequestStatus::Closed { .. } => Style::default().fg(Color::Red),
+                    CodebergPullRequestStatus::Draft { .. } => Style::default().fg(Color::Yellow),
                 };
                 (pr_text, pr_style)
             }

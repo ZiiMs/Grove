@@ -1,3 +1,4 @@
+use crate::core::projects::truncate_with_ellipsis;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -31,10 +32,12 @@ impl AirtableTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             AirtableTaskStatus::None => "—".to_string(),
-            AirtableTaskStatus::NotStarted { name, .. } => truncate(name, 14),
-            AirtableTaskStatus::InProgress { name, .. } => truncate(name, 14),
-            AirtableTaskStatus::Completed { name, .. } => truncate(name, 14),
-            AirtableTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
+            AirtableTaskStatus::NotStarted { name, .. } => truncate_with_ellipsis(name, 14),
+            AirtableTaskStatus::InProgress { name, .. } => truncate_with_ellipsis(name, 14),
+            AirtableTaskStatus::Completed { name, .. } => truncate_with_ellipsis(name, 14),
+            AirtableTaskStatus::Error { message, .. } => {
+                format!("err: {}", truncate_with_ellipsis(message, 10))
+            }
         }
     }
 
@@ -43,7 +46,7 @@ impl AirtableTaskStatus {
             AirtableTaskStatus::None => "—".to_string(),
             AirtableTaskStatus::NotStarted { name, .. }
             | AirtableTaskStatus::InProgress { name, .. }
-            | AirtableTaskStatus::Completed { name, .. } => truncate(name, 10),
+            | AirtableTaskStatus::Completed { name, .. } => truncate_with_ellipsis(name, 10),
             AirtableTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
@@ -88,15 +91,6 @@ impl AirtableTaskStatus {
             | AirtableTaskStatus::Completed { is_subtask, .. } => *is_subtask,
             AirtableTaskStatus::Error { .. } => false,
         }
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let t: String = s.chars().take(max - 1).collect();
-        format!("{}…", t)
     }
 }
 

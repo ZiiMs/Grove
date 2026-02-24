@@ -1,3 +1,4 @@
+use crate::core::projects::truncate_with_ellipsis;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -37,10 +38,12 @@ impl LinearTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             LinearTaskStatus::None => "—".to_string(),
-            LinearTaskStatus::NotStarted { name, .. } => truncate(name, 24),
-            LinearTaskStatus::InProgress { name, .. } => truncate(name, 24),
-            LinearTaskStatus::Completed { name, .. } => truncate(name, 24),
-            LinearTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
+            LinearTaskStatus::NotStarted { name, .. } => truncate_with_ellipsis(name, 24),
+            LinearTaskStatus::InProgress { name, .. } => truncate_with_ellipsis(name, 24),
+            LinearTaskStatus::Completed { name, .. } => truncate_with_ellipsis(name, 24),
+            LinearTaskStatus::Error { message, .. } => {
+                format!("err: {}", truncate_with_ellipsis(message, 10))
+            }
         }
     }
 
@@ -49,7 +52,9 @@ impl LinearTaskStatus {
             LinearTaskStatus::None => "—".to_string(),
             LinearTaskStatus::NotStarted { status_name, .. }
             | LinearTaskStatus::InProgress { status_name, .. }
-            | LinearTaskStatus::Completed { status_name, .. } => truncate(status_name, 10),
+            | LinearTaskStatus::Completed { status_name, .. } => {
+                truncate_with_ellipsis(status_name, 10)
+            }
             LinearTaskStatus::Error { .. } => "Error".to_string(),
         }
     }
@@ -105,15 +110,6 @@ impl LinearTaskStatus {
             | LinearTaskStatus::Completed { is_subtask, .. } => *is_subtask,
             LinearTaskStatus::Error { .. } => false,
         }
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let t: String = s.chars().take(max - 1).collect();
-        format!("{}…", t)
     }
 }
 

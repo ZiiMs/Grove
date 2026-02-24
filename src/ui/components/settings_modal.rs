@@ -12,6 +12,10 @@ use crate::app::{
     SettingsTab, UiConfig, WorktreeLocation,
 };
 use crate::ui::components::file_browser;
+use crate::ui::helpers::{
+    centered_rect, token_status_line, STYLE_LABEL, STYLE_LABEL_SELECTED, STYLE_SEPARATOR,
+    STYLE_TOGGLE, STYLE_TOGGLE_SELECTED, STYLE_VALUE, STYLE_VALUE_SELECTED,
+};
 use crate::version;
 
 pub struct SettingsModal<'a> {
@@ -228,7 +232,7 @@ impl<'a> SettingsModal<'a> {
                             GitProvider::GitLab => {
                                 all_lines.push((
                                     line_start + 1,
-                                    Self::render_token_status_line(
+                                    token_status_line(
                                         "GITLAB_TOKEN",
                                         Config::gitlab_token().is_some(),
                                     ),
@@ -237,7 +241,7 @@ impl<'a> SettingsModal<'a> {
                             GitProvider::GitHub => {
                                 all_lines.push((
                                     line_start + 1,
-                                    Self::render_token_status_line(
+                                    token_status_line(
                                         "GITHUB_TOKEN",
                                         Config::github_token().is_some(),
                                     ),
@@ -246,7 +250,7 @@ impl<'a> SettingsModal<'a> {
                             GitProvider::Codeberg => {
                                 all_lines.push((
                                     line_start + 1,
-                                    Self::render_token_status_line(
+                                    token_status_line(
                                         "CODEBERG_TOKEN",
                                         Config::codeberg_token().is_some(),
                                     ),
@@ -257,7 +261,7 @@ impl<'a> SettingsModal<'a> {
                                 ) {
                                     all_lines.push((
                                         line_start + 2,
-                                        Self::render_token_status_line(
+                                        token_status_line(
                                             "WOODPECKER_TOKEN",
                                             Config::woodpecker_token().is_some(),
                                         ),
@@ -271,7 +275,7 @@ impl<'a> SettingsModal<'a> {
                             ProjectMgmtProvider::Asana => {
                                 all_lines.push((
                                     line_start + 1,
-                                    Self::render_token_status_line(
+                                    token_status_line(
                                         "ASANA_TOKEN",
                                         Config::asana_token().is_some(),
                                     ),
@@ -280,7 +284,7 @@ impl<'a> SettingsModal<'a> {
                             ProjectMgmtProvider::Notion => {
                                 all_lines.push((
                                     line_start + 1,
-                                    Self::render_token_status_line(
+                                    token_status_line(
                                         "NOTION_TOKEN",
                                         Config::notion_token().is_some(),
                                     ),
@@ -289,7 +293,7 @@ impl<'a> SettingsModal<'a> {
                             ProjectMgmtProvider::Clickup => {
                                 all_lines.push((
                                     line_start + 1,
-                                    Self::render_token_status_line(
+                                    token_status_line(
                                         "CLICKUP_TOKEN",
                                         Config::clickup_token().is_some(),
                                     ),
@@ -298,7 +302,7 @@ impl<'a> SettingsModal<'a> {
                             ProjectMgmtProvider::Airtable => {
                                 all_lines.push((
                                     line_start + 1,
-                                    Self::render_token_status_line(
+                                    token_status_line(
                                         "AIRTABLE_TOKEN",
                                         Config::airtable_token().is_some(),
                                     ),
@@ -307,7 +311,7 @@ impl<'a> SettingsModal<'a> {
                             ProjectMgmtProvider::Linear => {
                                 all_lines.push((
                                     line_start + 1,
-                                    Self::render_token_status_line(
+                                    token_status_line(
                                         "LINEAR_TOKEN",
                                         Config::linear_token().is_some(),
                                     ),
@@ -370,51 +374,25 @@ impl<'a> SettingsModal<'a> {
         ])
     }
 
-    fn render_token_status_line(name: &str, exists: bool) -> Line<'static> {
-        let (symbol, color) = if exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
-        Line::from(vec![
-            Span::styled("    ", Style::default()),
-            Span::styled(
-                format!("{:14}", "Token"),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(": ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{:34}", format!("{} ({})", symbol, name)),
-                Style::default().fg(color),
-            ),
-        ])
-    }
-
     fn render_field_line(&self, field: &SettingsField, is_selected: bool) -> Line<'static> {
         let (label, value, is_toggle) = self.get_field_display(field);
 
         let label_style = if is_selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            STYLE_LABEL_SELECTED
         } else {
-            Style::default().fg(Color::White)
+            STYLE_LABEL
         };
 
         let value_style = if is_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            STYLE_VALUE_SELECTED
         } else {
-            Style::default().fg(Color::Gray)
+            STYLE_VALUE
         };
 
         let toggle_style = if is_selected {
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD)
+            STYLE_TOGGLE_SELECTED
         } else {
-            Style::default().fg(Color::Green)
+            STYLE_TOGGLE
         };
 
         let is_prompt = field.is_prompt_field();
@@ -448,7 +426,7 @@ impl<'a> SettingsModal<'a> {
         Line::from(vec![
             Span::styled("    ", Style::default()),
             Span::styled(format!("{:14}", label), label_style),
-            Span::styled(": ", Style::default().fg(Color::DarkGray)),
+            Span::styled(": ", STYLE_SEPARATOR),
             Span::styled(format!("{:34}", display_value), final_style),
             Span::styled(cursor.to_string(), Style::default().fg(Color::White)),
         ])
@@ -1231,26 +1209,6 @@ impl<'a> SettingsModal<'a> {
         let paragraph = Paragraph::new(lines).alignment(Alignment::Left);
         frame.render_widget(paragraph, inner);
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 fn get_dropdown_position(frame_area: Rect, item_index: usize) -> Rect {

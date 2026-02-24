@@ -70,7 +70,7 @@ pub enum Action {
 
     UpdateMrStatus {
         id: Uuid,
-        status: crate::gitlab::MergeRequestStatus,
+        status: crate::core::git_providers::gitlab::MergeRequestStatus,
     },
     OpenMrInBrowser {
         id: Uuid,
@@ -81,7 +81,7 @@ pub enum Action {
 
     UpdatePrStatus {
         id: Uuid,
-        status: crate::github::PullRequestStatus,
+        status: crate::core::git_providers::github::PullRequestStatus,
     },
     OpenPrInBrowser {
         id: Uuid,
@@ -89,7 +89,7 @@ pub enum Action {
 
     UpdateCodebergPrStatus {
         id: Uuid,
-        status: crate::codeberg::PullRequestStatus,
+        status: crate::core::git_providers::codeberg::PullRequestStatus,
     },
     OpenCodebergPrInBrowser {
         id: Uuid,
@@ -101,7 +101,7 @@ pub enum Action {
     },
     UpdateAsanaTaskStatus {
         id: Uuid,
-        status: crate::asana::AsanaTaskStatus,
+        status: crate::core::projects::asana::AsanaTaskStatus,
     },
     OpenAsanaInBrowser {
         id: Uuid,
