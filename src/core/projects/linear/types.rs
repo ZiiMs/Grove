@@ -132,6 +132,7 @@ pub struct LinearIssueSummary {
     pub url: String,
     pub parent_id: Option<String>,
     pub has_children: bool,
+    pub team_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,6 +169,12 @@ pub struct LinearIssueData {
     pub state: LinearStateData,
     pub parent: Option<LinearIssueParent>,
     pub children: Option<ChildrenConnection>,
+    pub team: LinearTeamData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinearTeamData {
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,11 +273,21 @@ pub fn parse_linear_issue_id(input: &str) -> String {
     let trimmed = input.trim();
 
     if trimmed.contains("linear.app") {
-        if let Some(last) = trimmed.trim_end_matches('/').rsplit('/').next() {
-            if last.starts_with("issue/") {
-                return last.strip_prefix("issue/").unwrap_or(last).to_string();
-            }
-            return last.to_string();
+        let url = trimmed.trim_end_matches('/');
+        if let Some(pos) = url.find("/issue/") {
+            let after_issue = &url[pos + 7..];
+            let issue_id = after_issue
+                .split('/')
+                .next()
+                .unwrap_or(after_issue)
+                .split('?')
+                .next()
+                .unwrap_or(after_issue);
+            return issue_id.to_uppercase();
+        }
+        if let Some(last) = url.rsplit('/').next() {
+            let without_query = last.split('?').next().unwrap_or(last);
+            return without_query.to_string();
         }
     }
 
@@ -282,4 +299,32 @@ pub fn parse_linear_issue_id(input: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_linear_issue_id_with_slug() {
+        let url = "https://linear.app/ziim/issue/GRE-34/mutli-agent";
+        assert_eq!(parse_linear_issue_id(url), "GRE-34");
+    }
+
+    #[test]
+    fn test_parse_linear_issue_id_with_query() {
+        let url = "https://linear.app/ziim/issue/GRE-34?view=board";
+        assert_eq!(parse_linear_issue_id(url), "GRE-34");
+    }
+
+    #[test]
+    fn test_parse_linear_issue_id_bare() {
+        assert_eq!(parse_linear_issue_id("gre-34"), "GRE-34");
+    }
+
+    #[test]
+    fn test_parse_linear_issue_id_simple_url() {
+        let url = "https://linear.app/team/issue/ABC-123";
+        assert_eq!(parse_linear_issue_id(url), "ABC-123");
+    }
 }

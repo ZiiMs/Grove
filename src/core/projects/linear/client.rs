@@ -235,6 +235,9 @@ impl LinearClient {
                     children(first: 50) {
                         nodes { id }
                     }
+                    team {
+                        id
+                    }
                 }
             }
         "#;
@@ -298,6 +301,7 @@ impl LinearClient {
             url: issue.url,
             parent_id: issue.parent.map(|p| p.id),
             has_children,
+            team_id: issue.team.id,
         })
     }
 
@@ -413,6 +417,7 @@ impl LinearClient {
                     url: issue.url,
                     parent_id: issue.parent.map(|p| p.id),
                     has_children,
+                    team_id: team_id.clone(),
                 }
             })
             .collect())
