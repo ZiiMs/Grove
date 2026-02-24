@@ -2912,16 +2912,6 @@ async fn process_action(
                             Ok(issue) => {
                                 if let Some(ref team_id) = configured_team_id {
                                     if &issue.team_id != team_id {
-                                        let status =
-                                            ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Error {
-                                                id: issue_id,
-                                                message: format!(
-                                                    "Issue belongs to team '{}', but this project is configured for team '{}'",
-                                                    issue.team_id, team_id
-                                                ),
-                                            });
-                                        let _ =
-                                            tx.send(Action::UpdateProjectTaskStatus { id, status });
                                         return;
                                     }
                                 }
