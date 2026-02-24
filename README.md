@@ -4,7 +4,7 @@ A terminal UI (TUI) for managing multiple Claude Code agents with git worktree i
 
 Flock allows you to run multiple instances of Claude Code simultaneously, each working on its own git branch in an isolated worktree. Monitor their progress, attach to their terminal sessions, and integrate with GitLab merge requests and Asana tasks.
 
-## Features
+## Featuress
 
 - **Multi-Agent Management**: Run multiple Claude Code agents in parallel, each in its own tmux session
 - **Git Worktree Isolation**: Each agent works on a separate branch in an isolated worktree, preventing conflicts
