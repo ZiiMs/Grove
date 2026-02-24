@@ -104,6 +104,7 @@ impl LinearClient {
                     id
                     name
                     displayName
+                    username
                 }
             }
         "#;
@@ -149,9 +150,15 @@ impl LinearClient {
         let username = data
             .data
             .viewer
-            .display_name
+            .username
             .filter(|s| !s.is_empty())
-            .unwrap_or(data.data.viewer.name);
+            .unwrap_or_else(|| {
+                data.data
+                    .viewer
+                    .display_name
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(data.data.viewer.name)
+            });
 
         Ok(username)
     }

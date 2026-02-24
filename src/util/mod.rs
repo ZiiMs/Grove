@@ -10,6 +10,7 @@ pub fn sanitize_linear_branch_name(username: &str, identifier: &str, title: &str
         .split_whitespace()
         .collect::<Vec<_>>()
         .join("-")
+        .replace('/', "")
         .to_lowercase();
     let id_lower = identifier.to_lowercase();
     format!("{}/{}-{}", username, id_lower, slug)
@@ -57,6 +58,18 @@ mod tests {
         assert_eq!(
             sanitize_linear_branch_name("JohnDoe", "ABC-456", "Some Task Name HERE"),
             "JohnDoe/abc-456-some-task-name-here"
+        );
+    }
+
+    #[test]
+    fn test_linear_branch_name_with_slash() {
+        assert_eq!(
+            sanitize_linear_branch_name(
+                "ziim",
+                "GRE-30",
+                "Create helper/utils section for reused code"
+            ),
+            "ziim/gre-30-create-helperutils-section-for-reused-code"
         );
     }
 }

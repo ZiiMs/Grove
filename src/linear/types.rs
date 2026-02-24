@@ -253,6 +253,8 @@ pub struct LinearUserData {
     pub name: String,
     #[serde(default)]
     pub display_name: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
