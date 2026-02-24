@@ -30,10 +30,15 @@ impl Worktree {
                 .context("Failed to create worktrees directory")?;
         }
 
-        let worktree_path = self.worktree_base.join(branch.replace('/', "-"));
+        let worktree_name = branch.replace('/', "-");
+        let worktree_path = self.worktree_base.join(&worktree_name);
         let worktree_path_str = worktree_path.to_string_lossy().to_string();
 
-        tracing::debug!("Worktree::create - worktree_path: {:?}", worktree_path_str);
+        tracing::debug!(
+            "Worktree::create - worktree_name: {:?}, worktree_path: {:?}",
+            worktree_name,
+            worktree_path_str
+        );
 
         if worktree_path.exists() {
             tracing::debug!("Worktree::create - worktree_path already exists, returning early");
@@ -63,11 +68,24 @@ impl Worktree {
 
         tracing::debug!("Worktree::create - calling repo.worktree()");
         repo.worktree(
-            branch,
+            &worktree_name,
             &worktree_path,
             Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
         )
-        .context("Failed to create worktree")?;
+        .map_err(|e| {
+            tracing::error!(
+                "Worktree::create - git2 worktree error: code={:?}, class={:?}, message={}",
+                e.code(),
+                e.class(),
+                e.message()
+            );
+            anyhow::anyhow!(
+                "Failed to create worktree: {} (code: {:?}, class: {:?})",
+                e.message(),
+                e.code(),
+                e.class()
+            )
+        })?;
 
         tracing::debug!("Worktree::create - worktree created successfully");
         Ok(worktree_path_str)
