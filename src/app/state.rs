@@ -695,6 +695,7 @@ pub struct SettingsState {
     pub keybind_conflicts: Vec<(String, String)>,
     pub file_browser: FileBrowserState,
     pub reset_confirmation: Option<ResetType>,
+    pub scroll_offset: usize,
 }
 
 impl Default for SettingsState {
@@ -720,6 +721,7 @@ impl Default for SettingsState {
             keybind_conflicts: Vec::new(),
             file_browser: FileBrowserState::default(),
             reset_confirmation: None,
+            scroll_offset: 0,
         }
     }
 }

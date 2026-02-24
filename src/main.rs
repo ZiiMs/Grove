@@ -5976,6 +5976,7 @@ async fn process_action(
                 state.settings.active = true;
                 state.settings.tab = grove::app::SettingsTab::General;
                 state.settings.field_index = 0;
+                state.settings.scroll_offset = 0;
                 state.settings.dropdown = grove::app::DropdownState::Closed;
                 state.settings.editing_text = false;
                 state.settings.pending_ai_agent = state.config.global.ai_agent.clone();
@@ -5990,6 +5991,7 @@ async fn process_action(
         Action::SettingsSwitchSection => {
             state.settings.tab = state.settings.next_tab();
             state.settings.field_index = 0;
+            state.settings.scroll_offset = 0;
             state.settings.dropdown = grove::app::DropdownState::Closed;
             state.settings.editing_text = false;
         }
@@ -5997,6 +5999,7 @@ async fn process_action(
         Action::SettingsSwitchSectionBack => {
             state.settings.tab = state.settings.prev_tab();
             state.settings.field_index = 0;
+            state.settings.scroll_offset = 0;
             state.settings.dropdown = grove::app::DropdownState::Closed;
             state.settings.editing_text = false;
         }

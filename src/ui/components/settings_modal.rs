@@ -131,42 +131,118 @@ impl<'a> SettingsModal<'a> {
             .map(|(idx, _)| *idx)
             .unwrap_or(0);
 
-        let mut lines = Vec::new();
+        let mut item_line_info: Vec<(usize, usize, usize)> = Vec::new();
+        let mut current_line: usize = 0;
 
         for (item_idx, item) in items.iter().enumerate() {
+            let line_count = match item {
+                SettingsItem::Category(_) => 1,
+                SettingsItem::Field(field) => {
+                    let mut count = 1;
+                    if *field == SettingsField::GitProvider {
+                        match self.state.repo_config.git.provider {
+                            GitProvider::GitLab => count += 1,
+                            GitProvider::GitHub => count += 1,
+                            GitProvider::Codeberg => {
+                                count += 1;
+                                if matches!(
+                                    self.state.repo_config.git.codeberg.ci_provider,
+                                    CodebergCiProvider::Woodpecker
+                                ) {
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+                    if *field == SettingsField::ProjectMgmtProvider {
+                        count += 1;
+                    }
+                    count
+                }
+                SettingsItem::ActionButton(_) => 2,
+            };
+            item_line_info.push((item_idx, current_line, line_count));
+            current_line += line_count;
+        }
+
+        let total_lines = current_line;
+        let visible_height = area.height as usize;
+
+        let selected_item_info = item_line_info
+            .iter()
+            .find(|(idx, _, _)| *idx == selected_field_idx);
+        let selected_line_start = selected_item_info.map(|(_, start, _)| *start).unwrap_or(0);
+        let selected_line_count = selected_item_info.map(|(_, _, cnt)| *cnt).unwrap_or(1);
+        let selected_line_end = selected_line_start + selected_line_count;
+
+        let mut scroll_offset = self.state.scroll_offset;
+
+        if selected_line_start < scroll_offset {
+            scroll_offset = selected_line_start;
+        } else if selected_line_end > scroll_offset + visible_height {
+            scroll_offset = selected_line_end.saturating_sub(visible_height);
+        }
+
+        let max_scroll = total_lines.saturating_sub(visible_height);
+        scroll_offset = scroll_offset.min(max_scroll);
+
+        let has_above = scroll_offset > 0;
+        let has_below = scroll_offset + visible_height < total_lines;
+
+        let mut all_lines: Vec<(usize, Line<'static>)> = Vec::new();
+
+        for (item_idx, item) in items.iter().enumerate() {
+            let line_start = item_line_info
+                .iter()
+                .find(|(idx, _, _)| *idx == item_idx)
+                .map(|(_, start, _)| *start)
+                .unwrap_or(0);
+
             match item {
                 SettingsItem::Category(cat) => {
-                    lines.push(self.render_category_line(cat));
+                    all_lines.push((line_start, self.render_category_line(cat)));
                 }
                 SettingsItem::Field(field) => {
                     let is_selected = item_idx == selected_field_idx;
-                    lines.push(self.render_field_line(field, is_selected));
+                    all_lines.push((line_start, self.render_field_line(field, is_selected)));
                     if *field == SettingsField::GitProvider {
                         match self.state.repo_config.git.provider {
                             GitProvider::GitLab => {
-                                lines.push(Self::render_token_status_line(
-                                    "GITLAB_TOKEN",
-                                    Config::gitlab_token().is_some(),
+                                all_lines.push((
+                                    line_start + 1,
+                                    Self::render_token_status_line(
+                                        "GITLAB_TOKEN",
+                                        Config::gitlab_token().is_some(),
+                                    ),
                                 ));
                             }
                             GitProvider::GitHub => {
-                                lines.push(Self::render_token_status_line(
-                                    "GITHUB_TOKEN",
-                                    Config::github_token().is_some(),
+                                all_lines.push((
+                                    line_start + 1,
+                                    Self::render_token_status_line(
+                                        "GITHUB_TOKEN",
+                                        Config::github_token().is_some(),
+                                    ),
                                 ));
                             }
                             GitProvider::Codeberg => {
-                                lines.push(Self::render_token_status_line(
-                                    "CODEBERG_TOKEN",
-                                    Config::codeberg_token().is_some(),
+                                all_lines.push((
+                                    line_start + 1,
+                                    Self::render_token_status_line(
+                                        "CODEBERG_TOKEN",
+                                        Config::codeberg_token().is_some(),
+                                    ),
                                 ));
                                 if matches!(
                                     self.state.repo_config.git.codeberg.ci_provider,
                                     CodebergCiProvider::Woodpecker
                                 ) {
-                                    lines.push(Self::render_token_status_line(
-                                        "WOODPECKER_TOKEN",
-                                        Config::woodpecker_token().is_some(),
+                                    all_lines.push((
+                                        line_start + 2,
+                                        Self::render_token_status_line(
+                                            "WOODPECKER_TOKEN",
+                                            Config::woodpecker_token().is_some(),
+                                        ),
                                     ));
                                 }
                             }
@@ -175,33 +251,48 @@ impl<'a> SettingsModal<'a> {
                     if *field == SettingsField::ProjectMgmtProvider {
                         match self.state.repo_config.project_mgmt.provider {
                             ProjectMgmtProvider::Asana => {
-                                lines.push(Self::render_token_status_line(
-                                    "ASANA_TOKEN",
-                                    Config::asana_token().is_some(),
+                                all_lines.push((
+                                    line_start + 1,
+                                    Self::render_token_status_line(
+                                        "ASANA_TOKEN",
+                                        Config::asana_token().is_some(),
+                                    ),
                                 ));
                             }
                             ProjectMgmtProvider::Notion => {
-                                lines.push(Self::render_token_status_line(
-                                    "NOTION_TOKEN",
-                                    Config::notion_token().is_some(),
+                                all_lines.push((
+                                    line_start + 1,
+                                    Self::render_token_status_line(
+                                        "NOTION_TOKEN",
+                                        Config::notion_token().is_some(),
+                                    ),
                                 ));
                             }
                             ProjectMgmtProvider::Clickup => {
-                                lines.push(Self::render_token_status_line(
-                                    "CLICKUP_TOKEN",
-                                    Config::clickup_token().is_some(),
+                                all_lines.push((
+                                    line_start + 1,
+                                    Self::render_token_status_line(
+                                        "CLICKUP_TOKEN",
+                                        Config::clickup_token().is_some(),
+                                    ),
                                 ));
                             }
                             ProjectMgmtProvider::Airtable => {
-                                lines.push(Self::render_token_status_line(
-                                    "AIRTABLE_TOKEN",
-                                    Config::airtable_token().is_some(),
+                                all_lines.push((
+                                    line_start + 1,
+                                    Self::render_token_status_line(
+                                        "AIRTABLE_TOKEN",
+                                        Config::airtable_token().is_some(),
+                                    ),
                                 ));
                             }
                             ProjectMgmtProvider::Linear => {
-                                lines.push(Self::render_token_status_line(
-                                    "LINEAR_TOKEN",
-                                    Config::linear_token().is_some(),
+                                all_lines.push((
+                                    line_start + 1,
+                                    Self::render_token_status_line(
+                                        "LINEAR_TOKEN",
+                                        Config::linear_token().is_some(),
+                                    ),
                                 ));
                             }
                         }
@@ -209,12 +300,46 @@ impl<'a> SettingsModal<'a> {
                 }
                 SettingsItem::ActionButton(btn) => {
                     let is_selected = item_idx == selected_field_idx;
-                    lines.push(self.render_action_button_line(*btn, is_selected));
+                    all_lines.push((
+                        line_start,
+                        self.render_action_button_line(*btn, is_selected),
+                    ));
                 }
             }
         }
 
-        let paragraph = Paragraph::new(lines);
+        all_lines.sort_by_key(|(line, _)| *line);
+
+        let mut visible_lines = Vec::new();
+        let indicator_space = (if has_above { 1 } else { 0 }) + (if has_below { 1 } else { 0 });
+        let available_for_content = visible_height.saturating_sub(indicator_space);
+        let content_scroll_end = scroll_offset + available_for_content;
+
+        if has_above {
+            let hidden_above = scroll_offset;
+            visible_lines.push(Line::from(Span::styled(
+                format!("    ▲ {} more above", hidden_above),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+
+        for (line_num, line) in all_lines.iter() {
+            if *line_num >= scroll_offset && *line_num < content_scroll_end {
+                visible_lines.push(line.clone());
+            }
+        }
+
+        if has_below {
+            let hidden_below = total_lines.saturating_sub(scroll_offset + available_for_content);
+            if hidden_below > 0 {
+                visible_lines.push(Line::from(Span::styled(
+                    format!("    ▼ {} more below", hidden_below),
+                    Style::default().fg(Color::Yellow),
+                )));
+            }
+        }
+
+        let paragraph = Paragraph::new(visible_lines);
         frame.render_widget(paragraph, area);
     }
 
