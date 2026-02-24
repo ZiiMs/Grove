@@ -8,6 +8,10 @@ use ratatui::{
 
 use crate::app::config::{CodebergCiProvider, Config, GitProvider};
 use crate::app::state::{GitSetupState, GitSetupStep};
+use crate::ui::helpers::{
+    centered_rect, token_status, STYLE_LABEL, STYLE_LABEL_SELECTED, STYLE_SEPARATOR, STYLE_VALUE,
+    STYLE_VALUE_SELECTED,
+};
 
 pub struct GitSetupModal<'a> {
     state: &'a GitSetupState,
@@ -106,12 +110,7 @@ impl<'a> GitSetupModal<'a> {
     }
 
     fn render_gitlab_token_step(&self) -> Vec<Line<'static>> {
-        let token_exists = Config::gitlab_token().is_some();
-        let (status_symbol, status_color) = if token_exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
+        let (status_symbol, status_color) = token_status(Config::gitlab_token().is_some());
 
         vec![
             Line::from(""),
@@ -349,12 +348,7 @@ impl<'a> GitSetupModal<'a> {
     }
 
     fn render_github_token_step(&self) -> Vec<Line<'static>> {
-        let token_exists = Config::github_token().is_some();
-        let (status_symbol, status_color) = if token_exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
+        let (status_symbol, status_color) = token_status(Config::github_token().is_some());
 
         vec![
             Line::from(""),
@@ -515,12 +509,7 @@ impl<'a> GitSetupModal<'a> {
     }
 
     fn render_codeberg_token_step(&self) -> Vec<Line<'static>> {
-        let token_exists = Config::codeberg_token().is_some();
-        let (status_symbol, status_color) = if token_exists {
-            ("✓ OK", Color::Green)
-        } else {
-            ("✗ Missing", Color::Red)
-        };
+        let (status_symbol, status_color) = token_status(Config::codeberg_token().is_some());
 
         vec![
             Line::from(""),
@@ -755,25 +744,21 @@ impl<'a> GitSetupModal<'a> {
 
     fn render_field_line(&self, label: &str, value: &str, is_selected: bool) -> Line<'static> {
         let label_style = if is_selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            STYLE_LABEL_SELECTED
         } else {
-            Style::default().fg(Color::White)
+            STYLE_LABEL
         };
 
         let value_style = if is_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            STYLE_VALUE_SELECTED
         } else {
-            Style::default().fg(Color::Gray)
+            STYLE_VALUE
         };
 
         Line::from(vec![
             Span::styled("    ", Style::default()),
             Span::styled(format!("{:14}", label), label_style),
-            Span::styled(": ", Style::default().fg(Color::DarkGray)),
+            Span::styled(": ", STYLE_SEPARATOR),
             Span::styled(value.to_string(), value_style),
         ])
     }
@@ -809,24 +794,4 @@ impl<'a> GitSetupModal<'a> {
         let paragraph = Paragraph::new(Line::from(spans)).alignment(Alignment::Center);
         frame.render_widget(paragraph, area);
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }

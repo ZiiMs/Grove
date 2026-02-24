@@ -8,6 +8,10 @@ use ratatui::{
 
 use crate::app::config::{AiAgent, LogLevel, WorktreeLocation};
 use crate::app::{GlobalSetupState, GlobalSetupStep};
+use crate::ui::helpers::{
+    centered_rect, STYLE_LABEL, STYLE_LABEL_SELECTED, STYLE_SEPARATOR, STYLE_VALUE,
+    STYLE_VALUE_SELECTED,
+};
 
 pub struct GlobalSetupWizard<'a> {
     state: &'a GlobalSetupState,
@@ -160,19 +164,15 @@ impl<'a> GlobalSetupWizard<'a> {
 
     fn render_field_line(&self, label: &str, value: &str, is_selected: bool) -> Line<'static> {
         let label_style = if is_selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            STYLE_LABEL_SELECTED
         } else {
-            Style::default().fg(Color::White)
+            STYLE_LABEL
         };
 
         let value_style = if is_selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            STYLE_VALUE_SELECTED
         } else {
-            Style::default().fg(Color::Gray)
+            STYLE_VALUE
         };
 
         let cursor = if is_selected { " ◀" } else { "" };
@@ -180,7 +180,7 @@ impl<'a> GlobalSetupWizard<'a> {
         Line::from(vec![
             Span::styled("    ", Style::default()),
             Span::styled(format!("{:12}", label), label_style),
-            Span::styled(": ", Style::default().fg(Color::DarkGray)),
+            Span::styled(": ", STYLE_SEPARATOR),
             Span::styled(value.to_string(), value_style),
             Span::styled(cursor.to_string(), Style::default().fg(Color::White)),
         ])
@@ -246,24 +246,4 @@ impl<'a> GlobalSetupWizard<'a> {
         let paragraph = Paragraph::new(lines).block(block);
         frame.render_widget(paragraph, area);
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
