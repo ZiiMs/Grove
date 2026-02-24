@@ -129,12 +129,6 @@ impl<'a> AppWidget<'a> {
             HelpOverlay::new(&self.state.config.keybinds).render(frame, size);
         }
 
-        if self.state.show_status_debug {
-            if let Some(agent) = self.state.selected_agent() {
-                StatusDebugOverlay::new(agent).render(frame, size);
-            }
-        }
-
         if self.state.settings.active {
             SettingsModal::new(
                 &self.state.settings,
@@ -184,6 +178,12 @@ impl<'a> AppWidget<'a> {
             DevServerWarningModal::new(warning).render(frame);
         } else if let Some(mode) = &self.state.input_mode {
             self.render_modal(frame, mode, size);
+        }
+
+        if self.state.show_status_debug {
+            if let Some(agent) = self.state.selected_agent() {
+                StatusDebugOverlay::new(agent).render(frame, size);
+            }
         }
 
         if let Some(toast) = &self.state.toast {

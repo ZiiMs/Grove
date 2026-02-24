@@ -938,6 +938,14 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return Some(Action::ToggleHelp);
     }
 
+    // Handle status debug overlay
+    if state.show_status_debug {
+        let kb = &state.config.keybinds;
+        if matches_keybind(key, &kb.debug_status) || key.code == KeyCode::Esc {
+            return Some(Action::ToggleStatusDebug);
+        }
+    }
+
     // Handle global setup wizard
     if state.show_global_setup {
         if let Some(wizard) = &state.global_setup {
