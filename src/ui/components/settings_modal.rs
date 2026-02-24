@@ -187,7 +187,11 @@ impl<'a> SettingsModal<'a> {
         scroll_offset = scroll_offset.min(max_scroll);
 
         let has_above = scroll_offset > 0;
-        let has_below = scroll_offset + visible_height < total_lines;
+        let above_indicator_space = if has_above { 1 } else { 0 };
+        let content_space_without_below = visible_height.saturating_sub(above_indicator_space);
+        let has_below = scroll_offset + content_space_without_below < total_lines;
+        let indicator_space = above_indicator_space + if has_below { 1 } else { 0 };
+        let available_for_content = visible_height.saturating_sub(indicator_space);
 
         let mut all_lines: Vec<(usize, Line<'static>)> = Vec::new();
 
@@ -311,8 +315,6 @@ impl<'a> SettingsModal<'a> {
         all_lines.sort_by_key(|(line, _)| *line);
 
         let mut visible_lines = Vec::new();
-        let indicator_space = (if has_above { 1 } else { 0 }) + (if has_below { 1 } else { 0 });
-        let available_for_content = visible_height.saturating_sub(indicator_space);
         let content_scroll_end = scroll_offset + available_for_content;
 
         if has_above {
