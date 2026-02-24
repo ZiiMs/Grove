@@ -307,6 +307,7 @@ async fn main() -> Result<()> {
                 let tmux_session = agent.tmux_session.clone();
                 let branch = agent.branch.clone();
                 let name = agent.name.clone();
+                let opencode_session_id = agent.opencode_session_id.clone();
 
                 let worktree = grove::git::Worktree::new(&repo_path, worktree_base.clone());
                 if !std::path::Path::new(&worktree_path).exists() {
@@ -324,7 +325,30 @@ async fn main() -> Result<()> {
 
                 let session = grove::tmux::TmuxSession::new(&tmux_session);
                 if !session.exists() {
-                    if let Err(e) = session.create(&worktree_path, ai_agent.command()) {
+                    let command = if matches!(ai_agent, grove::app::config::AiAgent::Opencode) {
+                        let session_id = opencode_session_id
+                            .as_deref()
+                            .and_then(|cached| {
+                                if cached.is_empty() {
+                                    None
+                                } else {
+                                    Some(cached.to_string())
+                                }
+                            })
+                            .or_else(|| {
+                                grove::opencode::find_session_by_directory(&worktree_path)
+                                    .ok()
+                                    .flatten()
+                            });
+                        grove::opencode::build_command_with_session(
+                            ai_agent.command(),
+                            session_id.as_deref(),
+                        )
+                    } else {
+                        ai_agent.command().to_string()
+                    };
+
+                    if let Err(e) = session.create(&worktree_path, &command) {
                         eprintln!("Failed to create tmux session for '{}': {}", name, e);
                         continue;
                     }

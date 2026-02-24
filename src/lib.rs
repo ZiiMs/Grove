@@ -5,6 +5,7 @@ pub mod ci;
 pub mod core;
 pub mod devserver;
 pub mod git;
+pub mod opencode;
 pub mod storage;
 pub mod tmux;
 pub mod ui;
