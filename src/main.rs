@@ -5221,6 +5221,12 @@ async fn process_action(
 
                 state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
                 let ai_agent = state.config.global.ai_agent.clone();
+                tracing::debug!(
+                    "CreateAgentFromSelectedTask - name: {:?}, branch: {:?}, ai_agent: {:?}",
+                    name,
+                    branch,
+                    ai_agent
+                );
                 let worktree_symlinks = state
                     .settings
                     .repo_config
