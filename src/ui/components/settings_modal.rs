@@ -175,32 +175,37 @@ impl<'a> SettingsModal<'a> {
         let selected_line_count = selected_item_info.map(|(_, _, cnt)| *cnt).unwrap_or(1);
         let selected_line_end = selected_line_start + selected_line_count;
 
-        let mut scroll_offset = self.state.scroll_offset;
-
         let max_scroll = total_lines.saturating_sub(visible_height);
-        scroll_offset = scroll_offset.min(max_scroll);
+        let mut scroll_offset = self.state.scroll_offset.min(max_scroll);
 
-        let mut has_above = scroll_offset > 0;
-        let mut above_indicator_space = if has_above { 1 } else { 0 };
-        let mut content_space_without_below = visible_height.saturating_sub(above_indicator_space);
-        let mut has_below = scroll_offset + content_space_without_below < total_lines;
-        let mut indicator_space = above_indicator_space + if has_below { 1 } else { 0 };
-        let mut available_for_content = visible_height.saturating_sub(indicator_space);
+        for _ in 0..3 {
+            let has_above = scroll_offset > 0;
+            let above_indicator_space = if has_above { 1 } else { 0 };
+            let content_space_without_below = visible_height.saturating_sub(above_indicator_space);
+            let has_below = scroll_offset + content_space_without_below < total_lines;
+            let indicator_space = above_indicator_space + if has_below { 1 } else { 0 };
+            let available_for_content = visible_height.saturating_sub(indicator_space);
 
-        if selected_line_start < scroll_offset {
-            scroll_offset = selected_line_start;
-        } else if selected_line_end > scroll_offset + available_for_content {
-            scroll_offset = selected_line_end.saturating_sub(available_for_content);
+            let new_scroll = if selected_line_start < scroll_offset {
+                selected_line_start
+            } else if selected_line_end > scroll_offset + available_for_content {
+                selected_line_end.saturating_sub(available_for_content)
+            } else {
+                scroll_offset
+            };
+
+            if new_scroll == scroll_offset {
+                break;
+            }
+            scroll_offset = new_scroll.min(max_scroll);
         }
 
-        scroll_offset = scroll_offset.min(max_scroll);
-
-        has_above = scroll_offset > 0;
-        above_indicator_space = if has_above { 1 } else { 0 };
-        content_space_without_below = visible_height.saturating_sub(above_indicator_space);
-        has_below = scroll_offset + content_space_without_below < total_lines;
-        indicator_space = above_indicator_space + if has_below { 1 } else { 0 };
-        available_for_content = visible_height.saturating_sub(indicator_space);
+        let has_above = scroll_offset > 0;
+        let above_indicator_space = if has_above { 1 } else { 0 };
+        let content_space_without_below = visible_height.saturating_sub(above_indicator_space);
+        let has_below = scroll_offset + content_space_without_below < total_lines;
+        let indicator_space = above_indicator_space + if has_below { 1 } else { 0 };
+        let available_for_content = visible_height.saturating_sub(indicator_space);
 
         let mut all_lines: Vec<(usize, Line<'static>)> = Vec::new();
 
