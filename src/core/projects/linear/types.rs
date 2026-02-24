@@ -132,6 +132,7 @@ pub struct LinearIssueSummary {
     pub url: String,
     pub parent_id: Option<String>,
     pub has_children: bool,
+    pub team_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,6 +169,12 @@ pub struct LinearIssueData {
     pub state: LinearStateData,
     pub parent: Option<LinearIssueParent>,
     pub children: Option<ChildrenConnection>,
+    pub team: LinearTeamData,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinearTeamData {
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]

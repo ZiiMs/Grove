@@ -37,8 +37,13 @@ impl AirtableClient {
     }
 
     pub async fn get_record(&self, record_id: &str) -> Result<AirtableTaskSummary> {
-        let url = format!("{}/{}/{}", Self::BASE_URL, self.base_id, self.table_name);
-        let url = format!("{}?filterByFormula={{RECORD_ID()='{}'}}", url, record_id);
+        let url = format!(
+            "{}/{}/{}/{}",
+            Self::BASE_URL,
+            self.base_id,
+            self.table_name,
+            record_id
+        );
 
         tracing::debug!("Airtable get_record: url={}", url);
 
@@ -63,14 +68,8 @@ impl AirtableClient {
             bail!("Airtable API error: {} - {}", status, response_text);
         }
 
-        let records: AirtableRecordsResponse =
+        let record: AirtableRecord =
             serde_json::from_str(&response_text).context("Failed to parse Airtable response")?;
-
-        let record = records
-            .records
-            .into_iter()
-            .next()
-            .context("Record not found")?;
 
         Ok(self.record_to_summary(record))
     }
