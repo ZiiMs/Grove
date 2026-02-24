@@ -8,6 +8,7 @@ pub fn sanitize_branch_name(name: &str) -> String {
 pub fn sanitize_linear_branch_name(username: &str, identifier: &str, title: &str) -> String {
     let slug = title
         .split_whitespace()
+        .map(|word| word.trim_end_matches(['.', '!', '?', ',']))
         .collect::<Vec<_>>()
         .join("-")
         .replace('/', "")
@@ -70,6 +71,26 @@ mod tests {
                 "Create helper/utils section for reused code"
             ),
             "ziim/gre-30-create-helperutils-section-for-reused-code"
+        );
+    }
+
+    #[test]
+    fn test_linear_branch_name_with_trailing_punctuation() {
+        assert_eq!(
+            sanitize_linear_branch_name(
+                "ziim",
+                "GRE-30",
+                "Create helper/utils section for reused code."
+            ),
+            "ziim/gre-30-create-helperutils-section-for-reused-code"
+        );
+    }
+
+    #[test]
+    fn test_linear_branch_name_with_multiple_punctuation() {
+        assert_eq!(
+            sanitize_linear_branch_name("ziim", "GRE-31", "Fix this bug, please?!"),
+            "ziim/gre-31-fix-this-bug-please"
         );
     }
 }
