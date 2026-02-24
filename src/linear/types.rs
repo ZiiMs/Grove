@@ -250,9 +250,7 @@ pub struct ViewerQueryData {
 #[derive(Debug, Deserialize)]
 pub struct LinearUserData {
     pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub display_name: Option<String>,
+    pub display_name: String,
 }
 
 #[derive(Debug, Deserialize)]

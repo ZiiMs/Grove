@@ -99,10 +99,9 @@ impl LinearClient {
 
     pub async fn get_viewer(&self) -> Result<String> {
         let query = r#"
-            query Viewer {
+            query Query {
                 viewer {
                     id
-                    name
                     displayName
                 }
             }
@@ -146,14 +145,7 @@ impl LinearClient {
             }
         };
 
-        let username = data
-            .data
-            .viewer
-            .display_name
-            .filter(|s| !s.is_empty())
-            .unwrap_or(data.data.viewer.name);
-
-        Ok(username)
+        Ok(data.data.viewer.display_name)
     }
 
     pub async fn get_issue(&self, issue_id: &str) -> Result<LinearIssueSummary> {
