@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use grove::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
-    AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
+    AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus, StatusDetection,
 };
 use grove::airtable::{parse_airtable_record_id, AirtableTaskStatus, OptionalAirtableClient};
 use grove::app::{
@@ -171,7 +171,11 @@ async fn main() -> Result<()> {
     } else if project_needs_setup {
         // Show project setup wizard if project not configured
         state.show_project_setup = true;
-        state.project_setup = Some(grove::app::ProjectSetupState::default());
+        let wizard = grove::app::ProjectSetupState {
+            config: state.settings.repo_config.clone(),
+            ..Default::default()
+        };
+        state.project_setup = Some(wizard);
         state.log_info("Project not configured - showing project setup wizard".to_string());
     }
 
@@ -305,12 +309,20 @@ async fn main() -> Result<()> {
     let agent_poll_tx = action_tx.clone();
     let selected_rx_clone = selected_watch_rx.clone();
     let ai_agent = config.global.ai_agent.clone();
+    let debug_mode = config.global.debug_mode;
     tokio::spawn(async move {
         use futures::future::FutureExt;
         use std::panic::AssertUnwindSafe;
 
         let result = AssertUnwindSafe(async {
-            poll_agents(agent_watch_rx, selected_rx_clone, agent_poll_tx, ai_agent).await
+            poll_agents(
+                agent_watch_rx,
+                selected_rx_clone,
+                agent_poll_tx,
+                ai_agent,
+                debug_mode,
+            )
+            .await
         })
         .catch_unwind()
         .await;
@@ -926,6 +938,14 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return Some(Action::ToggleHelp);
     }
 
+    // Handle status debug overlay
+    if state.show_status_debug {
+        let kb = &state.config.keybinds;
+        if matches_keybind(key, &kb.debug_status) || key.code == KeyCode::Esc {
+            return Some(Action::ToggleStatusDebug);
+        }
+    }
+
     // Handle global setup wizard
     if state.show_global_setup {
         if let Some(wizard) = &state.global_setup {
@@ -984,42 +1004,58 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     if state.show_project_setup {
         if let Some(wizard) = &state.project_setup {
             return match key.code {
-                KeyCode::Char(c) if wizard.editing_text => Some(Action::ProjectSetupInputChar(c)),
-                KeyCode::Backspace if wizard.editing_text => Some(Action::ProjectSetupBackspace),
                 KeyCode::Esc => {
-                    if wizard.editing_text {
-                        Some(Action::ProjectSetupCancelEdit)
-                    } else if wizard.dropdown_open {
+                    if wizard.git_provider_dropdown_open || wizard.pm_provider_dropdown_open {
                         Some(Action::ProjectSetupToggleDropdown)
                     } else {
                         Some(Action::ProjectSetupSkip)
                     }
                 }
-                KeyCode::Up | KeyCode::Char('k') if !wizard.editing_text => {
-                    if wizard.dropdown_open {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if wizard.git_provider_dropdown_open {
                         Some(Action::ProjectSetupDropdownPrev)
+                    } else if wizard.pm_provider_dropdown_open {
+                        Some(Action::ProjectSetupPmDropdownPrev)
                     } else {
                         Some(Action::ProjectSetupNavigatePrev)
                     }
                 }
-                KeyCode::Down | KeyCode::Char('j') if !wizard.editing_text => {
-                    if wizard.dropdown_open {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if wizard.git_provider_dropdown_open {
                         Some(Action::ProjectSetupDropdownNext)
+                    } else if wizard.pm_provider_dropdown_open {
+                        Some(Action::ProjectSetupPmDropdownNext)
                     } else {
                         Some(Action::ProjectSetupNavigateNext)
                     }
                 }
                 KeyCode::Enter => {
-                    if wizard.editing_text {
-                        Some(Action::ProjectSetupConfirmEdit)
-                    } else if wizard.dropdown_open {
+                    if wizard.git_provider_dropdown_open {
                         Some(Action::ProjectSetupConfirmDropdown)
+                    } else if wizard.pm_provider_dropdown_open {
+                        Some(Action::ProjectSetupConfirmPmDropdown)
                     } else {
-                        Some(Action::ProjectSetupEditField)
+                        Some(Action::ProjectSetupSelect)
                     }
                 }
-                KeyCode::Char('c') if !wizard.editing_text && !wizard.dropdown_open => {
-                    Some(Action::ProjectSetupComplete)
+                KeyCode::Char('c') => Some(Action::ProjectSetupComplete),
+                KeyCode::Char('l') => {
+                    if wizard.git_provider_dropdown_open {
+                        Some(Action::ProjectSetupDropdownNext)
+                    } else if wizard.pm_provider_dropdown_open {
+                        Some(Action::ProjectSetupPmDropdownNext)
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::Char('h') => {
+                    if wizard.git_provider_dropdown_open {
+                        Some(Action::ProjectSetupDropdownPrev)
+                    } else if wizard.pm_provider_dropdown_open {
+                        Some(Action::ProjectSetupPmDropdownPrev)
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             };
@@ -1208,6 +1244,12 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     if matches_keybind(key, &kb.show_tasks) {
         return Some(Action::EnterInputMode(InputMode::BrowseTasks));
     }
+
+    // Status debug
+    if matches_keybind(key, &kb.debug_status) {
+        return Some(Action::ToggleStatusDebug);
+    }
+
     match key.code {
         KeyCode::Char('T') => {
             let selected_id = state.selected_agent_id();
@@ -2026,7 +2068,11 @@ async fn process_action(
         }
 
         // Status updates
-        Action::UpdateAgentStatus { id, status } => {
+        Action::UpdateAgentStatus {
+            id,
+            status,
+            status_reason,
+        } => {
             if let Some(agent) = state.agents.get_mut(&id) {
                 if matches!(agent.status, grove::agent::AgentStatus::Paused) {
                     return Ok(false);
@@ -2038,6 +2084,9 @@ async fn process_action(
                 let changed = old_label != new_label;
 
                 agent.set_status(status);
+                if let Some(reason) = status_reason {
+                    agent.status_reason = Some(reason);
+                }
                 if changed {
                     state.log_debug(format!("Agent '{}': {} -> {}", name, old_label, new_label));
                 }
@@ -5394,6 +5443,14 @@ async fn process_action(
             state.show_logs = !state.show_logs;
         }
 
+        Action::ToggleStatusDebug => {
+            if state.config.global.debug_mode {
+                state.show_status_debug = !state.show_status_debug;
+            } else {
+                state.show_info("Debug mode is disabled. Enable it in Settings > General.");
+            }
+        }
+
         Action::ShowError(msg) => {
             state.toast = Some(Toast::new(msg, ToastLevel::Error));
         }
@@ -5925,6 +5982,7 @@ async fn process_action(
                 state.settings.pending_editor = state.config.global.editor.clone();
                 state.settings.pending_log_level = state.config.global.log_level;
                 state.settings.pending_worktree_location = state.config.global.worktree_location;
+                state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
             }
         }
@@ -6241,6 +6299,10 @@ async fn process_action(
                 grove::app::SettingsField::ShowBanner => {
                     state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
                     state.config.ui.show_banner = state.settings.pending_ui.show_banner;
+                }
+                grove::app::SettingsField::DebugMode => {
+                    state.settings.pending_debug_mode = !state.settings.pending_debug_mode;
+                    state.config.global.debug_mode = state.settings.pending_debug_mode;
                 }
                 grove::app::SettingsField::ProjectMgmtProvider => {
                     let current = state.settings.repo_config.project_mgmt.provider;
@@ -6994,6 +7056,7 @@ async fn process_action(
             state.config.global.editor = state.settings.pending_editor.clone();
             state.config.global.log_level = state.settings.pending_log_level;
             state.config.global.worktree_location = state.settings.pending_worktree_location;
+            state.config.global.debug_mode = state.settings.pending_debug_mode;
             state.config.ui = state.settings.pending_ui.clone();
             state.config.keybinds = state.settings.pending_keybinds.clone();
 
@@ -7340,7 +7403,11 @@ async fn process_action(
                     .unwrap_or(true);
                 if project_needs_setup {
                     state.show_project_setup = true;
-                    state.project_setup = Some(grove::app::ProjectSetupState::default());
+                    let wizard = grove::app::ProjectSetupState {
+                        config: state.settings.repo_config.clone(),
+                        ..Default::default()
+                    };
+                    state.project_setup = Some(wizard);
                 }
             }
         }
@@ -7348,92 +7415,170 @@ async fn process_action(
         // Project Setup Wizard Actions
         Action::ProjectSetupNavigateNext => {
             if let Some(wizard) = &mut state.project_setup {
-                let max_fields = get_project_fields(&wizard.config.git.provider).len();
-                if wizard.field_index < max_fields.saturating_sub(1) {
-                    wizard.field_index += 1;
+                if wizard.selected_index < 5 {
+                    wizard.selected_index += 1;
                 }
             }
         }
         Action::ProjectSetupNavigatePrev => {
             if let Some(wizard) = &mut state.project_setup {
-                if wizard.field_index > 0 {
-                    wizard.field_index -= 1;
+                if wizard.selected_index > 0 {
+                    wizard.selected_index -= 1;
                 }
             }
         }
-        Action::ProjectSetupEditField => {
+        Action::ProjectSetupSelect => {
             if let Some(wizard) = &mut state.project_setup {
-                let fields = get_project_fields(&wizard.config.git.provider);
-                if let Some(field) = fields.get(wizard.field_index) {
-                    if *field == ProjectSetupField::GitProvider {
-                        wizard.dropdown_open = true;
-                        wizard.dropdown_index = 0;
-                    } else {
-                        wizard.editing_text = true;
-                        wizard.text_buffer = get_project_field_value(&wizard.config, field);
+                match wizard.selected_index {
+                    0 => {
+                        wizard.git_provider_dropdown_open = true;
+                        let all_providers = grove::app::config::GitProvider::all();
+                        wizard.git_provider_dropdown_index = all_providers
+                            .iter()
+                            .position(|p| *p == wizard.config.git.provider)
+                            .unwrap_or(0);
                     }
+                    1 => {
+                        state.git_setup.active = true;
+                        state.git_setup.source = grove::app::state::SetupSource::ProjectSetup;
+                        state.git_setup.step = grove::app::state::GitSetupStep::Token;
+                        state.git_setup.error = None;
+                        state.git_setup.field_index = 0;
+                        state.git_setup.advanced_expanded = false;
+                        state.git_setup.editing_text = false;
+                        state.git_setup.dropdown_open = false;
+                        state.git_setup.dropdown_index = 0;
+                        state.git_setup.text_buffer.clear();
+                        state.git_setup.loading = false;
+                        state.git_setup.project_id.clear();
+                        state.git_setup.owner.clear();
+                        state.git_setup.repo.clear();
+                        state.git_setup.base_url.clear();
+                        state.git_setup.detected_from_remote = false;
+                        state.git_setup.project_name = None;
+                        state.git_setup.ci_provider =
+                            grove::app::config::CodebergCiProvider::default();
+                        state.git_setup.woodpecker_repo_id.clear();
+
+                        // Try to auto-detect from git remote
+                        let provider = wizard.config.git.provider;
+                        if let Some(remote_info) = grove::git::parse_remote_info(&state.repo_path) {
+                            state.git_setup.owner = remote_info.owner.clone();
+                            state.git_setup.repo = remote_info.repo.clone();
+                            state.git_setup.detected_from_remote = remote_info.provider == provider;
+                            if remote_info.provider == provider {
+                                if let Some(url) = remote_info.base_url {
+                                    state.git_setup.base_url = url;
+                                }
+                            }
+                        }
+                    }
+                    2 => {
+                        wizard.pm_provider_dropdown_open = true;
+                        let all_providers = grove::app::config::ProjectMgmtProvider::all();
+                        wizard.pm_provider_dropdown_index = all_providers
+                            .iter()
+                            .position(|p| *p == wizard.config.project_mgmt.provider)
+                            .unwrap_or(0);
+                    }
+                    3 => {
+                        state.pm_setup.active = true;
+                        state.pm_setup.source = grove::app::state::SetupSource::ProjectSetup;
+                        state.pm_setup.step = grove::app::state::PmSetupStep::Token;
+                        state.pm_setup.teams.clear();
+                        state.pm_setup.all_databases.clear();
+                        state.pm_setup.teams_loading = false;
+                        state.pm_setup.error = None;
+                        state.pm_setup.selected_team_index = 0;
+                        state.pm_setup.field_index = 0;
+                        state.pm_setup.advanced_expanded = false;
+                        state.pm_setup.manual_team_id.clear();
+                        state.pm_setup.in_progress_state.clear();
+                        state.pm_setup.done_state.clear();
+                    }
+                    4 => {
+                        if let Some(wizard) = state.project_setup.take() {
+                            if let Err(e) = wizard.config.save(&state.repo_path) {
+                                state.log_error(format!("Failed to save project config: {}", e));
+                            } else {
+                                state.settings.repo_config = wizard.config.clone();
+                                state.log_info("Project setup complete".to_string());
+                            }
+                        }
+                        state.show_project_setup = false;
+                    }
+                    5 => {
+                        state.show_project_setup = false;
+                        state.project_setup = None;
+                        state.log_info("Project setup closed".to_string());
+                    }
+                    _ => {}
                 }
-            }
-        }
-        Action::ProjectSetupCancelEdit => {
-            if let Some(wizard) = &mut state.project_setup {
-                wizard.editing_text = false;
-                wizard.text_buffer.clear();
-            }
-        }
-        Action::ProjectSetupConfirmEdit => {
-            if let Some(wizard) = &mut state.project_setup {
-                let fields = get_project_fields(&wizard.config.git.provider);
-                if let Some(field) = fields.get(wizard.field_index) {
-                    set_project_field_value(&mut wizard.config, field, &wizard.text_buffer);
-                }
-                wizard.editing_text = false;
-                wizard.text_buffer.clear();
-            }
-        }
-        Action::ProjectSetupInputChar(c) => {
-            if let Some(wizard) = &mut state.project_setup {
-                wizard.text_buffer.push(c);
-            }
-        }
-        Action::ProjectSetupBackspace => {
-            if let Some(wizard) = &mut state.project_setup {
-                wizard.text_buffer.pop();
             }
         }
         Action::ProjectSetupToggleDropdown => {
             if let Some(wizard) = &mut state.project_setup {
-                wizard.dropdown_open = false;
+                wizard.git_provider_dropdown_open = false;
+                wizard.pm_provider_dropdown_open = false;
             }
         }
         Action::ProjectSetupDropdownPrev => {
             if let Some(wizard) = &mut state.project_setup {
-                if wizard.dropdown_index > 0 {
-                    wizard.dropdown_index -= 1;
+                if wizard.git_provider_dropdown_index > 0 {
+                    wizard.git_provider_dropdown_index -= 1;
                 }
             }
         }
         Action::ProjectSetupDropdownNext => {
             if let Some(wizard) = &mut state.project_setup {
                 let max = grove::app::config::GitProvider::all().len();
-                if wizard.dropdown_index < max.saturating_sub(1) {
-                    wizard.dropdown_index += 1;
+                if wizard.git_provider_dropdown_index < max.saturating_sub(1) {
+                    wizard.git_provider_dropdown_index += 1;
                 }
             }
         }
         Action::ProjectSetupConfirmDropdown => {
             if let Some(wizard) = &mut state.project_setup {
                 let all_providers = grove::app::config::GitProvider::all();
-                if wizard.dropdown_index < all_providers.len() {
-                    wizard.config.git.provider = all_providers[wizard.dropdown_index];
+                if wizard.git_provider_dropdown_index < all_providers.len() {
+                    wizard.config.git.provider = all_providers[wizard.git_provider_dropdown_index];
+                    state.settings.repo_config.git.provider =
+                        all_providers[wizard.git_provider_dropdown_index];
                 }
-                wizard.dropdown_open = false;
+                wizard.git_provider_dropdown_open = false;
+            }
+        }
+        Action::ProjectSetupPmDropdownPrev => {
+            if let Some(wizard) = &mut state.project_setup {
+                if wizard.pm_provider_dropdown_index > 0 {
+                    wizard.pm_provider_dropdown_index -= 1;
+                }
+            }
+        }
+        Action::ProjectSetupPmDropdownNext => {
+            if let Some(wizard) = &mut state.project_setup {
+                let max = grove::app::config::ProjectMgmtProvider::all().len();
+                if wizard.pm_provider_dropdown_index < max.saturating_sub(1) {
+                    wizard.pm_provider_dropdown_index += 1;
+                }
+            }
+        }
+        Action::ProjectSetupConfirmPmDropdown => {
+            if let Some(wizard) = &mut state.project_setup {
+                let all_providers = grove::app::config::ProjectMgmtProvider::all();
+                if wizard.pm_provider_dropdown_index < all_providers.len() {
+                    wizard.config.project_mgmt.provider =
+                        all_providers[wizard.pm_provider_dropdown_index];
+                    state.settings.repo_config.project_mgmt.provider =
+                        all_providers[wizard.pm_provider_dropdown_index];
+                }
+                wizard.pm_provider_dropdown_open = false;
             }
         }
         Action::ProjectSetupSkip => {
             state.show_project_setup = false;
             state.project_setup = None;
-            state.log_info("Project setup skipped".to_string());
+            state.log_info("Project setup closed".to_string());
         }
         Action::ProjectSetupComplete => {
             if let Some(wizard) = state.project_setup.take() {
@@ -7450,6 +7595,7 @@ async fn process_action(
         // PM Setup Wizard Actions
         Action::OpenPmSetup => {
             state.pm_setup.active = true;
+            state.pm_setup.source = grove::app::state::SetupSource::Settings;
             state.pm_setup.step = grove::app::state::PmSetupStep::Token;
             state.pm_setup.teams.clear();
             state.pm_setup.all_databases.clear();
@@ -7463,7 +7609,10 @@ async fn process_action(
         }
         Action::ClosePmSetup => {
             state.pm_setup.active = false;
-            state.settings.active = true;
+            if state.pm_setup.source == grove::app::state::SetupSource::Settings {
+                state.settings.active = true;
+            }
+            state.pm_setup.source = grove::app::state::SetupSource::default();
         }
         Action::PmSetupNextStep => match state.pm_setup.step {
             grove::app::state::PmSetupStep::Token => {
@@ -7697,7 +7846,10 @@ async fn process_action(
         Action::PmSetupPrevStep => match state.pm_setup.step {
             grove::app::state::PmSetupStep::Token => {
                 state.pm_setup.active = false;
-                state.settings.active = true;
+                if state.pm_setup.source == grove::app::state::SetupSource::Settings {
+                    state.settings.active = true;
+                }
+                state.pm_setup.source = grove::app::state::SetupSource::default();
             }
             grove::app::state::PmSetupStep::Workspace => {
                 state.pm_setup.step = grove::app::state::PmSetupStep::Token;
@@ -8088,8 +8240,14 @@ async fn process_action(
                     }
                 }
             }
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.config = state.settings.repo_config.clone();
+            }
             state.pm_setup.active = false;
-            state.settings.active = true;
+            if state.pm_setup.source == grove::app::state::SetupSource::Settings {
+                state.settings.active = true;
+            }
+            state.pm_setup.source = grove::app::state::SetupSource::default();
         }
 
         // Git Setup Wizard Actions
@@ -8097,6 +8255,7 @@ async fn process_action(
             state.settings.active = false;
             let provider = state.settings.repo_config.git.provider;
             state.git_setup.active = true;
+            state.git_setup.source = grove::app::state::SetupSource::Settings;
             state.git_setup.step = grove::app::state::GitSetupStep::Token;
             state.git_setup.error = None;
             state.git_setup.field_index = 0;
@@ -8216,7 +8375,10 @@ async fn process_action(
         Action::GitSetupPrevStep => match state.git_setup.step {
             grove::app::state::GitSetupStep::Token => {
                 state.git_setup.active = false;
-                state.settings.active = true;
+                if state.git_setup.source == grove::app::state::SetupSource::Settings {
+                    state.settings.active = true;
+                }
+                state.git_setup.source = grove::app::state::SetupSource::default();
             }
             grove::app::state::GitSetupStep::Repository => {
                 state.git_setup.step = grove::app::state::GitSetupStep::Token;
@@ -8308,6 +8470,10 @@ async fn process_action(
                     }
                 }
                 grove::app::config::GitProvider::GitHub => {
+                    state.log_debug(format!(
+                        "GitHub setup: owner='{}', repo='{}'",
+                        state.git_setup.owner, state.git_setup.repo
+                    ));
                     state.settings.repo_config.git.github.owner =
                         Some(state.git_setup.owner.clone());
                     state.settings.repo_config.git.github.repo = Some(state.git_setup.repo.clone());
@@ -8326,6 +8492,14 @@ async fn process_action(
                     }
                 }
                 grove::app::config::GitProvider::Codeberg => {
+                    state.log_debug(format!(
+                        "Codeberg setup: owner='{}', repo='{}', base_url='{}', ci_provider={:?}, woodpecker_id='{}'",
+                        state.git_setup.owner,
+                        state.git_setup.repo,
+                        state.git_setup.base_url,
+                        state.git_setup.ci_provider,
+                        state.git_setup.woodpecker_repo_id
+                    ));
                     state.settings.repo_config.git.codeberg.owner =
                         Some(state.git_setup.owner.clone());
                     state.settings.repo_config.git.codeberg.repo =
@@ -8362,8 +8536,15 @@ async fn process_action(
                 }
             }
 
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.config = state.settings.repo_config.clone();
+            }
+
             state.git_setup.active = false;
-            state.settings.active = true;
+            if state.git_setup.source == grove::app::state::SetupSource::Settings {
+                state.settings.active = true;
+            }
+            state.git_setup.source = grove::app::state::SetupSource::default();
         }
         Action::GitSetupFetchProjectId => {
             if grove::app::Config::gitlab_token().is_some() {
@@ -8599,149 +8780,13 @@ async fn process_action(
     Ok(false)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProjectSetupField {
-    GitProvider,
-    GitLabProjectId,
-    GitLabBaseUrl,
-    GitHubOwner,
-    GitHubRepo,
-    CodebergOwner,
-    CodebergRepo,
-    CodebergBaseUrl,
-    BranchPrefix,
-    MainBranch,
-    AsanaProjectGid,
-}
-
-fn get_project_fields(provider: &grove::app::config::GitProvider) -> Vec<ProjectSetupField> {
-    use grove::app::config::GitProvider;
-    let mut fields = vec![ProjectSetupField::GitProvider];
-    match provider {
-        GitProvider::GitLab => {
-            fields.push(ProjectSetupField::GitLabProjectId);
-            fields.push(ProjectSetupField::GitLabBaseUrl);
-        }
-        GitProvider::GitHub => {
-            fields.push(ProjectSetupField::GitHubOwner);
-            fields.push(ProjectSetupField::GitHubRepo);
-        }
-        GitProvider::Codeberg => {
-            fields.push(ProjectSetupField::CodebergOwner);
-            fields.push(ProjectSetupField::CodebergRepo);
-            fields.push(ProjectSetupField::CodebergBaseUrl);
-        }
-    }
-    fields.push(ProjectSetupField::BranchPrefix);
-    fields.push(ProjectSetupField::MainBranch);
-    fields.push(ProjectSetupField::AsanaProjectGid);
-    fields
-}
-
-fn get_project_field_value(config: &grove::app::RepoConfig, field: &ProjectSetupField) -> String {
-    match field {
-        ProjectSetupField::GitProvider => config.git.provider.display_name().to_string(),
-        ProjectSetupField::GitLabProjectId => config
-            .git
-            .gitlab
-            .project_id
-            .map(|id| id.to_string())
-            .unwrap_or_default(),
-        ProjectSetupField::GitLabBaseUrl => config.git.gitlab.base_url.clone(),
-        ProjectSetupField::GitHubOwner => config.git.github.owner.clone().unwrap_or_default(),
-        ProjectSetupField::GitHubRepo => config.git.github.repo.clone().unwrap_or_default(),
-        ProjectSetupField::CodebergOwner => config.git.codeberg.owner.clone().unwrap_or_default(),
-        ProjectSetupField::CodebergRepo => config.git.codeberg.repo.clone().unwrap_or_default(),
-        ProjectSetupField::CodebergBaseUrl => config.git.codeberg.base_url.clone(),
-        ProjectSetupField::BranchPrefix => config.git.branch_prefix.clone(),
-        ProjectSetupField::MainBranch => config.git.main_branch.clone(),
-        ProjectSetupField::AsanaProjectGid => config
-            .project_mgmt
-            .asana
-            .project_gid
-            .clone()
-            .unwrap_or_default(),
-    }
-}
-
-fn set_project_field_value(
-    config: &mut grove::app::RepoConfig,
-    field: &ProjectSetupField,
-    value: &str,
-) {
-    match field {
-        ProjectSetupField::GitLabProjectId => {
-            config.git.gitlab.project_id = value.parse().ok();
-        }
-        ProjectSetupField::GitLabBaseUrl => {
-            config.git.gitlab.base_url = value.to_string();
-        }
-        ProjectSetupField::GitHubOwner => {
-            config.git.github.owner = if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            };
-        }
-        ProjectSetupField::GitHubRepo => {
-            config.git.github.repo = if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            };
-        }
-        ProjectSetupField::BranchPrefix => {
-            config.git.branch_prefix = if value.is_empty() {
-                "feature/".to_string()
-            } else {
-                value.to_string()
-            };
-        }
-        ProjectSetupField::MainBranch => {
-            config.git.main_branch = if value.is_empty() {
-                "main".to_string()
-            } else {
-                value.to_string()
-            };
-        }
-        ProjectSetupField::AsanaProjectGid => {
-            config.project_mgmt.asana.project_gid = if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            };
-        }
-        ProjectSetupField::CodebergOwner => {
-            config.git.codeberg.owner = if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            };
-        }
-        ProjectSetupField::CodebergRepo => {
-            config.git.codeberg.repo = if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            };
-        }
-        ProjectSetupField::CodebergBaseUrl => {
-            config.git.codeberg.base_url = if value.is_empty() {
-                "https://codeberg.org".to_string()
-            } else {
-                value.to_string()
-            };
-        }
-        _ => {}
-    }
-}
-
 /// Background task to poll agent status from tmux sessions.
 async fn poll_agents(
     mut agent_rx: watch::Receiver<HashSet<Uuid>>,
     mut selected_rx: watch::Receiver<Option<Uuid>>,
     tx: mpsc::UnboundedSender<Action>,
     ai_agent: grove::app::config::AiAgent,
+    debug_mode: bool,
 ) {
     use std::collections::HashMap;
 
@@ -8864,10 +8909,20 @@ async fn poll_agents(
                     }))
                     .unwrap_or_else(|e| {
                         tracing::warn!("detect_status_for_agent panicked: {:?}", e);
-                        AgentStatus::Idle
+                        StatusDetection::new(AgentStatus::Idle)
                     });
 
-                    let _ = tx.send(Action::UpdateAgentStatus { id, status });
+                    let status_reason = if debug_mode {
+                        status.to_status_reason()
+                    } else {
+                        None
+                    };
+
+                    let _ = tx.send(Action::UpdateAgentStatus {
+                        id,
+                        status: status.status,
+                        status_reason,
+                    });
 
                     // Check for MR URLs detection
                     if !agents_with_mr.contains(&id) {

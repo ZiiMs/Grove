@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::agent::ProjectMgmtTaskStatus;
+use crate::agent::{ProjectMgmtTaskStatus, StatusReason};
 use crate::app::task_list::TaskListItem;
 use crate::app::ToastLevel;
 
@@ -36,6 +36,7 @@ pub enum Action {
     UpdateAgentStatus {
         id: Uuid,
         status: crate::agent::AgentStatus,
+        status_reason: Option<StatusReason>,
     },
     UpdateAgentOutput {
         id: Uuid,
@@ -177,6 +178,7 @@ pub enum Action {
     ToggleDiffView,
     ToggleHelp,
     ToggleLogs,
+    ToggleStatusDebug,
     ShowError(String),
     ShowToast {
         message: String,
@@ -306,15 +308,14 @@ pub enum Action {
     // Project Setup Wizard
     ProjectSetupNavigateNext,
     ProjectSetupNavigatePrev,
-    ProjectSetupEditField,
-    ProjectSetupCancelEdit,
-    ProjectSetupConfirmEdit,
-    ProjectSetupInputChar(char),
-    ProjectSetupBackspace,
+    ProjectSetupSelect,
     ProjectSetupToggleDropdown,
     ProjectSetupDropdownPrev,
     ProjectSetupDropdownNext,
     ProjectSetupConfirmDropdown,
+    ProjectSetupPmDropdownPrev,
+    ProjectSetupPmDropdownNext,
+    ProjectSetupConfirmPmDropdown,
     ProjectSetupSkip,
     ProjectSetupComplete,
 
