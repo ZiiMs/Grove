@@ -29,6 +29,13 @@ impl AgentManager {
         ai_agent: &AiAgent,
         worktree_symlinks: &[String],
     ) -> Result<Agent> {
+        tracing::debug!(
+            "AgentManager::create_agent - name: {:?}, branch: {:?}, repo_path: {:?}, worktree_base: {:?}",
+            name,
+            branch,
+            self.repo_path,
+            self.worktree_base
+        );
         let worktree = Worktree::new(&self.repo_path, self.worktree_base.clone());
         let worktree_path = worktree
             .create(branch)
@@ -95,7 +102,7 @@ impl AgentManager {
     /// Detect the current status of an agent from its output.
     pub fn detect_status(&self, agent: &Agent) -> Result<AgentStatus> {
         let output = self.capture_output(agent, 50)?;
-        Ok(super::detector::detect_status(&output))
+        Ok(super::detector::detect_status(&output).status)
     }
 
     /// Send input to an agent's tmux session.

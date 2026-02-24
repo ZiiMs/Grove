@@ -20,6 +20,7 @@ impl TaskItemStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskListItem {
     pub id: String,
+    pub identifier: Option<String>,
     pub name: String,
     pub status: TaskItemStatus,
     pub status_name: String,

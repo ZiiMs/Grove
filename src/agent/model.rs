@@ -14,8 +14,15 @@ use crate::gitlab::MergeRequestStatus;
 use crate::linear::LinearTaskStatus;
 use crate::notion::NotionTaskStatus;
 
-/// Maximum number of activity ticks to track for sparkline
 const ACTIVITY_HISTORY_SIZE: usize = 20;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatusReason {
+    pub status: AgentStatus,
+    pub reason: String,
+    pub pattern: Option<String>,
+    pub timestamp: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ProjectMgmtTaskStatus {
@@ -235,6 +242,8 @@ pub struct Agent {
     /// Whether a work summary has been requested for this agent
     #[serde(default)]
     pub summary_requested: bool,
+    #[serde(skip)]
+    pub status_reason: Option<StatusReason>,
 }
 
 impl Agent {
@@ -263,6 +272,7 @@ impl Agent {
             asana_task_status: AsanaTaskStatus::None,
             pm_task_status: ProjectMgmtTaskStatus::None,
             summary_requested: false,
+            status_reason: None,
         }
     }
 

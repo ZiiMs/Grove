@@ -400,6 +400,16 @@ impl<'a> SettingsModal<'a> {
                 .to_string(),
                 true,
             ),
+            SettingsField::DebugMode => (
+                "Debug Mode".to_string(),
+                if self.state.pending_debug_mode {
+                    "[x]"
+                } else {
+                    "[ ]"
+                }
+                .to_string(),
+                true,
+            ),
             SettingsField::GitProvider => (
                 "Provider".to_string(),
                 self.state
@@ -821,6 +831,7 @@ impl<'a> SettingsModal<'a> {
                     | SettingsField::ShowMetrics
                     | SettingsField::ShowLogs
                     | SettingsField::ShowBanner
+                    | SettingsField::DebugMode
                     | SettingsField::DevServerAutoStart
             );
             let is_keybind = field.is_keybind_field();

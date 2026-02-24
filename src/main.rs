@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use grove::agent::{
     detect_checklist_progress, detect_mr_url, detect_status_for_agent, Agent, AgentManager,
-    AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus,
+    AgentStatus, ForegroundProcess, ProjectMgmtTaskStatus, StatusDetection,
 };
 use grove::airtable::{parse_airtable_record_id, AirtableTaskStatus, OptionalAirtableClient};
 use grove::app::{
@@ -309,12 +309,20 @@ async fn main() -> Result<()> {
     let agent_poll_tx = action_tx.clone();
     let selected_rx_clone = selected_watch_rx.clone();
     let ai_agent = config.global.ai_agent.clone();
+    let debug_mode = config.global.debug_mode;
     tokio::spawn(async move {
         use futures::future::FutureExt;
         use std::panic::AssertUnwindSafe;
 
         let result = AssertUnwindSafe(async {
-            poll_agents(agent_watch_rx, selected_rx_clone, agent_poll_tx, ai_agent).await
+            poll_agents(
+                agent_watch_rx,
+                selected_rx_clone,
+                agent_poll_tx,
+                ai_agent,
+                debug_mode,
+            )
+            .await
         })
         .catch_unwind()
         .await;
@@ -930,6 +938,14 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return Some(Action::ToggleHelp);
     }
 
+    // Handle status debug overlay
+    if state.show_status_debug {
+        let kb = &state.config.keybinds;
+        if matches_keybind(key, &kb.debug_status) || key.code == KeyCode::Esc {
+            return Some(Action::ToggleStatusDebug);
+        }
+    }
+
     // Handle global setup wizard
     if state.show_global_setup {
         if let Some(wizard) = &state.global_setup {
@@ -1228,6 +1244,12 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     if matches_keybind(key, &kb.show_tasks) {
         return Some(Action::EnterInputMode(InputMode::BrowseTasks));
     }
+
+    // Status debug
+    if matches_keybind(key, &kb.debug_status) {
+        return Some(Action::ToggleStatusDebug);
+    }
+
     match key.code {
         KeyCode::Char('T') => {
             let selected_id = state.selected_agent_id();
@@ -2046,7 +2068,11 @@ async fn process_action(
         }
 
         // Status updates
-        Action::UpdateAgentStatus { id, status } => {
+        Action::UpdateAgentStatus {
+            id,
+            status,
+            status_reason,
+        } => {
             if let Some(agent) = state.agents.get_mut(&id) {
                 if matches!(agent.status, grove::agent::AgentStatus::Paused) {
                     return Ok(false);
@@ -2058,6 +2084,9 @@ async fn process_action(
                 let changed = old_label != new_label;
 
                 agent.set_status(status);
+                if let Some(reason) = status_reason {
+                    agent.status_reason = Some(reason);
+                }
                 if changed {
                     state.log_debug(format!("Agent '{}': {} -> {}", name, old_label, new_label));
                 }
@@ -4542,6 +4571,7 @@ async fn process_action(
                                         };
                                         TaskListItem {
                                             id: t.gid,
+                                            identifier: None,
                                             name: t.name,
                                             status,
                                             status_name,
@@ -4588,6 +4618,7 @@ async fn process_action(
                                         let has_children = parent_ids.contains(&p.id);
                                         TaskListItem {
                                             id: p.id,
+                                            identifier: None,
                                             name: p.name,
                                             status,
                                             status_name,
@@ -4642,6 +4673,7 @@ async fn process_action(
                                         let has_children = parent_ids.contains(&t.id);
                                         TaskListItem {
                                             id: t.id,
+                                            identifier: None,
                                             name: t.name,
                                             status,
                                             status_name,
@@ -4688,6 +4720,7 @@ async fn process_action(
                                         let has_children = parent_ids.contains(&t.id);
                                         TaskListItem {
                                             id: t.id,
+                                            identifier: None,
                                             name: t.name,
                                             status,
                                             status_name,
@@ -4738,6 +4771,7 @@ async fn process_action(
                                         let has_children = parent_ids.contains(&i.id);
                                         TaskListItem {
                                             id: i.id,
+                                            identifier: Some(i.identifier),
                                             name: i.title,
                                             status,
                                             status_name: i.state_name,
@@ -5184,99 +5218,143 @@ async fn process_action(
 
         Action::CreateAgentFromSelectedTask => {
             if let Some(task) = state.task_list.get(state.task_list_selected).cloned() {
-                let branch = grove::util::sanitize_branch_name(&task.name);
-                if branch.is_empty() {
-                    state.show_error("Invalid task name for branch");
-                } else {
-                    let name = task.name.clone();
-                    state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
-                    let ai_agent = state.config.global.ai_agent.clone();
-                    let worktree_symlinks = state
+                let provider = state.settings.repo_config.project_mgmt.provider;
+
+                let (branch, name) = if provider == ProjectMgmtProvider::Linear {
+                    let username = state
                         .settings
                         .repo_config
-                        .dev_server
-                        .worktree_symlinks
+                        .project_mgmt
+                        .linear
+                        .username
                         .clone();
-                    match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks)
-                    {
-                        Ok(mut agent) => {
-                            state.log_info(format!("Agent '{}' created successfully", agent.name));
-
-                            let pm_status = match state.settings.repo_config.project_mgmt.provider {
-                                ProjectMgmtProvider::Asana => {
-                                    ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
-                                        gid: task.id.clone(),
-                                        name: task.name.clone(),
-                                        url: task.url.clone(),
-                                        is_subtask: task.is_subtask(),
-                                        status_name: task.status_name.clone(),
-                                    })
-                                }
-                                ProjectMgmtProvider::Notion => {
-                                    ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Linked {
-                                        page_id: task.id.clone(),
-                                        name: task.name.clone(),
-                                        url: task.url.clone(),
-                                        status_option_id: String::new(),
-                                        status_name: task.status_name.clone(),
-                                    })
-                                }
-                                ProjectMgmtProvider::Clickup => {
-                                    ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::NotStarted {
-                                        id: task.id.clone(),
-                                        name: task.name.clone(),
-                                        url: task.url.clone(),
-                                        status: task.status_name.clone(),
-                                        is_subtask: task.is_subtask(),
-                                    })
-                                }
-                                ProjectMgmtProvider::Airtable => ProjectMgmtTaskStatus::Airtable(
-                                    AirtableTaskStatus::NotStarted {
-                                        id: task.id.clone(),
-                                        name: task.name.clone(),
-                                        url: task.url.clone(),
-                                        is_subtask: task.is_subtask(),
-                                    },
-                                ),
-                                ProjectMgmtProvider::Linear => {
-                                    let identifier = task
-                                        .name
-                                        .split_whitespace()
-                                        .next()
-                                        .unwrap_or("")
-                                        .to_string();
-                                    ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted {
-                                        id: task.id.clone(),
-                                        identifier,
-                                        name: task.name.clone(),
-                                        status_name: task.status_name.clone(),
-                                        url: task.url.clone(),
-                                        is_subtask: task.is_subtask(),
-                                    })
-                                }
+                    match username {
+                        Some(ref uname) if !uname.is_empty() => {
+                            let identifier = task.identifier.clone().unwrap_or_default();
+                            if identifier.is_empty() {
+                                state.show_error("Linear task has no identifier");
+                                return Ok(false);
+                            }
+                            let title_without_id = task
+                                .name
+                                .strip_prefix(&identifier)
+                                .unwrap_or(&task.name)
+                                .trim()
+                                .trim_start_matches(['-', ' '])
+                                .to_string();
+                            let title = if title_without_id.is_empty() {
+                                &task.name
+                            } else {
+                                &title_without_id
                             };
-                            agent.pm_task_status = pm_status;
-                            state.log_info(format!("Linked task '{}' to agent", task.name));
-
-                            state.add_agent(agent);
-                            state.select_last();
-                            state.toast = None;
-                            state.exit_input_mode();
-
-                            let _ = agent_watch_tx.send(state.agents.keys().cloned().collect());
-                            let _ = branch_watch_tx.send(
-                                state
-                                    .agents
-                                    .values()
-                                    .map(|a| (a.id, a.branch.clone()))
-                                    .collect(),
+                            let branch =
+                                grove::util::sanitize_linear_branch_name(uname, &identifier, title);
+                            let name = format!("{} {}", identifier, title);
+                            (branch, name)
+                        }
+                        _ => {
+                            state.show_error(
+                                "Linear username not configured. Please re-run Linear setup.",
                             );
-                            let _ = selected_watch_tx.send(state.selected_agent_id());
+                            return Ok(false);
                         }
-                        Err(e) => {
-                            state.log_error(format!("Failed to create agent: {}", e));
-                            state.show_error(format!("Failed to create agent: {}", e));
-                        }
+                    }
+                } else {
+                    let branch = grove::util::sanitize_branch_name(&task.name);
+                    if branch.is_empty() {
+                        state.show_error("Invalid task name for branch");
+                        return Ok(false);
+                    }
+                    (branch, task.name.clone())
+                };
+
+                state.log_info(format!("Creating agent '{}' on branch '{}'", name, branch));
+                let ai_agent = state.config.global.ai_agent.clone();
+                tracing::debug!(
+                    "CreateAgentFromSelectedTask - name: {:?}, branch: {:?}, ai_agent: {:?}",
+                    name,
+                    branch,
+                    ai_agent
+                );
+                let worktree_symlinks = state
+                    .settings
+                    .repo_config
+                    .dev_server
+                    .worktree_symlinks
+                    .clone();
+                match agent_manager.create_agent(&name, &branch, &ai_agent, &worktree_symlinks) {
+                    Ok(mut agent) => {
+                        state.log_info(format!("Agent '{}' created successfully", agent.name));
+
+                        let pm_status = match provider {
+                            ProjectMgmtProvider::Asana => {
+                                ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
+                                    gid: task.id.clone(),
+                                    name: task.name.clone(),
+                                    url: task.url.clone(),
+                                    is_subtask: task.is_subtask(),
+                                    status_name: task.status_name.clone(),
+                                })
+                            }
+                            ProjectMgmtProvider::Notion => {
+                                ProjectMgmtTaskStatus::Notion(NotionTaskStatus::Linked {
+                                    page_id: task.id.clone(),
+                                    name: task.name.clone(),
+                                    url: task.url.clone(),
+                                    status_option_id: String::new(),
+                                    status_name: task.status_name.clone(),
+                                })
+                            }
+                            ProjectMgmtProvider::Clickup => {
+                                ProjectMgmtTaskStatus::ClickUp(ClickUpTaskStatus::NotStarted {
+                                    id: task.id.clone(),
+                                    name: task.name.clone(),
+                                    url: task.url.clone(),
+                                    status: task.status_name.clone(),
+                                    is_subtask: task.is_subtask(),
+                                })
+                            }
+                            ProjectMgmtProvider::Airtable => {
+                                ProjectMgmtTaskStatus::Airtable(AirtableTaskStatus::NotStarted {
+                                    id: task.id.clone(),
+                                    name: task.name.clone(),
+                                    url: task.url.clone(),
+                                    is_subtask: task.is_subtask(),
+                                })
+                            }
+                            ProjectMgmtProvider::Linear => {
+                                let identifier = task.identifier.clone().unwrap_or_default();
+                                ProjectMgmtTaskStatus::Linear(LinearTaskStatus::NotStarted {
+                                    id: task.id.clone(),
+                                    identifier,
+                                    name: task.name.clone(),
+                                    status_name: task.status_name.clone(),
+                                    url: task.url.clone(),
+                                    is_subtask: task.is_subtask(),
+                                })
+                            }
+                        };
+                        agent.pm_task_status = pm_status;
+                        state.log_info(format!("Linked task '{}' to agent", task.name));
+
+                        state.add_agent(agent);
+                        state.select_last();
+                        state.toast = None;
+                        state.exit_input_mode();
+
+                        let _ = agent_watch_tx.send(state.agents.keys().cloned().collect());
+                        let _ = branch_watch_tx.send(
+                            state
+                                .agents
+                                .values()
+                                .map(|a| (a.id, a.branch.clone()))
+                                .collect(),
+                        );
+                        let _ = selected_watch_tx.send(state.selected_agent_id());
+                    }
+                    Err(e) => {
+                        state.log_error(format!("Failed to create agent: {}", e));
+                        state.show_error(format!("Failed to create agent: {}", e));
                     }
                 }
             }
@@ -5363,6 +5441,14 @@ async fn process_action(
 
         Action::ToggleLogs => {
             state.show_logs = !state.show_logs;
+        }
+
+        Action::ToggleStatusDebug => {
+            if state.config.global.debug_mode {
+                state.show_status_debug = !state.show_status_debug;
+            } else {
+                state.show_info("Debug mode is disabled. Enable it in Settings > General.");
+            }
         }
 
         Action::ShowError(msg) => {
@@ -5896,6 +5982,7 @@ async fn process_action(
                 state.settings.pending_editor = state.config.global.editor.clone();
                 state.settings.pending_log_level = state.config.global.log_level;
                 state.settings.pending_worktree_location = state.config.global.worktree_location;
+                state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
             }
         }
@@ -6212,6 +6299,10 @@ async fn process_action(
                 grove::app::SettingsField::ShowBanner => {
                     state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
                     state.config.ui.show_banner = state.settings.pending_ui.show_banner;
+                }
+                grove::app::SettingsField::DebugMode => {
+                    state.settings.pending_debug_mode = !state.settings.pending_debug_mode;
+                    state.config.global.debug_mode = state.settings.pending_debug_mode;
                 }
                 grove::app::SettingsField::ProjectMgmtProvider => {
                     let current = state.settings.repo_config.project_mgmt.provider;
@@ -6965,6 +7056,7 @@ async fn process_action(
             state.config.global.editor = state.settings.pending_editor.clone();
             state.config.global.log_level = state.settings.pending_log_level;
             state.config.global.worktree_location = state.settings.pending_worktree_location;
+            state.config.global.debug_mode = state.settings.pending_debug_mode;
             state.config.ui = state.settings.pending_ui.clone();
             state.config.keybinds = state.settings.pending_keybinds.clone();
 
@@ -7935,6 +8027,17 @@ async fn process_action(
             state.pm_setup.teams_loading = false;
             state.pm_setup.error = Some(message);
         }
+        Action::LinearUserFetched { username } => {
+            state.settings.repo_config.project_mgmt.linear.username = Some(username.clone());
+            if let Err(e) = state.settings.repo_config.save(&state.repo_path) {
+                state.log_error(format!("Failed to save Linear username: {}", e));
+            } else {
+                state.log_info(format!("Linear username saved: {}", username));
+            }
+        }
+        Action::LinearUserFetchError { message } => {
+            state.log_error(format!("Failed to fetch Linear username: {}", message));
+        }
         Action::PmSetupComplete => {
             let provider = state.settings.repo_config.project_mgmt.provider;
             let manual_id = state.pm_setup.manual_team_id.clone();
@@ -7983,8 +8086,24 @@ async fn process_action(
                             ));
                             linear_client.reconfigure(
                                 grove::app::Config::linear_token().as_deref(),
-                                Some(id),
+                                Some(id.clone()),
                             );
+                            let linear_client_clone = linear_client.clone();
+                            let action_tx_clone = action_tx.clone();
+                            tokio::spawn(async move {
+                                match linear_client_clone.get_viewer().await {
+                                    Ok(username) => {
+                                        let _ = action_tx_clone
+                                            .send(Action::LinearUserFetched { username });
+                                    }
+                                    Err(e) => {
+                                        let _ =
+                                            action_tx_clone.send(Action::LinearUserFetchError {
+                                                message: e.to_string(),
+                                            });
+                                    }
+                                }
+                            });
                         }
                     }
                     grove::app::config::ProjectMgmtProvider::Notion => {
@@ -8667,6 +8786,7 @@ async fn poll_agents(
     mut selected_rx: watch::Receiver<Option<Uuid>>,
     tx: mpsc::UnboundedSender<Action>,
     ai_agent: grove::app::config::AiAgent,
+    debug_mode: bool,
 ) {
     use std::collections::HashMap;
 
@@ -8789,10 +8909,20 @@ async fn poll_agents(
                     }))
                     .unwrap_or_else(|e| {
                         tracing::warn!("detect_status_for_agent panicked: {:?}", e);
-                        AgentStatus::Idle
+                        StatusDetection::new(AgentStatus::Idle)
                     });
 
-                    let _ = tx.send(Action::UpdateAgentStatus { id, status });
+                    let status_reason = if debug_mode {
+                        status.to_status_reason()
+                    } else {
+                        None
+                    };
+
+                    let _ = tx.send(Action::UpdateAgentStatus {
+                        id,
+                        status: status.status,
+                        status_reason,
+                    });
 
                     // Check for MR URLs detection
                     if !agents_with_mr.contains(&id) {

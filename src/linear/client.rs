@@ -5,7 +5,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use super::types::{
     GraphQLResponse, IssueQueryData, IssueUpdateData, LinearIssueSummary, TeamIssuesQueryData,
-    TeamStatesQueryData, TeamsQueryData, WorkflowState,
+    TeamStatesQueryData, TeamsQueryData, ViewerQueryData, WorkflowState,
 };
 use crate::cache::Cache;
 
@@ -13,12 +13,12 @@ const LINEAR_API_URL: &str = "https://api.linear.app/graphql";
 
 pub struct LinearClient {
     client: reqwest::Client,
-    team_id: String,
+    team_id: Option<String>,
     cached_states: Mutex<Option<Vec<WorkflowState>>>,
 }
 
 impl LinearClient {
-    pub fn new(token: &str, team_id: String) -> Result<Self> {
+    pub fn new(token: &str, team_id: Option<String>) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -167,6 +167,57 @@ impl LinearClient {
             .collect())
     }
 
+    pub async fn get_viewer(&self) -> Result<String> {
+        let query = r#"
+            query Query {
+                viewer {
+                    id
+                    displayName
+                }
+            }
+        "#;
+
+        let body = serde_json::json!({ "query": query });
+
+        tracing::debug!("Linear get_viewer: sending request");
+
+        let response = self
+            .client
+            .post(LINEAR_API_URL)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to fetch Linear viewer")?;
+
+        let status = response.status();
+        let response_text = response.text().await.unwrap_or_default();
+
+        tracing::debug!(
+            "Linear get_viewer response: status={}, body={}",
+            status,
+            response_text
+        );
+
+        if !status.is_success() {
+            tracing::error!("Linear API error: {} - {}", status, response_text);
+            bail!("Linear API error: {} - {}", status, response_text);
+        }
+
+        let data: GraphQLResponse<ViewerQueryData> = match serde_json::from_str(&response_text) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse Linear viewer response: {} - body: {}",
+                    e,
+                    response_text
+                );
+                bail!("Failed to parse Linear viewer response: {}", e);
+            }
+        };
+
+        Ok(data.data.viewer.display_name)
+    }
+
     pub async fn get_issue(&self, issue_id: &str) -> Result<LinearIssueSummary> {
         let query = r#"
             query Issue($id: String!) {
@@ -252,6 +303,11 @@ impl LinearClient {
     }
 
     pub async fn get_team_issues(&self) -> Result<Vec<LinearIssueSummary>> {
+        let team_id = self
+            .team_id
+            .as_ref()
+            .context("Team ID required to fetch team issues")?;
+
         let query = r#"
             query TeamIssues($teamId: String!, $first: Int) {
                 team(id: $teamId) {
@@ -293,12 +349,12 @@ impl LinearClient {
         let body = serde_json::json!({
             "query": query,
             "variables": {
-                "teamId": self.team_id,
+                "teamId": team_id,
                 "first": 100
             }
         });
 
-        tracing::debug!("Linear get_team_issues: team_id={}", self.team_id);
+        tracing::debug!("Linear get_team_issues: team_id={}", team_id);
 
         let response = self
             .client
@@ -391,6 +447,11 @@ impl LinearClient {
             }
         }
 
+        let team_id = self
+            .team_id
+            .as_ref()
+            .context("Team ID required to fetch workflow states")?;
+
         let query = r#"
             query WorkflowStates($teamId: String!) {
                 team(id: $teamId) {
@@ -408,10 +469,10 @@ impl LinearClient {
 
         let body = serde_json::json!({
             "query": query,
-            "variables": { "teamId": self.team_id }
+            "variables": { "teamId": team_id }
         });
 
-        tracing::debug!("Linear get_workflow_states: team_id={}", self.team_id);
+        tracing::debug!("Linear get_workflow_states: team_id={}", team_id);
 
         let response = self
             .client
@@ -608,7 +669,7 @@ pub struct OptionalLinearClient {
 
 impl OptionalLinearClient {
     pub fn new(token: Option<&str>, team_id: Option<String>, cache_ttl_secs: u64) -> Self {
-        let client = token.and_then(|tok| team_id.and_then(|tid| LinearClient::new(tok, tid).ok()));
+        let client = token.and_then(|tok| LinearClient::new(tok, team_id).ok());
         Self {
             client: RwLock::new(client),
             cached_issues: Cache::new(cache_ttl_secs),
@@ -616,8 +677,7 @@ impl OptionalLinearClient {
     }
 
     pub fn reconfigure(&self, token: Option<&str>, team_id: Option<String>) {
-        let new_client =
-            token.and_then(|tok| team_id.and_then(|tid| LinearClient::new(tok, tid).ok()));
+        let new_client = token.and_then(|tok| LinearClient::new(tok, team_id).ok());
         if let Ok(mut guard) = self.client.try_write() {
             *guard = new_client;
         }
@@ -638,6 +698,14 @@ impl OptionalLinearClient {
                     bail!("Linear not configured")
                 }
             }
+        }
+    }
+
+    pub async fn get_viewer(&self) -> Result<String> {
+        let guard = self.client.read().await;
+        match &*guard {
+            Some(c) => c.get_viewer().await,
+            None => bail!("Linear not configured"),
         }
     }
 

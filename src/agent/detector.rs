@@ -1,9 +1,46 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::AgentStatus;
+use super::{AgentStatus, StatusReason};
 use crate::app::config::AiAgent;
 use crate::gitlab::{MergeRequestStatus, PipelineStatus};
+use chrono::Utc;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatusDetection {
+    pub status: AgentStatus,
+    pub reason: Option<String>,
+    pub pattern: Option<String>,
+}
+
+impl StatusDetection {
+    pub fn new(status: AgentStatus) -> Self {
+        Self {
+            status,
+            reason: None,
+            pattern: None,
+        }
+    }
+
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
+    pub fn with_pattern(mut self, pattern: impl Into<String>) -> Self {
+        self.pattern = Some(pattern.into());
+        self
+    }
+
+    pub fn to_status_reason(&self) -> Option<StatusReason> {
+        self.reason.as_ref().map(|reason| StatusReason {
+            status: self.status.clone(),
+            reason: reason.clone(),
+            pattern: self.pattern.clone(),
+            timestamp: Utc::now(),
+        })
+    }
+}
 
 /// Classification of the foreground process in the tmux pane.
 /// Used as ground truth for status detection.
@@ -376,12 +413,12 @@ fn detect_checklist_generic(output: &str) -> Option<(u32, u32)> {
 /// 4. Error - if there are error indicators
 /// 5. Completed - if there are completion indicators
 /// 6. Idle - default fallback
-pub fn detect_status(output: &str) -> AgentStatus {
+pub fn detect_status(output: &str) -> StatusDetection {
     let clean_output = strip_ansi(output);
     let lines: Vec<&str> = clean_output.lines().collect();
 
     if lines.is_empty() {
-        return AgentStatus::Stopped;
+        return StatusDetection::new(AgentStatus::Stopped).with_reason("No output captured");
     }
 
     // Get recent lines for analysis (last 15 lines should capture current state)
@@ -389,43 +426,40 @@ pub fn detect_status(output: &str) -> AgentStatus {
     let recent_text = recent_lines.join("\n");
 
     // Get the last few lines (where spinners and prompts appear)
-    let _last_line = lines.last().copied().unwrap_or("");
     let last_3_lines: Vec<&str> = lines.iter().rev().take(3).cloned().collect();
     let last_3_text = last_3_lines.join("\n");
 
     // 1. CHECK FOR QUESTIONS/PERMISSION PROMPTS (highest priority)
-    // These indicate Claude needs user input for a specific question
     for pattern in QUESTION_PATTERNS.iter() {
         if pattern.is_match(&recent_text) {
-            return AgentStatus::AwaitingInput;
+            return StatusDetection::new(AgentStatus::AwaitingInput)
+                .with_reason("Found question/permission prompt")
+                .with_pattern("QUESTION_PATTERNS");
         }
     }
 
     // 2. CHECK FOR RUNNING (before prompt check!)
-    // If there are spinners in the last few lines, Claude is actively working
     if SPINNER_CHARS.is_match(&last_3_text) {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found spinner characters in last 3 lines")
+            .with_pattern("SPINNER_CHARS");
     }
 
-    // Tool execution patterns (in last 3 lines)
     for pattern in TOOL_PATTERNS.iter() {
         if pattern.is_match(&last_3_text) {
-            return AgentStatus::Running;
+            return StatusDetection::new(AgentStatus::Running)
+                .with_reason("Found tool execution pattern")
+                .with_pattern("TOOL_PATTERNS");
         }
     }
 
-    // 3. CHECK IF AT PROMPT (only after confirming no spinners!)
-    // Claude Code uses "❯" as its prompt (often followed by non-breaking space U+00A0)
-    // Shells use ">", "›", "➜", "$", "%"
+    // 3. CHECK IF AT PROMPT
     let is_at_prompt = lines.iter().rev().take(5).any(|line| {
-        // Strip both regular whitespace and non-breaking spaces
         let trimmed = line.trim().trim_matches('\u{00A0}');
-        // Exact prompt characters (after stripping NBSP)
         if trimmed == ">" || trimmed == "›" || trimmed == "❯" || trimmed == "$" || trimmed == "%"
         {
             return true;
         }
-        // Short lines starting with prompt char (like "❯ " or "> ")
         if trimmed.len() <= 3
             && (trimmed.starts_with('>')
                 || trimmed.starts_with('›')
@@ -435,7 +469,6 @@ pub fn detect_status(output: &str) -> AgentStatus {
         {
             return true;
         }
-        // Shell prompts with git info like "➜ project git:(branch)"
         if trimmed.starts_with("➜") {
             return true;
         }
@@ -443,38 +476,41 @@ pub fn detect_status(output: &str) -> AgentStatus {
     });
 
     if is_at_prompt {
-        // At the prompt with no spinners = idle, ready for input
-        return AgentStatus::Idle;
+        return StatusDetection::new(AgentStatus::Idle).with_reason("At prompt, ready for input");
     }
 
     // 4. CHECK FOR ERRORS
     for pattern in ERROR_PATTERNS.iter() {
         if pattern.is_match(&recent_text) {
-            // Try to extract the error message
             for line in recent_lines.iter() {
                 if pattern.is_match(line) {
                     let msg = line.trim().chars().take(40).collect::<String>();
-                    return AgentStatus::Error(msg);
+                    return StatusDetection::new(AgentStatus::Error(msg.clone()))
+                        .with_reason(format!("Error pattern matched: {}", msg))
+                        .with_pattern("ERROR_PATTERNS");
                 }
             }
-            return AgentStatus::Error("Error detected".to_string());
+            return StatusDetection::new(AgentStatus::Error("Error detected".to_string()))
+                .with_reason("Error pattern matched in output")
+                .with_pattern("ERROR_PATTERNS");
         }
     }
 
     // 5. CHECK FOR COMPLETION
     for pattern in COMPLETION_PATTERNS.iter() {
         if pattern.is_match(&recent_text) {
-            return AgentStatus::Completed;
+            return StatusDetection::new(AgentStatus::Completed)
+                .with_reason("Found completion pattern")
+                .with_pattern("COMPLETION_PATTERNS");
         }
     }
 
     // 6. DEFAULT
-    // If there's output but we can't determine state, assume idle
     if clean_output.trim().is_empty() {
-        AgentStatus::Stopped
+        StatusDetection::new(AgentStatus::Stopped).with_reason("Empty output")
     } else {
-        // Has output, no clear indicators - probably idle at prompt
-        AgentStatus::Idle
+        StatusDetection::new(AgentStatus::Idle)
+            .with_reason("Default: has output but no clear indicators")
     }
 }
 
@@ -482,26 +518,27 @@ pub fn detect_status(output: &str) -> AgentStatus {
 ///
 /// This is more accurate than `detect_status()` alone because it uses the tmux
 /// foreground process as definitive signal for whether Claude is running.
-pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+pub fn detect_status_with_process(output: &str, foreground: ForegroundProcess) -> StatusDetection {
     match foreground {
         ForegroundProcess::ClaudeRunning => detect_status_claude_running(output),
         ForegroundProcess::OpencodeRunning => detect_status_opencode(output, foreground),
         ForegroundProcess::CodexRunning => detect_status_codex(output, foreground),
         ForegroundProcess::GeminiRunning => detect_status_gemini(output, foreground),
         ForegroundProcess::Shell => detect_status_at_shell(output),
-        ForegroundProcess::OtherProcess(_) => detect_status_other_process(output),
+        ForegroundProcess::OtherProcess(p) => detect_status_other_process(output, &p),
         ForegroundProcess::Unknown => detect_status(output),
     }
 }
 
 /// Status detection when a subprocess (cargo, git, etc.) is in the foreground.
 /// Still checks for input prompts since the AI may be waiting for user response.
-fn detect_status_other_process(output: &str) -> AgentStatus {
+fn detect_status_other_process(output: &str, process_name: &str) -> StatusDetection {
     let clean_output = strip_ansi(output);
     let lines: Vec<&str> = clean_output.lines().collect();
 
     if lines.is_empty() {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason(format!("Subprocess '{}' running, no output", process_name));
     }
 
     let last_5_lines: Vec<&str> = lines
@@ -515,7 +552,9 @@ fn detect_status_other_process(output: &str) -> AgentStatus {
 
     for pattern in QUESTION_PATTERNS.iter() {
         if pattern.is_match(&last_5_text) {
-            return AgentStatus::AwaitingInput;
+            return StatusDetection::new(AgentStatus::AwaitingInput)
+                .with_reason("Found question pattern in subprocess output")
+                .with_pattern("QUESTION_PATTERNS");
         }
     }
 
@@ -524,27 +563,32 @@ fn detect_status_other_process(output: &str) -> AgentStatus {
             for line in last_5_lines.iter() {
                 if pattern.is_match(line) {
                     let msg = line.trim().chars().take(40).collect::<String>();
-                    return AgentStatus::Error(msg);
+                    return StatusDetection::new(AgentStatus::Error(msg.clone()))
+                        .with_reason(format!("Error in subprocess: {}", msg))
+                        .with_pattern("ERROR_PATTERNS");
                 }
             }
-            return AgentStatus::Error("Error detected".to_string());
+            return StatusDetection::new(AgentStatus::Error("Error detected".to_string()))
+                .with_reason("Error pattern matched in subprocess output")
+                .with_pattern("ERROR_PATTERNS");
         }
     }
 
-    AgentStatus::Running
+    StatusDetection::new(AgentStatus::Running)
+        .with_reason(format!("Subprocess '{}' in foreground", process_name))
 }
 
 /// Status detection when we know Claude (node/npx) is the foreground process.
 /// Default is Running (fixes false Idle during silent thinking).
-fn detect_status_claude_running(output: &str) -> AgentStatus {
+fn detect_status_claude_running(output: &str) -> StatusDetection {
     let clean_output = strip_ansi(output);
     let lines: Vec<&str> = clean_output.lines().collect();
 
     if lines.is_empty() {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Claude process running, no output yet");
     }
 
-    // Narrow window: last 5 non-empty lines for question patterns (reduces false positives)
     let last_5_lines: Vec<&str> = lines
         .iter()
         .rev()
@@ -557,7 +601,9 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
     // 1. Check for questions/permission prompts (highest priority)
     for pattern in QUESTION_PATTERNS.iter() {
         if pattern.is_match(&last_5_text) {
-            return AgentStatus::AwaitingInput;
+            return StatusDetection::new(AgentStatus::AwaitingInput)
+                .with_reason("Found question/permission prompt")
+                .with_pattern("QUESTION_PATTERNS");
         }
     }
 
@@ -567,14 +613,18 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
             for line in last_5_lines.iter() {
                 if pattern.is_match(line) {
                     let msg = line.trim().chars().take(40).collect::<String>();
-                    return AgentStatus::Error(msg);
+                    return StatusDetection::new(AgentStatus::Error(msg.clone()))
+                        .with_reason(format!("Error pattern matched: {}", msg))
+                        .with_pattern("ERROR_PATTERNS");
                 }
             }
-            return AgentStatus::Error("Error detected".to_string());
+            return StatusDetection::new(AgentStatus::Error("Error detected".to_string()))
+                .with_reason("Error pattern matched in output")
+                .with_pattern("ERROR_PATTERNS");
         }
     }
 
-    // 3. Check last 3 non-empty lines for spinners/tool execution → Running
+    // 3. Check last 3 non-empty lines for spinners/tool execution
     let last_3_lines: Vec<&str> = lines
         .iter()
         .rev()
@@ -585,16 +635,20 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
     let last_3_text = last_3_lines.join("\n");
 
     if SPINNER_CHARS.is_match(&last_3_text) {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found spinner characters in last 3 lines")
+            .with_pattern("SPINNER_CHARS");
     }
 
     for pattern in TOOL_PATTERNS.iter() {
         if pattern.is_match(&last_3_text) {
-            return AgentStatus::Running;
+            return StatusDetection::new(AgentStatus::Running)
+                .with_reason("Found tool execution pattern")
+                .with_pattern("TOOL_PATTERNS");
         }
     }
 
-    // 4. Check for prompt character → Completed or Idle
+    // 4. Check for prompt character
     let is_at_prompt = lines
         .iter()
         .rev()
@@ -623,7 +677,6 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
         });
 
     if is_at_prompt {
-        // Check last 10 non-empty lines for completion patterns
         let last_10_lines: Vec<&str> = lines
             .iter()
             .rev()
@@ -635,20 +688,22 @@ fn detect_status_claude_running(output: &str) -> AgentStatus {
 
         for pattern in COMPLETION_PATTERNS.iter() {
             if pattern.is_match(&last_10_text) {
-                return AgentStatus::Completed;
+                return StatusDetection::new(AgentStatus::Completed)
+                    .with_reason("At prompt with completion pattern")
+                    .with_pattern("COMPLETION_PATTERNS");
             }
         }
-        return AgentStatus::Idle;
+        return StatusDetection::new(AgentStatus::Idle).with_reason("At prompt, ready for input");
     }
 
-    // 5. Default: Claude process is running → Running
-    // This fixes false Idle during silent thinking (no output change)
-    AgentStatus::Running
+    // 5. Default: Claude process is running
+    StatusDetection::new(AgentStatus::Running)
+        .with_reason("Claude process running, no specific indicators")
 }
 
 /// Status detection when the foreground is a shell (bash/zsh/etc).
 /// Claude has exited — check for errors, otherwise Idle.
-fn detect_status_at_shell(output: &str) -> AgentStatus {
+fn detect_status_at_shell(output: &str) -> StatusDetection {
     let clean_output = strip_ansi(output);
     let lines: Vec<&str> = clean_output.lines().collect();
 
@@ -661,14 +716,19 @@ fn detect_status_at_shell(output: &str) -> AgentStatus {
             for line in recent_lines.iter() {
                 if pattern.is_match(line) {
                     let msg = line.trim().chars().take(40).collect::<String>();
-                    return AgentStatus::Error(msg);
+                    return StatusDetection::new(AgentStatus::Error(msg.clone()))
+                        .with_reason(format!("Error detected at shell: {}", msg))
+                        .with_pattern("ERROR_PATTERNS");
                 }
             }
-            return AgentStatus::Error("Error detected".to_string());
+            return StatusDetection::new(AgentStatus::Error("Error detected".to_string()))
+                .with_reason("Error pattern matched at shell")
+                .with_pattern("ERROR_PATTERNS");
         }
     }
 
-    AgentStatus::Idle
+    StatusDetection::new(AgentStatus::Idle)
+        .with_reason("Shell process in foreground, no errors detected")
 }
 
 /// Agent-aware status detection using process-level ground truth.
@@ -677,7 +737,7 @@ pub fn detect_status_for_agent(
     output: &str,
     foreground: ForegroundProcess,
     agent_type: AiAgent,
-) -> AgentStatus {
+) -> StatusDetection {
     match agent_type {
         AiAgent::ClaudeCode => detect_status_with_process(output, foreground),
         AiAgent::Opencode => detect_status_opencode(output, foreground),
@@ -688,12 +748,13 @@ pub fn detect_status_for_agent(
 
 /// Status detection for OpenCode agent.
 /// Simple detection: "Permission required" = AwaitingInput, "esc interrupt" = Running, else Idle
-fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> StatusDetection {
     let clean_output = strip_ansi(output);
     let lines: Vec<&str> = clean_output.lines().collect();
 
     if lines.is_empty() {
-        return AgentStatus::Stopped;
+        return StatusDetection::new(AgentStatus::Stopped)
+            .with_reason("No output captured from tmux pane");
     }
 
     // Use full output for question/permission detection (these can appear anywhere)
@@ -711,7 +772,9 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
 
     // 1. Check for permission panel (highest priority)
     if full_lower.contains("permission required") {
-        return AgentStatus::AwaitingInput;
+        return StatusDetection::new(AgentStatus::AwaitingInput)
+            .with_reason("Found 'permission required' panel")
+            .with_pattern("permission_required");
     }
 
     // 2. Check for plan mode / multi-question panel
@@ -724,20 +787,30 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
         || (full_lower.contains("asked") && full_lower.contains("question"));
 
     if is_question_panel {
-        return AgentStatus::AwaitingInput;
+        return StatusDetection::new(AgentStatus::AwaitingInput)
+            .with_reason("Found question/plan mode panel")
+            .with_pattern("question_panel");
     }
 
-    // 3. Check for working indicator ("esc interrupt" or progress animation at bottom)
-    if last_5_text.contains("esc") && last_5_text.contains("interrupt") {
-        return AgentStatus::Running;
+    // 3. Check for working indicator ("esc interrupt" without "to" - excludes plan mode hints)
+    // Running shows: "esc interrupt" (e.g., "⬝⬝⬝⬝  esc interrupt")
+    // Plan mode shows: "esc to interrupt" (hint text, not actual working state)
+    if last_5_text.contains("esc interrupt") && !last_5_text.contains("esc to interrupt") {
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found 'esc interrupt' (not 'esc to interrupt') in last 5 lines")
+            .with_pattern("esc_interrupt");
     }
     // Check for progress animation (multiple consecutive dots)
     if OPENCODE_PROGRESS_PATTERN.is_match(&last_5_text) {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found progress animation (4+ consecutive dots)")
+            .with_pattern("OPENCODE_PROGRESS_PATTERN");
     }
     // Check for braille spinner characters
     if OPENCODE_SPINNER_CHARS.is_match(&last_5_text) {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found braille spinner characters")
+            .with_pattern("OPENCODE_SPINNER_CHARS");
     }
 
     // 4. Check for errors
@@ -746,17 +819,23 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
             for line in lines.iter().rev().take(15) {
                 if pattern.is_match(line) {
                     let msg = line.trim().chars().take(40).collect::<String>();
-                    return AgentStatus::Error(msg);
+                    return StatusDetection::new(AgentStatus::Error(msg.clone()))
+                        .with_reason(format!("Error pattern matched: {}", msg))
+                        .with_pattern("ERROR_PATTERNS");
                 }
             }
-            return AgentStatus::Error("Error detected".to_string());
+            return StatusDetection::new(AgentStatus::Error("Error detected".to_string()))
+                .with_reason("Error pattern matched in output")
+                .with_pattern("ERROR_PATTERNS");
         }
     }
 
     // 5. Check for completion patterns
     for pattern in COMPLETION_PATTERNS.iter() {
         if pattern.is_match(&clean_output) {
-            return AgentStatus::Completed;
+            return StatusDetection::new(AgentStatus::Completed)
+                .with_reason("Found completion pattern")
+                .with_pattern("COMPLETION_PATTERNS");
         }
     }
 
@@ -774,21 +853,28 @@ fn detect_status_opencode(output: &str, foreground: ForegroundProcess) -> AgentS
     // - OpencodeRunning + no working indicators = Idle (AI alive, waiting for input)
     // - Shell process = Stopped (AI has exited, at shell prompt)
     if is_shell_prompt && foreground != ForegroundProcess::OpencodeRunning {
-        return AgentStatus::Stopped;
+        return StatusDetection::new(AgentStatus::Stopped)
+            .with_reason(format!("Shell prompt detected: '{}'", last_line));
     }
 
     match foreground {
-        ForegroundProcess::OpencodeRunning => AgentStatus::Idle,
-        ForegroundProcess::Shell => AgentStatus::Stopped,
-        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::OpencodeRunning => StatusDetection::new(AgentStatus::Idle)
+            .with_reason("Opencode process running, no activity indicators"),
+        ForegroundProcess::Shell => {
+            StatusDetection::new(AgentStatus::Stopped).with_reason("Shell process in foreground")
+        }
+        ForegroundProcess::OtherProcess(p) => StatusDetection::new(AgentStatus::Running)
+            .with_reason(format!("Subprocess '{}' in foreground", p)),
         ForegroundProcess::Unknown
         | ForegroundProcess::ClaudeRunning
         | ForegroundProcess::CodexRunning
         | ForegroundProcess::GeminiRunning => {
             if clean_output.trim().is_empty() {
-                AgentStatus::Stopped
+                StatusDetection::new(AgentStatus::Stopped)
+                    .with_reason("Empty output, unknown process state")
             } else {
-                AgentStatus::Idle
+                StatusDetection::new(AgentStatus::Idle)
+                    .with_reason("Unknown process state, defaulting to idle")
             }
         }
     }
@@ -800,41 +886,48 @@ static CODEX_WORKING_PATTERN: LazyLock<Regex> =
 
 /// Status detection for Codex agent.
 /// Patterns: "• Working (Xs • esc to interrupt)" = Running, "Question X/X (X unanswered)" = AwaitingInput
-fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> StatusDetection {
     let clean_output = strip_ansi(output);
     let lines: Vec<&str> = clean_output.lines().collect();
 
     if lines.is_empty() {
-        return AgentStatus::Stopped;
+        return StatusDetection::new(AgentStatus::Stopped)
+            .with_reason("No output captured from tmux pane");
     }
 
     let full_lower = clean_output.to_lowercase();
 
     // 1. Check for question panel (highest priority)
-    // Multiple indicators that a question panel is shown:
-    // - "Question X/X (X unanswered)"
-    // - "tab to add notes" (keyboard hint for question panel)
-    // - "navigate questions" (keyboard hint)
     let is_question_panel = full_lower.contains("unanswered")
         || full_lower.contains("tab to add notes")
         || (full_lower.contains("navigate") && full_lower.contains("questions"))
         || (full_lower.contains("enter to submit") && full_lower.contains("answer"));
 
     if is_question_panel {
-        return AgentStatus::AwaitingInput;
+        return StatusDetection::new(AgentStatus::AwaitingInput)
+            .with_reason("Found question panel indicators")
+            .with_pattern("codex_question_panel");
     }
 
     // 2. Check for working indicator: "• Working (Xs"
-    // Must be specific to avoid matching keyboard hints
     if CODEX_WORKING_PATTERN.is_match(&full_lower) {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found 'Working (Xs' indicator")
+            .with_pattern("CODEX_WORKING_PATTERN");
     }
 
     // 3. Check for spinner characters
     let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
     let last_5_text = last_5_lines.join("\n");
-    if SPINNER_CHARS.is_match(&last_5_text) || OPENCODE_SPINNER_CHARS.is_match(&last_5_text) {
-        return AgentStatus::Running;
+    if SPINNER_CHARS.is_match(&last_5_text) {
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found spinner characters in last 5 lines")
+            .with_pattern("SPINNER_CHARS");
+    }
+    if OPENCODE_SPINNER_CHARS.is_match(&last_5_text) {
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found braille spinner in last 5 lines")
+            .with_pattern("OPENCODE_SPINNER_CHARS");
     }
 
     // 4. Check for errors
@@ -843,10 +936,14 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
             for line in lines.iter().rev().take(15) {
                 if pattern.is_match(line) {
                     let msg = line.trim().chars().take(40).collect::<String>();
-                    return AgentStatus::Error(msg);
+                    return StatusDetection::new(AgentStatus::Error(msg.clone()))
+                        .with_reason(format!("Error pattern matched: {}", msg))
+                        .with_pattern("ERROR_PATTERNS");
                 }
             }
-            return AgentStatus::Error("Error detected".to_string());
+            return StatusDetection::new(AgentStatus::Error("Error detected".to_string()))
+                .with_reason("Error pattern matched in output")
+                .with_pattern("ERROR_PATTERNS");
         }
     }
 
@@ -857,19 +954,20 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
     });
 
     if is_at_prompt {
-        // At prompt - check for completion patterns in last 10 lines
         let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
         let last_10_text = last_10_lines.join("\n");
 
         for pattern in COMPLETION_PATTERNS.iter() {
             if pattern.is_match(&last_10_text) {
-                return AgentStatus::Completed;
+                return StatusDetection::new(AgentStatus::Completed)
+                    .with_reason("At prompt with completion pattern")
+                    .with_pattern("COMPLETION_PATTERNS");
             }
         }
-        return AgentStatus::Idle;
+        return StatusDetection::new(AgentStatus::Idle).with_reason("At prompt, ready for input");
     }
 
-    // 6. Check for shell prompt (indicates AI has exited)
+    // 6. Check for shell prompt
     let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
     let is_shell_prompt = last_line.len() <= 50
         && (last_line.ends_with('$')
@@ -878,23 +976,29 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
             || last_line.starts_with("➜"));
 
     if is_shell_prompt && foreground != ForegroundProcess::CodexRunning {
-        return AgentStatus::Stopped;
+        return StatusDetection::new(AgentStatus::Stopped)
+            .with_reason(format!("Shell prompt detected: '{}'", last_line));
     }
 
     // 7. Process-based fallback
-    // If we got here with CodexRunning but no working indicator, agent is idle
     match foreground {
-        ForegroundProcess::CodexRunning => AgentStatus::Idle,
-        ForegroundProcess::Shell => AgentStatus::Stopped,
-        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::CodexRunning => StatusDetection::new(AgentStatus::Idle)
+            .with_reason("Codex process running, no activity indicators"),
+        ForegroundProcess::Shell => {
+            StatusDetection::new(AgentStatus::Stopped).with_reason("Shell process in foreground")
+        }
+        ForegroundProcess::OtherProcess(p) => StatusDetection::new(AgentStatus::Running)
+            .with_reason(format!("Subprocess '{}' in foreground", p)),
         ForegroundProcess::Unknown
         | ForegroundProcess::ClaudeRunning
         | ForegroundProcess::OpencodeRunning
         | ForegroundProcess::GeminiRunning => {
             if clean_output.trim().is_empty() {
-                AgentStatus::Stopped
+                StatusDetection::new(AgentStatus::Stopped)
+                    .with_reason("Empty output, unknown process state")
             } else {
-                AgentStatus::Running
+                StatusDetection::new(AgentStatus::Running)
+                    .with_reason("Unknown process state, defaulting to running")
             }
         }
     }
@@ -902,12 +1006,13 @@ fn detect_status_codex(output: &str, foreground: ForegroundProcess) -> AgentStat
 
 /// Status detection for Gemini agent.
 /// Detection: "Action Required" = AwaitingInput, "esc to cancel" = Running, else Idle
-fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentStatus {
+fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> StatusDetection {
     let clean_output = strip_ansi(output);
     let lines: Vec<&str> = clean_output.lines().collect();
 
     if lines.is_empty() {
-        return AgentStatus::Stopped;
+        return StatusDetection::new(AgentStatus::Stopped)
+            .with_reason("No output captured from tmux pane");
     }
 
     let last_5_lines: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
@@ -915,43 +1020,52 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
 
     // 1. Check for "Action Required" banner (highest priority for AwaitingInput)
     if GEMINI_ACTION_REQUIRED.is_match(&clean_output) {
-        return AgentStatus::AwaitingInput;
+        return StatusDetection::new(AgentStatus::AwaitingInput)
+            .with_reason("Found 'Action Required' banner")
+            .with_pattern("GEMINI_ACTION_REQUIRED");
     }
 
     // 2. Check for "Waiting for confirmation" dialog
     if GEMINI_WAITING_CONFIRMATION.is_match(&clean_output) {
-        return AgentStatus::AwaitingInput;
+        return StatusDetection::new(AgentStatus::AwaitingInput)
+            .with_reason("Found 'Waiting for confirmation' dialog")
+            .with_pattern("GEMINI_WAITING_CONFIRMATION");
     }
 
     // 3. Check for "Answer Questions" panel (Gemini's question dialog)
     if GEMINI_ANSWER_QUESTIONS.is_match(&clean_output) {
-        return AgentStatus::AwaitingInput;
+        return StatusDetection::new(AgentStatus::AwaitingInput)
+            .with_reason("Found 'Answer Questions' panel")
+            .with_pattern("GEMINI_ANSWER_QUESTIONS");
     }
 
     // 4. Check for keyboard hints indicating question panel
     if GEMINI_KEYBOARD_HINTS.is_match(&clean_output) {
-        return AgentStatus::AwaitingInput;
+        return StatusDetection::new(AgentStatus::AwaitingInput)
+            .with_reason("Found keyboard hints in question panel")
+            .with_pattern("GEMINI_KEYBOARD_HINTS");
     }
 
-    // 5. Check for running indicators FIRST - if actively running, don't check for old questions
-    // Timer format like "(esc to cancel, 15s)"
+    // 5. Check for running indicators FIRST
     if GEMINI_ESC_CANCEL_TIMER.is_match(&clean_output) {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found 'esc to cancel' timer indicator")
+            .with_pattern("GEMINI_ESC_CANCEL_TIMER");
     }
 
-    // Check for Gemini dots spinner
     if GEMINI_DOTS_SPINNER.is_match(&last_5_text) {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found Gemini dots spinner")
+            .with_pattern("GEMINI_DOTS_SPINNER");
     }
 
-    // Check for braille spinner characters (shared with other tools)
     if SPINNER_CHARS.is_match(&last_5_text) {
-        return AgentStatus::Running;
+        return StatusDetection::new(AgentStatus::Running)
+            .with_reason("Found braille spinner characters")
+            .with_pattern("SPINNER_CHARS");
     }
 
-    // 6. Check for numbered questions (only if NOT running)
-    // BUT skip if user has already answered
-    // User answers look like "   1. New doc" or " > 1. New doc" (no question mark)
+    // 6. Check for numbered questions
     let has_numbered_answers = lines
         .iter()
         .rev()
@@ -961,7 +1075,9 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
     if !has_numbered_answers {
         for line in lines.iter() {
             if GEMINI_NUMBERED_QUESTIONS.is_match(line) {
-                return AgentStatus::AwaitingInput;
+                return StatusDetection::new(AgentStatus::AwaitingInput)
+                    .with_reason("Found numbered questions awaiting answer")
+                    .with_pattern("GEMINI_NUMBERED_QUESTIONS");
             }
         }
     }
@@ -969,14 +1085,18 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
     // 7. Check for permission/confirmation prompts
     for pattern in GEMINI_CONFIRMATION_PATTERNS.iter() {
         if pattern.is_match(&last_5_text) {
-            return AgentStatus::AwaitingInput;
+            return StatusDetection::new(AgentStatus::AwaitingInput)
+                .with_reason("Found confirmation prompt")
+                .with_pattern("GEMINI_CONFIRMATION_PATTERNS");
         }
     }
 
-    // 8. Check for standard question patterns (y/n, [Y/n], etc.)
+    // 8. Check for standard question patterns
     for pattern in QUESTION_PATTERNS.iter() {
         if pattern.is_match(&last_5_text) {
-            return AgentStatus::AwaitingInput;
+            return StatusDetection::new(AgentStatus::AwaitingInput)
+                .with_reason("Found question pattern")
+                .with_pattern("QUESTION_PATTERNS");
         }
     }
 
@@ -986,21 +1106,23 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
             for line in lines.iter().rev().take(15) {
                 if pattern.is_match(line) {
                     let msg = line.trim().chars().take(40).collect::<String>();
-                    return AgentStatus::Error(msg);
+                    return StatusDetection::new(AgentStatus::Error(msg.clone()))
+                        .with_reason(format!("Error pattern matched: {}", msg))
+                        .with_pattern("ERROR_PATTERNS");
                 }
             }
-            return AgentStatus::Error("Error detected".to_string());
+            return StatusDetection::new(AgentStatus::Error("Error detected".to_string()))
+                .with_reason("Error pattern matched in output")
+                .with_pattern("ERROR_PATTERNS");
         }
     }
 
-    // 9. Check for prompt character - this is when agent is at prompt, ready for next task
-    // Must be careful not to match shell prompt (e.g., "$ ") when checking AI prompts
+    // 10. Check for prompt character
     let is_at_ai_prompt = lines.iter().rev().take(5).any(|line| {
         let trimmed = line.trim().trim_matches('\u{00A0}');
         if trimmed == ">" || trimmed == "›" || trimmed == "❯" {
             return true;
         }
-        // Match prompt with trailing text like ">   Type your message..."
         if trimmed.starts_with('>') || trimmed.starts_with('›') || trimmed.starts_with('❯') {
             return true;
         }
@@ -1008,19 +1130,20 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
     });
 
     if is_at_ai_prompt {
-        // At AI prompt - check for completion patterns in last 10 lines
         let last_10_lines: Vec<&str> = lines.iter().rev().take(10).cloned().collect();
         let last_10_text = last_10_lines.join("\n");
 
         for pattern in COMPLETION_PATTERNS.iter() {
             if pattern.is_match(&last_10_text) {
-                return AgentStatus::Completed;
+                return StatusDetection::new(AgentStatus::Completed)
+                    .with_reason("At prompt with completion pattern")
+                    .with_pattern("COMPLETION_PATTERNS");
             }
         }
-        return AgentStatus::Idle;
+        return StatusDetection::new(AgentStatus::Idle).with_reason("At prompt, ready for input");
     }
 
-    // 10. Check for shell prompt (indicates AI has completely exited to shell)
+    // 11. Check for shell prompt
     let last_line = lines.last().map(|l| l.trim()).unwrap_or("");
     let is_shell_prompt = last_line.len() <= 50
         && (last_line.ends_with('$')
@@ -1030,23 +1153,29 @@ fn detect_status_gemini(output: &str, foreground: ForegroundProcess) -> AgentSta
             || last_line.starts_with("➜"));
 
     if is_shell_prompt && foreground != ForegroundProcess::GeminiRunning {
-        return AgentStatus::Stopped;
+        return StatusDetection::new(AgentStatus::Stopped)
+            .with_reason(format!("Shell prompt detected: '{}'", last_line));
     }
 
-    // 11. Process-based fallback
-    // If we got here with GeminiRunning but no spinner/timer, agent is idle (quiet state)
+    // 12. Process-based fallback
     match foreground {
-        ForegroundProcess::GeminiRunning => AgentStatus::Idle,
-        ForegroundProcess::Shell => AgentStatus::Stopped,
-        ForegroundProcess::OtherProcess(_) => AgentStatus::Running,
+        ForegroundProcess::GeminiRunning => StatusDetection::new(AgentStatus::Idle)
+            .with_reason("Gemini process running, no activity indicators"),
+        ForegroundProcess::Shell => {
+            StatusDetection::new(AgentStatus::Stopped).with_reason("Shell process in foreground")
+        }
+        ForegroundProcess::OtherProcess(p) => StatusDetection::new(AgentStatus::Running)
+            .with_reason(format!("Subprocess '{}' in foreground", p)),
         ForegroundProcess::Unknown
         | ForegroundProcess::ClaudeRunning
         | ForegroundProcess::OpencodeRunning
         | ForegroundProcess::CodexRunning => {
             if clean_output.trim().is_empty() {
-                AgentStatus::Stopped
+                StatusDetection::new(AgentStatus::Stopped)
+                    .with_reason("Empty output, unknown process state")
             } else {
-                AgentStatus::Running
+                StatusDetection::new(AgentStatus::Running)
+                    .with_reason("Unknown process state, defaulting to running")
             }
         }
     }
@@ -1064,7 +1193,7 @@ mod tests {
   ┃  • OpenCode 1.2.6"#;
         let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput, got {:?}",
             status
         );
@@ -1076,7 +1205,7 @@ mod tests {
         let output = "\x1b[36m     → Asked 4 questions\x1b[0m\n  ┃  \x1b[32m5. Type your own answer\x1b[0m\n  ┃  ⇆ tab  ↑↓ select  enter confirm  esc dismiss";
         let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput with ANSI codes, got {:?}",
             status
         );
@@ -1133,8 +1262,21 @@ mod tests {
                                                                                                                        tab agents  ctrl+p commands    • OpenCode 1.2.10"#;
         let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
         assert!(
-            matches!(status, AgentStatus::Idle),
+            matches!(status.status, AgentStatus::Idle),
             "Expected Idle with plan mode footer, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_opencode_plan_mode_hint_not_running() {
+        // Plan mode hint with "esc to interrupt" should NOT trigger Running
+        // This was causing false positives when checking "esc" && "interrupt" separately
+        let output = "  ┃  ⏸ plan mode on (shift+tab to cycle) · esc to interrupt";
+        let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle, got {:?}",
             status
         );
     }
@@ -1155,7 +1297,7 @@ mod tests {
    ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt"#;
         let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running with dots spinner, got {:?}",
             status
         );
@@ -1166,7 +1308,7 @@ mod tests {
         let output = "  ┃  Let me create the file.\n\n     ~ Preparing write...\n\n     ▣  Build · MiniMax-M2.5\n\n  ┃\n\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt\n\n\n\n\n";
         let status = detect_status_opencode(output, ForegroundProcess::OpencodeRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running with dots spinner and trailing newlines, got {:?}",
             status
         );
@@ -1266,11 +1408,11 @@ mod tests {
     #[test]
     fn test_spinner_running() {
         assert!(matches!(
-            detect_status("Some output\n⠋ Reading file..."),
+            detect_status("Some output\n⠋ Reading file...").status,
             AgentStatus::Running
         ));
         assert!(matches!(
-            detect_status("⠹ Thinking..."),
+            detect_status("⠹ Thinking...").status,
             AgentStatus::Running
         ));
     }
@@ -1278,7 +1420,7 @@ mod tests {
     #[test]
     fn test_tool_running() {
         assert!(matches!(
-            detect_status("⏺ Read src/main.rs"),
+            detect_status("⏺ Read src/main.rs").status,
             AgentStatus::Running
         ));
     }
@@ -1286,11 +1428,11 @@ mod tests {
     #[test]
     fn test_question_awaiting() {
         assert!(matches!(
-            detect_status("Allow this? (y/n)"),
+            detect_status("Allow this? (y/n)").status,
             AgentStatus::AwaitingInput
         ));
         assert!(matches!(
-            detect_status("Do you want to proceed? [Y/n]"),
+            detect_status("Do you want to proceed? [Y/n]").status,
             AgentStatus::AwaitingInput
         ));
     }
@@ -1299,26 +1441,32 @@ mod tests {
     fn test_prompt_idle() {
         // At the prompt with no questions = idle, ready for new task
         assert!(matches!(
-            detect_status("Some text output here.\n>"),
+            detect_status("Some text output here.\n>").status,
             AgentStatus::Idle
         ));
         // Also check the chevron prompt
-        assert!(matches!(detect_status("Some output\n›"), AgentStatus::Idle));
+        assert!(matches!(
+            detect_status("Some output\n›").status,
+            AgentStatus::Idle
+        ));
         // Check prompt at end of line
-        assert!(matches!(detect_status("project >"), AgentStatus::Idle));
+        assert!(matches!(
+            detect_status("project >").status,
+            AgentStatus::Idle
+        ));
         // Claude Code's actual prompt character
         assert!(matches!(
-            detect_status("Task complete.\n❯"),
+            detect_status("Task complete.\n❯").status,
             AgentStatus::Idle
         ));
         // Claude Code prompt with non-breaking space (U+00A0)
         assert!(matches!(
-            detect_status("Task complete.\n❯\u{00A0}"),
+            detect_status("Task complete.\n❯\u{00A0}").status,
             AgentStatus::Idle
         ));
         // Shell prompt with git info
         assert!(matches!(
-            detect_status("Some output\n➜ project git:(main)"),
+            detect_status("Some output\n➜ project git:(main)").status,
             AgentStatus::Idle
         ));
     }
@@ -1326,11 +1474,11 @@ mod tests {
     #[test]
     fn test_error() {
         assert!(matches!(
-            detect_status("Error: file not found"),
+            detect_status("Error: file not found").status,
             AgentStatus::Error(_)
         ));
         assert!(matches!(
-            detect_status("✗ Build failed"),
+            detect_status("✗ Build failed").status,
             AgentStatus::Error(_)
         ));
     }
@@ -1338,7 +1486,7 @@ mod tests {
     #[test]
     fn test_completion() {
         assert!(matches!(
-            detect_status("✓ All tests pass"),
+            detect_status("✓ All tests pass").status,
             AgentStatus::Completed
         ));
     }
@@ -1404,7 +1552,7 @@ mod tests {
         // Claude is running (node foreground) but no output change — should be Running, not Idle
         let output = "Some previous output\nLast line of text";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
-        assert!(matches!(status, AgentStatus::Running));
+        assert!(matches!(status.status, AgentStatus::Running));
     }
 
     #[test]
@@ -1412,14 +1560,14 @@ mod tests {
         // Claude exited to shell — should be Idle immediately (no 5s lag)
         let output = "Some previous output\n$ ";
         let status = detect_status_with_process(output, ForegroundProcess::Shell);
-        assert!(matches!(status, AgentStatus::Idle));
+        assert!(matches!(status.status, AgentStatus::Idle));
     }
 
     #[test]
     fn test_shell_foreground_with_error() {
         let output = "Error: something went wrong\n$ ";
         let status = detect_status_with_process(output, ForegroundProcess::Shell);
-        assert!(matches!(status, AgentStatus::Error(_)));
+        assert!(matches!(status.status, AgentStatus::Error(_)));
     }
 
     #[test]
@@ -1430,7 +1578,7 @@ mod tests {
             output,
             ForegroundProcess::OtherProcess("cargo".to_string()),
         );
-        assert!(matches!(status, AgentStatus::Running));
+        assert!(matches!(status.status, AgentStatus::Running));
     }
 
     #[test]
@@ -1438,7 +1586,7 @@ mod tests {
         // Unknown foreground — falls back to detect_status()
         let output = "⠋ Reading file...";
         let status = detect_status_with_process(output, ForegroundProcess::Unknown);
-        assert!(matches!(status, AgentStatus::Running));
+        assert!(matches!(status.status, AgentStatus::Running));
     }
 
     #[test]
@@ -1446,7 +1594,7 @@ mod tests {
         // Question in last 5 lines → AwaitingInput
         let output = "line1\nline2\nline3\nline4\nAllow this? (y/n)";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
-        assert!(matches!(status, AgentStatus::AwaitingInput));
+        assert!(matches!(status.status, AgentStatus::AwaitingInput));
     }
 
     #[test]
@@ -1459,7 +1607,7 @@ mod tests {
         let output = lines.join("\n");
         let status = detect_status_with_process(&output, ForegroundProcess::ClaudeRunning);
         // Should NOT be AwaitingInput since the question is >5 lines back
-        assert!(!matches!(status, AgentStatus::AwaitingInput));
+        assert!(!matches!(status.status, AgentStatus::AwaitingInput));
     }
 
     #[test]
@@ -1467,7 +1615,7 @@ mod tests {
         // At prompt with completion pattern → Completed
         let output = "✓ All tests pass\n❯";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
-        assert!(matches!(status, AgentStatus::Completed));
+        assert!(matches!(status.status, AgentStatus::Completed));
     }
 
     #[test]
@@ -1475,14 +1623,14 @@ mod tests {
         // At prompt without completion patterns → Idle
         let output = "Some regular output\n❯";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
-        assert!(matches!(status, AgentStatus::Idle));
+        assert!(matches!(status.status, AgentStatus::Idle));
     }
 
     #[test]
     fn test_claude_running_spinner_running() {
         let output = "Some output\n⠋ Reading file...";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
-        assert!(matches!(status, AgentStatus::Running));
+        assert!(matches!(status.status, AgentStatus::Running));
     }
 
     #[test]
@@ -1505,7 +1653,7 @@ mod tests {
  Enter to confirm · Esc to cancel"#;
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for trust dialog, got {:?}",
             status
         );
@@ -1516,7 +1664,7 @@ mod tests {
         let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel ";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for exact trust dialog, got {:?}",
             status
         );
@@ -1527,7 +1675,7 @@ mod tests {
         let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel\n\n\n\n\n\n";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for trust dialog with trailing newlines, got {:?}",
             status
         );
@@ -1538,7 +1686,7 @@ mod tests {
         let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n Accessing workspace:\n\n /home/ziim/.grove/worktrees/d0fd05c68b028185/testclaude\n\n Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's\n in this folder first.\n\n Claude Code'll be able to read, edit, and execute files here.\n\n Security guide\n\n ❯ 1. Yes, I trust this folder\n   2. No, exit\n\n Enter to confirm · Esc to cancel ";
         let status = detect_status_with_process(output, ForegroundProcess::Unknown);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for trust dialog with Unknown foreground, got {:?}",
             status
         );
@@ -1549,7 +1697,7 @@ mod tests {
         let output = "\x1b[90m────────────────────────────────────────────────\x1b[0m\n\x1b[1m Accessing workspace:\x1b[0m\n\n /home/ziim/test\n\n\x1b[33m Quick safety check:\x1b[0m\n\n \x1b[36m❯ 1. Yes, I trust this folder\x1b[0m\n   2. No, exit\n\n\x1b[2m Enter to confirm · Esc to cancel\x1b[0m ";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for trust dialog with ANSI codes, got {:?}",
             status
         );
@@ -1564,7 +1712,7 @@ mod tests {
             ForegroundProcess::OtherProcess("cargo".to_string()),
         );
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for OtherProcess with input prompt, got {:?}",
             status
         );
@@ -1578,7 +1726,7 @@ mod tests {
             ForegroundProcess::OtherProcess("cargo".to_string()),
         );
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running for OtherProcess without input prompt, got {:?}",
             status
         );
@@ -1592,7 +1740,7 @@ mod tests {
             ForegroundProcess::OtherProcess("cargo".to_string()),
         );
         assert!(
-            matches!(status, AgentStatus::Error(_)),
+            matches!(status.status, AgentStatus::Error(_)),
             "Expected Error for OtherProcess with error, got {:?}",
             status
         );
@@ -1603,7 +1751,7 @@ mod tests {
         let output = "❯ 1. First option\n  2. Second option\n  3. Third option";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for numbered selection, got {:?}",
             status
         );
@@ -1614,7 +1762,7 @@ mod tests {
         let output = "Some prompt\nEnter to confirm · Esc to cancel";
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for keyboard hints, got {:?}",
             status
         );
@@ -1644,7 +1792,7 @@ mod tests {
   ? for shortcuts  "#;
         let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
         assert!(
-            matches!(status, AgentStatus::Idle),
+            matches!(status.status, AgentStatus::Idle),
             "Expected Idle for welcome screen at prompt, got {:?}",
             status
         );
@@ -1657,7 +1805,7 @@ mod tests {
         let output = "Some output\n\n• Working (1s • esc to interrupt)\n";
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running, got {:?}",
             status
         );
@@ -1668,7 +1816,7 @@ mod tests {
         let output = "Processing...\n\n• Working (45s • esc to interrupt)\n";
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running, got {:?}",
             status
         );
@@ -1679,7 +1827,7 @@ mod tests {
         let output = "  Question 1/1 (1 unanswered)\n  How should I proceed?\n";
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput, got {:?}",
             status
         );
@@ -1690,7 +1838,7 @@ mod tests {
         let output = "  Question 3/5 (2 unanswered)\n  Choose an option:\n";
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput, got {:?}",
             status
         );
@@ -1701,7 +1849,7 @@ mod tests {
         let output = "Task complete.\n›";
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::Idle),
+            matches!(status.status, AgentStatus::Idle),
             "Expected Idle, got {:?}",
             status
         );
@@ -1712,7 +1860,7 @@ mod tests {
         let output = "Error: something went wrong\n›";
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::Error(_)),
+            matches!(status.status, AgentStatus::Error(_)),
             "Expected Error, got {:?}",
             status
         );
@@ -1735,7 +1883,7 @@ mod tests {
         let output = "✓ Done.\n›";
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::Completed),
+            matches!(status.status, AgentStatus::Completed),
             "Expected Completed, got {:?}",
             status
         );
@@ -1746,7 +1894,7 @@ mod tests {
         let output = "Some output\n$ ";
         let status = detect_status_codex(output, ForegroundProcess::Shell);
         assert!(
-            matches!(status, AgentStatus::Stopped),
+            matches!(status.status, AgentStatus::Stopped),
             "Expected Stopped, got {:?}",
             status
         );
@@ -1769,7 +1917,7 @@ mod tests {
   tab to add notes | enter to submit answer | ←/→ to navigate questions | esc to interrupt"#;
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for Question panel, got {:?}",
             status
         );
@@ -1783,7 +1931,7 @@ mod tests {
 • Working (1s • esc to interrupt)"#;
         let status = detect_status_codex(output, ForegroundProcess::CodexRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running for Working indicator, got {:?}",
             status
         );
@@ -1796,7 +1944,7 @@ mod tests {
         let output = "Analyzing code...\n\nAction Required\nPlease confirm to proceed";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for Action Required, got {:?}",
             status
         );
@@ -1807,7 +1955,7 @@ mod tests {
         let output = "Tool execution\nWaiting for confirmation\n(y/n)";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for Waiting for confirmation, got {:?}",
             status
         );
@@ -1818,7 +1966,7 @@ mod tests {
         let output = "Analyzing...\nWorking on task\n(esc to cancel, 15s)";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running for esc to cancel, got {:?}",
             status
         );
@@ -1829,7 +1977,7 @@ mod tests {
         let output = "Processing...\n⠁ \nThinking";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running for dots spinner, got {:?}",
             status
         );
@@ -1840,7 +1988,7 @@ mod tests {
         let output = "Processing...\n⠋ Working...";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running for braille spinner, got {:?}",
             status
         );
@@ -1851,7 +1999,7 @@ mod tests {
         let output = "Tool: Bash\nAllow this? [Y/n]";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for permission prompt, got {:?}",
             status
         );
@@ -1862,7 +2010,7 @@ mod tests {
         let output = "✓ Task completed successfully\n>";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Completed),
+            matches!(status.status, AgentStatus::Completed),
             "Expected Completed, got {:?}",
             status
         );
@@ -1873,7 +2021,7 @@ mod tests {
         let output = "Error: file not found\n>";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Error(_)),
+            matches!(status.status, AgentStatus::Error(_)),
             "Expected Error, got {:?}",
             status
         );
@@ -1884,7 +2032,7 @@ mod tests {
         let output = "Session ended\n$ ";
         let status = detect_status_gemini(output, ForegroundProcess::Shell);
         assert!(
-            matches!(status, AgentStatus::Stopped),
+            matches!(status.status, AgentStatus::Stopped),
             "Expected Stopped when at shell, got {:?}",
             status
         );
@@ -1895,7 +2043,7 @@ mod tests {
         let output = "Ready for input\n❯";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Idle),
+            matches!(status.status, AgentStatus::Idle),
             "Expected Idle when Gemini running at prompt, got {:?}",
             status
         );
@@ -1923,7 +2071,7 @@ mod tests {
         let output = "╭────────────────────────────────────────────────────╮\n│ Answer Questions                                   │\n╰────────────────────────────────────────────────────╯";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for Answer Questions panel, got {:?}",
             status
         );
@@ -1934,7 +2082,7 @@ mod tests {
         let output = "Enter to select · ←/→ to switch questions · Esc to cancel";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for keyboard hints, got {:?}",
             status
         );
@@ -1946,7 +2094,7 @@ mod tests {
         let output = "Type your message\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n>   Type your message or @path/to/file";
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Idle),
+            matches!(status.status, AgentStatus::Idle),
             "Expected Idle at Gemini prompt, got {:?}",
             status
         );
@@ -1964,7 +2112,7 @@ Plan: Gemini Code Assist for individuals
  ~/.grove/worktrees/test, (test,*)                           /model Auto (Gemini 3)"#;
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Idle),
+            matches!(status.status, AgentStatus::Idle),
             "Expected Idle in quiet state (no spinner/timer), got {:?}",
             status
         );
@@ -1987,7 +2135,7 @@ Plan: Gemini Code Assist for individuals
  ⠴ Generating witty retort… (esc to cancel, 15s)"#;
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running when user has answered and spinner/timer is present, got {:?}",
             status
         );
@@ -2005,7 +2153,7 @@ Plan: Gemini Code Assist for individuals
  ⠇ Why do Java developers wear glasses? Because they don't C#. (esc to cancel, 12s)"#;
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::Running),
+            matches!(status.status, AgentStatus::Running),
             "Expected Running when timer is present, even with old questions in history, got {:?}",
             status
         );
@@ -2050,7 +2198,7 @@ Tips for getting started:
  ~/dev/todo-testapp/.worktrees/gemini (gemini*)                                                 no sandbox (see /docs)                                                 /model Auto (Gemini 3)"#;
         let status = detect_status_gemini(output, ForegroundProcess::GeminiRunning);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput for Answer Questions panel, got {:?}",
             status
         );
@@ -2064,7 +2212,7 @@ Tips for getting started:
 │ Enter to select · ←/→ to switch questions · Esc to cancel"#;
         let status = detect_status_gemini(output, ForegroundProcess::Unknown);
         assert!(
-            matches!(status, AgentStatus::AwaitingInput),
+            matches!(status.status, AgentStatus::AwaitingInput),
             "Expected AwaitingInput with Unknown foreground, got {:?}",
             status
         );
