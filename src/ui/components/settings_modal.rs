@@ -159,7 +159,7 @@ impl<'a> SettingsModal<'a> {
                     }
                     count
                 }
-                SettingsItem::ActionButton(_) => 2,
+                SettingsItem::ActionButton(_) => 1,
             };
             item_line_info.push((item_idx, current_line, line_count));
             current_line += line_count;
