@@ -179,8 +179,7 @@ impl<'a> SettingsModal<'a> {
         let selected_line_count = selected_item_info.map(|(_, _, cnt)| *cnt).unwrap_or(1);
         let selected_line_end = selected_line_start + selected_line_count;
 
-        let max_scroll = total_lines.saturating_sub(visible_height);
-        let mut scroll_offset = self.state.scroll_offset.min(max_scroll);
+        let mut scroll_offset = self.state.scroll_offset;
 
         for _ in 0..3 {
             let has_above = scroll_offset > 0;
@@ -189,6 +188,9 @@ impl<'a> SettingsModal<'a> {
             let has_below = scroll_offset + content_space_without_below < total_lines;
             let indicator_space = above_indicator_space + if has_below { 1 } else { 0 };
             let available_for_content = visible_height.saturating_sub(indicator_space);
+
+            let max_scroll = total_lines.saturating_sub(available_for_content);
+            scroll_offset = scroll_offset.min(max_scroll);
 
             let new_scroll = if selected_line_start < scroll_offset {
                 selected_line_start
