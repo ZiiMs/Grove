@@ -1,3 +1,4 @@
+use crate::util::truncate_with_ellipsis;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -33,19 +34,20 @@ impl ClickUpTaskStatus {
     pub fn format_short(&self) -> String {
         match self {
             ClickUpTaskStatus::None => "—".to_string(),
-            ClickUpTaskStatus::NotStarted { name, .. } => truncate(name, 14),
-            ClickUpTaskStatus::InProgress { name, .. } => truncate(name, 14),
-            ClickUpTaskStatus::Completed { name, .. } => truncate(name, 14),
-            ClickUpTaskStatus::Error { message, .. } => format!("err: {}", truncate(message, 10)),
+            ClickUpTaskStatus::NotStarted { name, .. } => truncate_with_ellipsis(name, 14),
+            ClickUpTaskStatus::InProgress { name, .. } => truncate_with_ellipsis(name, 14),
+            ClickUpTaskStatus::Completed { name, .. } => truncate_with_ellipsis(name, 14),
+            ClickUpTaskStatus::Error { message, .. } => {
+                format!("err: {}", truncate_with_ellipsis(message, 10))
+            }
         }
     }
 
-    /// Display string for the status name column.
     pub fn format_status_name(&self) -> String {
         match self {
             ClickUpTaskStatus::None => "—".to_string(),
             ClickUpTaskStatus::NotStarted { status, .. }
-            | ClickUpTaskStatus::InProgress { status, .. } => truncate(status, 10),
+            | ClickUpTaskStatus::InProgress { status, .. } => truncate_with_ellipsis(status, 10),
             ClickUpTaskStatus::Completed { .. } => "Done".to_string(),
             ClickUpTaskStatus::Error { .. } => "Error".to_string(),
         }
@@ -91,15 +93,6 @@ impl ClickUpTaskStatus {
             | ClickUpTaskStatus::Completed { is_subtask, .. } => *is_subtask,
             ClickUpTaskStatus::Error { .. } => false,
         }
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let t: String = s.chars().take(max - 1).collect();
-        format!("{}…", t)
     }
 }
 

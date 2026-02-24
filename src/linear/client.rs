@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use std::collections::HashSet;
 use tokio::sync::{Mutex, RwLock};
 
@@ -19,10 +18,10 @@ pub struct LinearClient {
 
 impl LinearClient {
     pub fn new(token: &str, team_id: Option<String>) -> Result<Self> {
-        let mut headers = HeaderMap::new();
+        let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(token).context("Invalid Linear token")?,
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(token).context("Invalid Linear token")?,
         );
 
         let client = reqwest::Client::builder()
@@ -38,10 +37,10 @@ impl LinearClient {
     }
 
     pub async fn fetch_teams_with_token(token: &str) -> Result<Vec<(String, String, String)>> {
-        let mut headers = HeaderMap::new();
+        let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(token).context("Invalid Linear token")?,
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(token).context("Invalid Linear token")?,
         );
 
         let client = reqwest::Client::builder()

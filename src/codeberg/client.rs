@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::util::git::{create_forge_client, test_forge_connection, ForgeAuthType};
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 
@@ -33,18 +34,15 @@ impl CodebergClient {
         woodpecker_token: Option<&str>,
         woodpecker_repo_id: Option<u64>,
     ) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "Authorization",
-            HeaderValue::from_str(&format!("token {}", token)).context("Invalid token")?,
-        );
-        headers.insert("Accept", HeaderValue::from_static("application/json"));
+        let mut extra_headers = HeaderMap::new();
+        extra_headers.insert("Accept", HeaderValue::from_static("application/json"));
 
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .user_agent("grove")
-            .build()
-            .context("Failed to create HTTP client")?;
+        let client = create_forge_client(
+            ForgeAuthType::Token,
+            token,
+            Some(extra_headers),
+            Some("grove"),
+        )?;
 
         let forgejo_client = match ci_provider {
             CodebergCiProvider::ForgejoActions => {
@@ -255,20 +253,7 @@ impl CodebergClient {
             "{}/api/v1/repos/{}/{}",
             self.base_url, self.owner, self.repo
         );
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to connect to Codeberg")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            anyhow::bail!("Codeberg connection failed: {}", status);
-        }
-
-        Ok(())
+        test_forge_connection(&self.client, &url, "Codeberg").await
     }
 }
 
