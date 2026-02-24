@@ -515,7 +515,8 @@ pub fn parse_airtable_record_id(input: &str) -> String {
 
     if trimmed.contains("airtable.com") {
         if let Some(last) = trimmed.trim_end_matches('/').rsplit('/').next() {
-            return last.to_string();
+            let without_query = last.split('?').next().unwrap_or(last);
+            return without_query.to_string();
         }
     }
 
@@ -615,4 +616,29 @@ pub async fn fetch_tables(token: &str, base_id: &str) -> Result<Vec<(String, Str
         .into_iter()
         .map(|t| (t.id, t.name, String::new()))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_airtable_record_id_with_query() {
+        let url = "https://airtable.com/appx7YIf93flNzxzI/tblrNPP2TThcPFKiG/viwr5kq0Qeyu96t4D/rec31juJ9DbU1y3fL?blocks=hide";
+        assert_eq!(parse_airtable_record_id(url), "rec31juJ9DbU1y3fL");
+    }
+
+    #[test]
+    fn test_parse_airtable_record_id_bare() {
+        assert_eq!(
+            parse_airtable_record_id("rec31juJ9DbU1y3fL"),
+            "rec31juJ9DbU1y3fL"
+        );
+    }
+
+    #[test]
+    fn test_parse_airtable_record_id_trailing_slash() {
+        let url = "https://airtable.com/appXXX/tblYYY/recABC/";
+        assert_eq!(parse_airtable_record_id(url), "recABC");
+    }
 }
