@@ -649,7 +649,7 @@ fn default_refresh_task_list() -> Keybind {
     Keybind::new("r")
 }
 fn default_debug_status() -> Keybind {
-    Keybind::new("D")
+    Keybind::new("i")
 }
 
 impl Default for Keybinds {
