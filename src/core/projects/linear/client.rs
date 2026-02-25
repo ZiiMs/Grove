@@ -341,6 +341,7 @@ impl LinearClient {
                                     }
                                     parent { id }
                                     children(first: 1) { nodes { id } }
+                                    team { id }
                                 }
                             }
                         }
