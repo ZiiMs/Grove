@@ -8995,11 +8995,9 @@ async fn process_action(
                 state.output_scroll = state.output_scroll.saturating_add(10);
             }
             PreviewTab::GitDiff => {
-                state.gitdiff_scroll = state.gitdiff_scroll.saturating_add(10);
+                state.gitdiff_scroll = state.gitdiff_scroll.saturating_sub(10);
             }
-            PreviewTab::DevServer => {
-                state.devserver_scroll = state.devserver_scroll.saturating_add(10);
-            }
+            PreviewTab::DevServer => {}
         },
 
         Action::ScrollPreviewDown => match state.preview_tab {
@@ -9007,11 +9005,9 @@ async fn process_action(
                 state.output_scroll = state.output_scroll.saturating_sub(10);
             }
             PreviewTab::GitDiff => {
-                state.gitdiff_scroll = state.gitdiff_scroll.saturating_sub(10);
+                state.gitdiff_scroll = state.gitdiff_scroll.saturating_add(10);
             }
-            PreviewTab::DevServer => {
-                state.devserver_scroll = state.devserver_scroll.saturating_sub(10);
-            }
+            PreviewTab::DevServer => {}
         },
 
         Action::ClearDevServerLogs => {
