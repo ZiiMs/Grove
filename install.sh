@@ -1,9 +1,9 @@
 #!/bin/sh
-# The official flock installer
+# The official Grove installer
 # Supports Linux, macOS, all major architectures.
 # 
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash
 #   
 # Options:
 #   --bin-dir DIR    Override installation directory (default: ~/.local/bin)
@@ -13,8 +13,8 @@
 
 set -e
 
-REPO="ZiiMs/flock-tui"
-BINARY_NAME="flock"
+REPO="ZiiMs/Grove"
+BINARY_NAME="grove"
 
 main() {
     if [ "${KSH_VERSION-}" = 'Version JM 93t+ 2010-03-05' ]; then
@@ -24,13 +24,13 @@ main() {
     set -u
     parse_args "$@"
 
-    echo "  ___ _ _
- / __| | |
-| (__| | |
- \\___|_|_|
+    echo "   ___ _    
+  / __| |___ ___ ___ ___ _ _
+ | (_| / -_) -_|_-</ -_) '_|
+  \___|___\___/___/\___|_|
 "
-    echo "Flock TUI Installer"
-    echo "==================="
+    echo "Grove Installer"
+    echo "==============="
     echo ""
 
     local _arch
@@ -118,10 +118,10 @@ usage() {
     _text_reset="$(tput sgr0 2>/dev/null || true)"
 
     cat <<EOF
-${_text_heading}flock installer${_text_reset}
+${_text_heading}Grove installer${_text_reset}
 https://github.com/${REPO}
 
-Fetches and installs flock. If flock is already installed, it will be updated to the latest version.
+Fetches and installs Grove. If Grove is already installed, it will be updated to the latest version.
 
 ${_text_heading}Usage:${_text_reset}
   install.sh [OPTIONS]
@@ -214,7 +214,7 @@ setup_path() {
             ;;
         *)
             echo ""
-            echo "Add ${BIN_DIR} to your PATH to use flock."
+            echo "Add ${BIN_DIR} to your PATH to use Grove."
             ;;
     esac
 }
@@ -258,7 +258,7 @@ download_flock() {
         fi
     fi
     
-    echo "Installing version: ${_version}"
+    echo "Installing version: ${_version}" >&2
 
     local _package_url
     local _releases_list_url="https://api.github.com/repos/${REPO}/releases"
@@ -290,7 +290,7 @@ Please check https://github.com/${REPO}/releases for available downloads."
     esac
 
     local _package="${BINARY_NAME}.${_ext}"
-    echo "Downloading from: ${_package_url}"
+    echo "Downloading from: ${_package_url}" >&2
     
     case "${_dld}" in
     curl) curl -sLo "${_package}" "${_package_url}" || err "curl: failed to download ${_package_url}" ;;
