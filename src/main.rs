@@ -1396,6 +1396,10 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
             Some(Action::OpenDevServerInBrowser)
         }
 
+        // Preview panel scrolling (works on all tabs)
+        KeyCode::PageUp => Some(Action::ScrollPreviewUp),
+        KeyCode::PageDown => Some(Action::ScrollPreviewDown),
+
         _ => None,
     }
 }
@@ -8985,6 +8989,26 @@ async fn process_action(
                 PreviewTab::DevServer => PreviewTab::GitDiff,
             };
         }
+
+        Action::ScrollPreviewUp => match state.preview_tab {
+            PreviewTab::Preview => {
+                state.output_scroll = state.output_scroll.saturating_add(10);
+            }
+            PreviewTab::GitDiff => {
+                state.gitdiff_scroll = state.gitdiff_scroll.saturating_sub(10);
+            }
+            PreviewTab::DevServer => {}
+        },
+
+        Action::ScrollPreviewDown => match state.preview_tab {
+            PreviewTab::Preview => {
+                state.output_scroll = state.output_scroll.saturating_sub(10);
+            }
+            PreviewTab::GitDiff => {
+                state.gitdiff_scroll = state.gitdiff_scroll.saturating_add(10);
+            }
+            PreviewTab::DevServer => {}
+        },
 
         Action::ClearDevServerLogs => {
             if let Some(agent) = state.selected_agent() {
