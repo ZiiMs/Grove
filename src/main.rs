@@ -6830,6 +6830,63 @@ async fn process_action(
                     state.settings.repo_config.dev_server.auto_start =
                         !state.settings.repo_config.dev_server.auto_start;
                 }
+                grove::app::SettingsField::AutomationOnTaskAssign => {
+                    let current = &state.settings.pending_automation.on_task_assign;
+                    let idx = if current.is_none() {
+                        0
+                    } else if let Some(ref name) = current {
+                        state
+                            .settings
+                            .automation_status_options
+                            .iter()
+                            .position(|o| &o.name == name)
+                            .map(|i| i + 1)
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
+                grove::app::SettingsField::AutomationOnPush => {
+                    let current = &state.settings.pending_automation.on_push;
+                    let idx = if current.is_none() {
+                        0
+                    } else if let Some(ref name) = current {
+                        state
+                            .settings
+                            .automation_status_options
+                            .iter()
+                            .position(|o| &o.name == name)
+                            .map(|i| i + 1)
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
+                grove::app::SettingsField::AutomationOnDelete => {
+                    let current = &state.settings.pending_automation.on_delete;
+                    let idx = if current.is_none() {
+                        0
+                    } else if let Some(ref name) = current {
+                        state
+                            .settings
+                            .automation_status_options
+                            .iter()
+                            .position(|o| &o.name == name)
+                            .map(|i| i + 1)
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
                 _ => {
                     // Keybind fields are handled by SettingsStartKeybindCapture
                 }
