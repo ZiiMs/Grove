@@ -1,8 +1,8 @@
-# Flock
+# Grove
 
 A terminal UI (TUI) for managing multiple Claude Code agents with git worktree isolation.
 
-Flock allows you to run multiple instances of Claude Code simultaneously, each working on its own git branch in an isolated worktree. Monitor their progress, attach to their terminal sessions, and integrate with GitLab merge requests and Asana tasks.
+Grove allows you to run multiple instances of Claude Code simultaneously, each working on its own git branch in an isolated worktree. Monitor their progress, attach to their terminal sessions, and integrate with GitLab merge requests and Asana tasks.
 
 ## Features
 
@@ -16,7 +16,7 @@ Flock allows you to run multiple instances of Claude Code simultaneously, each w
 
 ## Prerequisites
 
-Before installing Flock, ensure you have the following:
+Before installing Grove, ensure you have the following:
 
 ### Required
 
@@ -48,7 +48,7 @@ Before installing Flock, ensure you have the following:
 ### Quick Install (Recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash
 ```
 
 The installer will:
@@ -61,34 +61,34 @@ The installer will:
 
 ```bash
 # Install to custom directory
-curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash -s -- --bin-dir /usr/local/bin
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash -s -- --bin-dir /usr/local/bin
 
 # Install specific version
-curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash -s -- --version 0.1.0
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash -s -- --version abc1234
 
 # Skip dependency installation (if you already have tmux)
-curl -fsSL https://raw.githubusercontent.com/ZiiMs/flock-tui/main/install.sh | bash -s -- --no-deps
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash -s -- --no-deps
 ```
 
 ### From Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/ZiiMs/flock-tui.git
-cd flock-tui
+git clone https://github.com/ZiiMs/Grove.git
+cd Grove
 
 # Build in release mode
 cargo build --release
 
-# The binary will be at ./target/release/flock
+# The binary will be at ./target/release/grove
 # Optionally, copy it to a directory in your PATH:
-cp target/release/flock ~/.local/bin/
+cp target/release/grove ~/.local/bin/
 ```
 
 ### From crates.io
 
 ```bash
-cargo install flock-tui
+cargo install grove-tui
 ```
 
 ## Quick Start
@@ -97,20 +97,20 @@ cargo install flock-tui
 # Navigate to any git repository
 cd /path/to/your/project
 
-# Run flock
-flock
+# Run grove
+grove
 
 # Or specify a repository path
-flock /path/to/your/project
+grove /path/to/your/project
 ```
 
 ## Configuration
 
-Flock uses a TOML configuration file located at `~/.flock/config.toml`. Create this file to customize behavior and set up integrations.
+Grove uses a TOML configuration file located at `~/.grove/config.toml`. Create this file to customize behavior and set up integrations.
 
 ### Configuration File
 
-Create `~/.flock/config.toml`:
+Create `~/.grove/config.toml`:
 
 ```toml
 # GitLab Integration
@@ -131,7 +131,7 @@ main_branch = "main"
 project_gid = "1234567890123456"
 
 # Optional: Override section GIDs for automatic task movement
-# If not set, Flock will auto-detect sections named "In Progress" and "Done"
+# If not set, Grove will auto-detect sections named "In Progress" and "Done"
 in_progress_section_gid = "1234567890123457"
 done_section_gid = "1234567890123458"
 
@@ -163,7 +163,7 @@ gitlab_refresh_secs = 60
 
 ## Environment Variables
 
-Flock uses environment variables for sensitive credentials. Set these in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+Grove uses environment variables for sensitive credentials. Set these in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
 
 ### GitLab Token
 
@@ -174,7 +174,7 @@ export GITLAB_TOKEN="your-gitlab-personal-access-token"
 **How to create a GitLab token:**
 1. Go to GitLab > User Settings > Access Tokens
 2. Click "Add new token"
-3. Name: `flock` (or any name you prefer)
+3. Name: `grove` (or any name you prefer)
 4. Expiration date: Set as needed
 5. Scopes: Select `api` (for full API access) or `read_api` (for read-only)
 6. Click "Create personal access token"
@@ -189,7 +189,7 @@ export ASANA_TOKEN="your-asana-personal-access-token"
 **How to create an Asana token:**
 1. Go to [Asana Developer Console](https://app.asana.com/0/developer-console)
 2. Click "Create new token"
-3. Name: `flock` (or any name you prefer)
+3. Name: `grove` (or any name you prefer)
 4. Click "Create token"
 5. Copy the token and set it as `ASANA_TOKEN`
 
@@ -198,7 +198,7 @@ export ASANA_TOKEN="your-asana-personal-access-token"
 Add to your `~/.zshrc` or `~/.bashrc`:
 
 ```bash
-# Flock Configuration
+# Grove Configuration
 export GITLAB_TOKEN="glpat-xxxxxxxxxxxxxxxxxxxx"
 export ASANA_TOKEN="1/1234567890123456:abcdefghijklmnopqrstuvwxyz"
 ```
@@ -263,7 +263,7 @@ source ~/.zshrc  # or source ~/.bashrc
 
 1. Press `n` to create a new agent
 2. Enter a branch name (this will be both the agent name and git branch)
-3. Flock will:
+3. Grove will:
    - Create a new git branch (if it doesn't exist)
    - Create a git worktree for isolated work
    - Start a tmux session
@@ -273,7 +273,7 @@ source ~/.zshrc  # or source ~/.bashrc
 
 Press `Enter` on a selected agent to attach to its tmux session. You'll be connected directly to Claude's terminal.
 
-To detach and return to Flock: press `Ctrl+B` then `D` (standard tmux detach).
+To detach and return to Grove: press `Ctrl+B` then `D` (standard tmux detach).
 
 ### Pause/Resume Workflow
 
@@ -300,7 +300,7 @@ This is useful when you need to checkout the branch elsewhere for testing or cod
 
 ### GitLab Integration
 
-When configured, Flock will:
+When configured, Grove will:
 - Automatically detect when Claude creates a merge request
 - Show MR status in the agent list
 - Display pipeline status (pending, running, passed, failed)
@@ -314,12 +314,12 @@ Install tmux using your package manager (see Prerequisites).
 
 ### "Not a git repository"
 
-Flock must be run from within a git repository, or you must specify a git repository path as an argument.
+Grove must be run from within a git repository, or you must specify a git repository path as an argument.
 
 ### GitLab integration not working
 
 1. Verify `GITLAB_TOKEN` is set: `echo $GITLAB_TOKEN`
-2. Check that `project_id` is set in `~/.flock/config.toml`
+2. Check that `project_id` is set in `~/.grove/config.toml`
 3. Ensure your token has `api` or `read_api` scope
 4. Test the token: `curl --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://gitlab.com/api/v4/user"`
 
@@ -338,12 +338,12 @@ Press `R` to force refresh all agent statuses.
 
 ### Session persistence
 
-Agent sessions are saved to `~/.flock/sessions/<repo-hash>.json`. If you experience issues, you can delete this file to start fresh (note: this won't affect running tmux sessions).
+Agent sessions are saved to `~/.grove/sessions/<repo-hash>.json`. If you experience issues, you can delete this file to start fresh (note: this won't affect running tmux sessions).
 
 ## Architecture
 
 ```
-flock/
+grove/
 ├── src/
 │   ├── main.rs          # Entry point, event loop, action processing
 │   ├── lib.rs           # Module exports
