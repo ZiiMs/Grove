@@ -6276,6 +6276,8 @@ async fn process_action(
                 state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
                 state.settings.pending_automation = state.config.automation.clone();
+
+                let _ = action_tx.send(Action::LoadAutomationStatusOptions);
             }
         }
 
@@ -6348,6 +6350,11 @@ async fn process_action(
                     }
                     grove::app::SettingsField::ProjectMgmtProvider => {
                         grove::app::ProjectMgmtProvider::all().len()
+                    }
+                    grove::app::SettingsField::AutomationOnTaskAssign
+                    | grove::app::SettingsField::AutomationOnPush
+                    | grove::app::SettingsField::AutomationOnDelete => {
+                        state.settings.automation_status_options.len() + 1
                     }
                     _ => 0,
                 };
@@ -9048,6 +9055,21 @@ async fn process_action(
             let provider = state.settings.repo_config.project_mgmt.provider;
             let tx = action_tx.clone();
 
+            let default_options = vec![
+                StatusOption {
+                    id: "in_progress".to_string(),
+                    name: "In Progress".to_string(),
+                },
+                StatusOption {
+                    id: "done".to_string(),
+                    name: "Done".to_string(),
+                },
+                StatusOption {
+                    id: "completed".to_string(),
+                    name: "Completed".to_string(),
+                },
+            ];
+
             match provider {
                 grove::app::config::ProjectMgmtProvider::Asana => {
                     let client = asana_client.clone();
@@ -9060,9 +9082,11 @@ async fn process_action(
                                         id: s.gid,
                                         name: s.name,
                                     })
-                                    .chain(std::iter::once(StatusOption {
-                                        id: "completed".to_string(),
-                                        name: "Completed".to_string(),
+                                    .chain(default_options.into_iter().filter(|opt| {
+                                        !matches!(
+                                            opt.name.as_str(),
+                                            "In Progress" | "Done" | "Completed"
+                                        )
                                     }))
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9073,10 +9097,20 @@ async fn process_action(
                                     e
                                 );
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded {
-                                    options: vec![StatusOption {
-                                        id: "completed".to_string(),
-                                        name: "Completed".to_string(),
-                                    }],
+                                    options: vec![
+                                        StatusOption {
+                                            id: "in_progress".to_string(),
+                                            name: "In Progress".to_string(),
+                                        },
+                                        StatusOption {
+                                            id: "done".to_string(),
+                                            name: "Done".to_string(),
+                                        },
+                                        StatusOption {
+                                            id: "completed".to_string(),
+                                            name: "Completed".to_string(),
+                                        },
+                                    ],
                                 });
                             }
                         }
@@ -9084,10 +9118,7 @@ async fn process_action(
                 }
                 _ => {
                     let _ = action_tx.send(Action::AutomationStatusOptionsLoaded {
-                        options: vec![StatusOption {
-                            id: "completed".to_string(),
-                            name: "Completed".to_string(),
-                        }],
+                        options: default_options,
                     });
                 }
             }
