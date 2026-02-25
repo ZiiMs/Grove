@@ -24,6 +24,12 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+      - name: Verify
+        run: cargo clippy --all-targets --all-features -- -D warnings && cargo test
 
 
       - name: Install Rust
@@ -41,14 +47,14 @@ jobs:
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../flock-${{ matrix.target }}.tar.gz flock
+          tar -czvf ../../../grove-${{ matrix.target }}.tar.gz grove
           cd ../../..
 
 
       - name: Upload
         uses: softprops/action-gh-release@v2
         with:
-          files: flock-${{ matrix.target }}.tar.gz
+          files: grove-${{ matrix.target }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -66,7 +72,14 @@ jobs:
 
     steps:
 
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+      - name: Verify
+        run: cargo clippy --all-targets --all-features -- -D warnings && cargo test
 
 
       - uses: dtolnay/rust-toolchain@stable
@@ -81,13 +94,13 @@ jobs:
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../flock-${{ matrix.target }}.tar.gz flock
+          tar -czvf ../../../grove-${{ matrix.target }}.tar.gz grove
           cd ../../..
 
 
       - name: Upload
         uses: softprops/action-gh-release@v2
         with:
-          files: flock-${{ matrix.target }}.tar.gz
+          files: grove-${{ matrix.target }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
