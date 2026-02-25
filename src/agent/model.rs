@@ -242,6 +242,12 @@ pub struct Agent {
     /// Whether a work summary has been requested for this agent
     #[serde(default)]
     pub summary_requested: bool,
+    /// Whether to auto-continue this session on app restart
+    #[serde(default)]
+    pub continue_session: bool,
+    /// OpenCode session ID for resuming conversations (per-agent, AI-specific)
+    #[serde(default)]
+    pub opencode_session_id: Option<String>,
     #[serde(skip)]
     pub status_reason: Option<StatusReason>,
 }
@@ -272,6 +278,8 @@ impl Agent {
             asana_task_status: AsanaTaskStatus::None,
             pm_task_status: ProjectMgmtTaskStatus::None,
             summary_requested: false,
+            continue_session: false,
+            opencode_session_id: None,
             status_reason: None,
         }
     }
