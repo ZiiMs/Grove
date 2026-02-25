@@ -23,11 +23,15 @@ impl<'a> DiffViewWidget<'a> {
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let visible_height = area.height.saturating_sub(2) as usize;
+        let total_lines = self.diff_content.lines().count();
+
+        let max_scroll = total_lines.saturating_sub(visible_height);
+        let scroll = self.scroll.min(max_scroll);
 
         let lines: Vec<Line> = self
             .diff_content
             .lines()
-            .skip(self.scroll)
+            .skip(scroll)
             .take(visible_height)
             .map(|line| self.colorize_diff_line(line))
             .collect();
