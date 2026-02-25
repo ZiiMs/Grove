@@ -344,6 +344,7 @@ impl LinearClient {
                                     team { id }
                                 }
                             }
+                            team { id }
                         }
                     }
                 }
