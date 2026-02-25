@@ -18,6 +18,7 @@ const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
 pub enum PreviewTab {
     #[default]
     Preview,
+    GitDiff,
     DevServer,
 }
 
@@ -963,6 +964,8 @@ pub struct AppState {
     pub worktree_base: std::path::PathBuf,
     pub preview_tab: PreviewTab,
     pub devserver_scroll: usize,
+    pub gitdiff_content: Option<String>,
+    pub gitdiff_scroll: usize,
     pub devserver_warning: Option<DevServerWarning>,
     pub task_reassignment_warning: Option<TaskReassignmentWarning>,
     pub task_list: Vec<TaskListItem>,
@@ -1124,6 +1127,8 @@ impl AppState {
             worktree_base,
             preview_tab: PreviewTab::default(),
             devserver_scroll: 0,
+            gitdiff_content: None,
+            gitdiff_scroll: 0,
             devserver_warning: None,
             task_reassignment_warning: None,
             task_list: Vec::new(),
@@ -1217,6 +1222,7 @@ impl AppState {
         if !self.agent_order.is_empty() {
             self.selected_index = (self.selected_index + 1) % self.agent_order.len();
             self.output_scroll = 0;
+            self.gitdiff_scroll = 0;
         }
     }
 
@@ -1228,18 +1234,21 @@ impl AppState {
                 self.selected_index - 1
             };
             self.output_scroll = 0;
+            self.gitdiff_scroll = 0;
         }
     }
 
     pub fn select_first(&mut self) {
         self.selected_index = 0;
         self.output_scroll = 0;
+        self.gitdiff_scroll = 0;
     }
 
     pub fn select_last(&mut self) {
         if !self.agent_order.is_empty() {
             self.selected_index = self.agent_order.len() - 1;
             self.output_scroll = 0;
+            self.gitdiff_scroll = 0;
         }
     }
 
