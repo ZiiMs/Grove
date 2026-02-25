@@ -3022,16 +3022,14 @@ async fn process_action(
                             Ok(issue) => {
                                 if let Some(ref team_id) = configured_team_id {
                                     if &issue.team_id != team_id {
-                                        let status =
-                                            ProjectMgmtTaskStatus::Linear(LinearTaskStatus::Error {
-                                                id: issue_id,
-                                                message: format!(
-                                                    "Issue belongs to team '{}', but this project is configured for team '{}'",
-                                                    issue.team_id, team_id
-                                                ),
-                                            });
-                                        let _ =
-                                            tx.send(Action::UpdateProjectTaskStatus { id, status });
+                                        let _ = tx.send(Action::LogWarning {
+                                            message: format!(
+                                                "Linear issue {} belongs to team '{}', but this project is configured for team '{}'",
+                                                issue_id,
+                                                issue.team_id,
+                                                team_id
+                                            ),
+                                        });
                                         return;
                                     }
                                 }
@@ -5642,6 +5640,14 @@ async fn process_action(
 
         Action::ShowToast { message, level } => {
             state.toast = Some(Toast::new(message, level));
+        }
+
+        Action::LogWarning { message } => {
+            state.log_warn(&message);
+        }
+
+        Action::LogError { message } => {
+            state.log_error(&message);
         }
 
         Action::ClearError => {

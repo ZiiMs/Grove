@@ -187,6 +187,12 @@ pub enum Action {
         message: String,
         level: ToastLevel,
     },
+    LogWarning {
+        message: String,
+    },
+    LogError {
+        message: String,
+    },
     ClearError,
     EnterInputMode(InputMode),
     ExitInputMode,
