@@ -187,7 +187,7 @@ impl GitSync {
     /// Get diff output.
     pub fn get_diff(&self) -> Result<String> {
         let output = Command::new("git")
-            .args(["diff", "--color=always"])
+            .args(["diff", "--color=never"])
             .current_dir(&self.worktree_path)
             .output()
             .context("Failed to execute git diff")?;
@@ -200,7 +200,7 @@ impl GitSync {
         let output = Command::new("git")
             .args([
                 "diff",
-                "--color=always",
+                "--color=never",
                 &format!("origin/{}...HEAD", main_branch),
             ])
             .current_dir(&self.worktree_path)
