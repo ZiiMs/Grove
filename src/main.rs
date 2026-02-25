@@ -728,7 +728,11 @@ async fn main() -> Result<()> {
     // Main event loop
     let poll_timeout = Duration::from_millis(50);
     let tick_interval = Duration::from_millis(100);
+    let gitdiff_refresh_interval = Duration::from_secs(2);
     let mut last_tick = std::time::Instant::now();
+    let mut last_gitdiff_refresh = std::time::Instant::now()
+        .checked_sub(gitdiff_refresh_interval)
+        .unwrap_or_else(std::time::Instant::now);
     let mut pending_attach: Option<Uuid> = None;
     let mut pending_devserver_attach: Option<Uuid> = None;
     let mut pending_editor: Option<Uuid> = None;
@@ -912,6 +916,24 @@ async fn main() -> Result<()> {
         if last_tick.elapsed() >= tick_interval {
             action_tx.send(Action::Tick)?;
             last_tick = std::time::Instant::now();
+        }
+
+        // Refresh git diff when GitDiff tab is active
+        if state.preview_tab == PreviewTab::GitDiff
+            && last_gitdiff_refresh.elapsed() >= gitdiff_refresh_interval
+        {
+            if let Some(agent) = state.selected_agent() {
+                let worktree_path = agent.worktree_path.clone();
+                let main_branch = state.settings.repo_config.git.main_branch.clone();
+                let gitdiff_tx = action_tx.clone();
+
+                tokio::spawn(async move {
+                    let diff = get_combined_git_diff(&worktree_path, &main_branch);
+                    let _ = gitdiff_tx.send(Action::UpdateGitDiffContent(Some(diff)));
+                });
+
+                last_gitdiff_refresh = std::time::Instant::now();
+            }
         }
 
         // Process any pending actions from background tasks
@@ -1233,6 +1255,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
             PreviewTab::DevServer => state
                 .selected_agent_id()
                 .map(|id| Action::AttachToDevServer { agent_id: id }),
+            PreviewTab::GitDiff => None,
         };
     }
 
@@ -6108,6 +6131,10 @@ async fn process_action(
             state.preview_content = content;
         }
 
+        Action::UpdateGitDiffContent(content) => {
+            state.gitdiff_content = content;
+        }
+
         Action::DeleteAgentComplete {
             id,
             success,
@@ -8945,7 +8972,8 @@ async fn process_action(
 
         Action::NextPreviewTab => {
             state.preview_tab = match state.preview_tab {
-                PreviewTab::Preview => PreviewTab::DevServer,
+                PreviewTab::Preview => PreviewTab::GitDiff,
+                PreviewTab::GitDiff => PreviewTab::DevServer,
                 PreviewTab::DevServer => PreviewTab::Preview,
             };
         }
@@ -8953,7 +8981,8 @@ async fn process_action(
         Action::PrevPreviewTab => {
             state.preview_tab = match state.preview_tab {
                 PreviewTab::Preview => PreviewTab::DevServer,
-                PreviewTab::DevServer => PreviewTab::Preview,
+                PreviewTab::GitDiff => PreviewTab::Preview,
+                PreviewTab::DevServer => PreviewTab::GitDiff,
             };
         }
 
@@ -9691,5 +9720,41 @@ async fn poll_codeberg_prs(
                 let _ = tx.send(Action::UpdateCodebergPrStatus { id, status });
             }
         }
+    }
+}
+
+fn get_combined_git_diff(worktree_path: &str, main_branch: &str) -> String {
+    use grove::git::GitSync;
+
+    let git_sync = GitSync::new(worktree_path);
+    let mut result = String::new();
+
+    match git_sync.get_diff() {
+        Ok(diff) if !diff.trim().is_empty() => {
+            result.push_str("╭─ Uncommitted Changes ─╮\n");
+            result.push_str(&diff);
+            result.push('\n');
+        }
+        _ => {}
+    }
+
+    match git_sync.get_diff_against_main(main_branch) {
+        Ok(diff) if !diff.trim().is_empty() => {
+            if !result.is_empty() {
+                result.push_str("╰───────────────────────╯\n\n");
+            }
+            result.push_str("╭─ Commits vs ");
+            result.push_str(main_branch);
+            result.push_str(" ─╮\n");
+            result.push_str(&diff);
+            result.push_str("\n╰───────────────────────╯\n");
+        }
+        _ => {}
+    }
+
+    if result.is_empty() {
+        "No changes to display".to_string()
+    } else {
+        result
     }
 }

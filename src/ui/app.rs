@@ -15,11 +15,11 @@ use crate::devserver::DevServerStatus;
 
 use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
-    DevServerWarningModal, EmptyDevServerWidget, EmptyOutputWidget, GitSetupModal,
-    GlobalSetupWizard, HelpOverlay, LoadingOverlay, OutputViewWidget, PmSetupModal,
-    ProjectSetupWizard, SettingsModal, StatusBarWidget, StatusDebugOverlay, StatusDropdown,
-    SubtaskStatusDropdown, SystemMetricsWidget, TaskListModal, TaskReassignmentWarningModal,
-    ToastWidget,
+    DevServerWarningModal, DiffViewWidget, EmptyDevServerWidget, EmptyDiffWidget,
+    EmptyOutputWidget, GitSetupModal, GlobalSetupWizard, HelpOverlay, LoadingOverlay,
+    OutputViewWidget, PmSetupModal, ProjectSetupWizard, SettingsModal, StatusBarWidget,
+    StatusDebugOverlay, StatusDropdown, SubtaskStatusDropdown, SystemMetricsWidget, TaskListModal,
+    TaskReassignmentWarningModal, ToastWidget,
 };
 
 #[derive(Clone)]
@@ -419,12 +419,22 @@ impl<'a> AppWidget<'a> {
 
         match self.state.preview_tab {
             PreviewTab::Preview => self.render_preview_content(frame, chunks[1]),
+            PreviewTab::GitDiff => self.render_gitdiff_content(frame, chunks[1]),
             PreviewTab::DevServer => self.render_devserver_content(frame, chunks[1]),
         }
     }
 
     fn render_preview_tabs(&self, frame: &mut Frame, area: Rect) {
         let preview_style = if self.state.preview_tab == PreviewTab::Preview {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let gitdiff_style = if self.state.preview_tab == PreviewTab::GitDiff {
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
@@ -451,6 +461,8 @@ impl<'a> AppWidget<'a> {
 
         let tabs = Line::from(vec![
             Span::styled(" Preview ", preview_style),
+            Span::raw(" "),
+            Span::styled(" Git Diff ", gitdiff_style),
             Span::raw(" "),
             Span::styled(
                 format!(" Dev Server{} ", devserver_indicator),
@@ -488,6 +500,19 @@ impl<'a> AppWidget<'a> {
             .render(frame, area);
         } else {
             EmptyDevServerWidget::render(frame, area);
+        }
+    }
+
+    fn render_gitdiff_content(&self, frame: &mut Frame, area: Rect) {
+        let agent_name = self
+            .state
+            .selected_agent()
+            .map(|a| a.name.as_str())
+            .unwrap_or("Agent");
+        if let Some(content) = &self.state.gitdiff_content {
+            DiffViewWidget::new(agent_name, content, self.state.gitdiff_scroll).render(frame, area);
+        } else {
+            EmptyDiffWidget::render(frame, area);
         }
     }
 

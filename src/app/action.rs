@@ -219,6 +219,8 @@ pub enum Action {
 
     UpdatePreviewContent(Option<String>),
 
+    UpdateGitDiffContent(Option<String>),
+
     DeleteAgentComplete {
         id: Uuid,
         success: bool,
