@@ -6139,8 +6139,9 @@ async fn process_action(
             state.gitdiff_content = content.clone();
             if let Some(diff) = content {
                 let line_count = diff.lines().count();
-                let max_scroll = line_count.saturating_sub(20);
-                state.gitdiff_scroll = state.gitdiff_scroll.min(max_scroll);
+                state.gitdiff_line_count = line_count;
+            } else {
+                state.gitdiff_line_count = 0;
             }
         }
 
@@ -9010,7 +9011,8 @@ async fn process_action(
                 state.output_scroll = state.output_scroll.saturating_sub(10);
             }
             PreviewTab::GitDiff => {
-                state.gitdiff_scroll = state.gitdiff_scroll.saturating_add(10);
+                let max_scroll = state.gitdiff_line_count.saturating_sub(1);
+                state.gitdiff_scroll = state.gitdiff_scroll.saturating_add(10).min(max_scroll);
             }
             PreviewTab::DevServer => {}
         },
