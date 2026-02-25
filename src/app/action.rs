@@ -304,6 +304,8 @@ pub enum Action {
     RestartDevServer,
     NextPreviewTab,
     PrevPreviewTab,
+    ScrollPreviewUp,
+    ScrollPreviewDown,
     ClearDevServerLogs,
     OpenDevServerInBrowser,
     DismissDevServerWarning,
