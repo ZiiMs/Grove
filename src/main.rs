@@ -6136,7 +6136,12 @@ async fn process_action(
         }
 
         Action::UpdateGitDiffContent(content) => {
-            state.gitdiff_content = content;
+            state.gitdiff_content = content.clone();
+            if let Some(diff) = content {
+                let line_count = diff.lines().count();
+                let max_scroll = line_count.saturating_sub(20);
+                state.gitdiff_scroll = state.gitdiff_scroll.min(max_scroll);
+            }
         }
 
         Action::DeleteAgentComplete {
