@@ -258,7 +258,7 @@ download_flock() {
         fi
     fi
     
-    echo "Installing version: ${_version}"
+    echo "Installing version: ${_version}" >&2
 
     local _package_url
     local _releases_list_url="https://api.github.com/repos/${REPO}/releases"
@@ -290,7 +290,7 @@ Please check https://github.com/${REPO}/releases for available downloads."
     esac
 
     local _package="${BINARY_NAME}.${_ext}"
-    echo "Downloading from: ${_package_url}"
+    echo "Downloading from: ${_package_url}" >&2
     
     case "${_dld}" in
     curl) curl -sLo "${_package}" "${_package_url}" || err "curl: failed to download ${_package_url}" ;;
