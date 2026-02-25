@@ -32,6 +32,9 @@ pub enum Action {
     ResumeAgent {
         id: Uuid,
     },
+    ToggleContinueSession {
+        id: Uuid,
+    },
 
     UpdateAgentStatus {
         id: Uuid,

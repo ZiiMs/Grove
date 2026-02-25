@@ -531,6 +531,8 @@ pub struct Keybinds {
     pub pause: Keybind,
     #[serde(default = "default_resume")]
     pub resume: Keybind,
+    #[serde(default = "default_toggle_continue")]
+    pub toggle_continue: Keybind,
     #[serde(default = "default_merge")]
     pub merge: Keybind,
     #[serde(default = "default_push")]
@@ -600,6 +602,9 @@ fn default_pause() -> Keybind {
 fn default_resume() -> Keybind {
     Keybind::new("r")
 }
+fn default_toggle_continue() -> Keybind {
+    Keybind::with_modifiers("c", vec!["Shift".to_string()])
+}
 fn default_merge() -> Keybind {
     Keybind::new("m")
 }
@@ -666,6 +671,7 @@ impl Default for Keybinds {
             yank: default_yank(),
             pause: default_pause(),
             resume: default_resume(),
+            toggle_continue: default_toggle_continue(),
             merge: default_merge(),
             push: default_push(),
             fetch: default_fetch(),

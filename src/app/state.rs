@@ -149,6 +149,7 @@ pub enum SettingsField {
     KbYank,
     KbPause,
     KbResume,
+    KbToggleContinue,
     KbMerge,
     KbPush,
     KbFetch,
@@ -383,6 +384,7 @@ impl SettingsField {
             | SettingsField::KbYank
             | SettingsField::KbPause
             | SettingsField::KbResume
+            | SettingsField::KbToggleContinue
             | SettingsField::KbMerge
             | SettingsField::KbPush
             | SettingsField::KbFetch
@@ -457,6 +459,7 @@ impl SettingsField {
             SettingsField::KbYank => Some("Copy Name"),
             SettingsField::KbPause => Some("Pause Agent"),
             SettingsField::KbResume => Some("Resume/Refresh"),
+            SettingsField::KbToggleContinue => Some("Toggle Continue"),
             SettingsField::KbMerge => Some("Merge Main"),
             SettingsField::KbPush => Some("Push Changes"),
             SettingsField::KbFetch => Some("Fetch Remote"),
@@ -609,6 +612,7 @@ impl SettingsItem {
                 SettingsItem::Category(SettingsCategory::KeybindGit),
                 SettingsItem::Field(SettingsField::KbPause),
                 SettingsItem::Field(SettingsField::KbResume),
+                SettingsItem::Field(SettingsField::KbToggleContinue),
                 SettingsItem::Field(SettingsField::KbMerge),
                 SettingsItem::Field(SettingsField::KbPush),
                 SettingsItem::Field(SettingsField::KbFetch),
@@ -790,6 +794,7 @@ impl SettingsState {
             SettingsField::KbYank => Some(&self.pending_keybinds.yank),
             SettingsField::KbPause => Some(&self.pending_keybinds.pause),
             SettingsField::KbResume => Some(&self.pending_keybinds.resume),
+            SettingsField::KbToggleContinue => Some(&self.pending_keybinds.toggle_continue),
             SettingsField::KbMerge => Some(&self.pending_keybinds.merge),
             SettingsField::KbPush => Some(&self.pending_keybinds.push),
             SettingsField::KbFetch => Some(&self.pending_keybinds.fetch),
@@ -824,6 +829,7 @@ impl SettingsState {
             SettingsField::KbYank => self.pending_keybinds.yank = keybind,
             SettingsField::KbPause => self.pending_keybinds.pause = keybind,
             SettingsField::KbResume => self.pending_keybinds.resume = keybind,
+            SettingsField::KbToggleContinue => self.pending_keybinds.toggle_continue = keybind,
             SettingsField::KbMerge => self.pending_keybinds.merge = keybind,
             SettingsField::KbPush => self.pending_keybinds.push = keybind,
             SettingsField::KbFetch => self.pending_keybinds.fetch = keybind,
