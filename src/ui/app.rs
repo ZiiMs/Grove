@@ -136,6 +136,7 @@ impl<'a> AppWidget<'a> {
                 &self.state.config.global.log_level,
                 &self.state.config.global.worktree_location,
                 &self.state.config.ui,
+                &self.state.settings.pending_automation,
             )
             .render(frame);
         }

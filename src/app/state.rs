@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::action::InputMode;
 use super::config::{
-    AiAgent, Config, GitProvider, Keybind, Keybinds, LogLevel as ConfigLogLevel,
+    AiAgent, AutomationConfig, Config, GitProvider, Keybind, Keybinds, LogLevel as ConfigLogLevel,
     ProjectMgmtProvider, RepoConfig, UiConfig, WorktreeLocation,
 };
 use super::task_list::TaskListItem;
@@ -43,6 +43,7 @@ pub enum SettingsTab {
     Git,
     ProjectMgmt,
     DevServer,
+    Automation,
     Keybinds,
 }
 
@@ -53,6 +54,7 @@ impl SettingsTab {
             SettingsTab::Git,
             SettingsTab::ProjectMgmt,
             SettingsTab::DevServer,
+            SettingsTab::Automation,
             SettingsTab::Keybinds,
         ]
     }
@@ -63,6 +65,7 @@ impl SettingsTab {
             SettingsTab::Git => "Git",
             SettingsTab::ProjectMgmt => "Project Mgmt",
             SettingsTab::DevServer => "Dev Server",
+            SettingsTab::Automation => "Automation",
             SettingsTab::Keybinds => "Keybinds",
         }
     }
@@ -72,7 +75,8 @@ impl SettingsTab {
             SettingsTab::General => SettingsTab::Git,
             SettingsTab::Git => SettingsTab::ProjectMgmt,
             SettingsTab::ProjectMgmt => SettingsTab::DevServer,
-            SettingsTab::DevServer => SettingsTab::Keybinds,
+            SettingsTab::DevServer => SettingsTab::Automation,
+            SettingsTab::Automation => SettingsTab::Keybinds,
             SettingsTab::Keybinds => SettingsTab::General,
         }
     }
@@ -83,7 +87,8 @@ impl SettingsTab {
             SettingsTab::Git => SettingsTab::General,
             SettingsTab::ProjectMgmt => SettingsTab::Git,
             SettingsTab::DevServer => SettingsTab::ProjectMgmt,
-            SettingsTab::Keybinds => SettingsTab::DevServer,
+            SettingsTab::Automation => SettingsTab::DevServer,
+            SettingsTab::Keybinds => SettingsTab::Automation,
         }
     }
 }
@@ -139,6 +144,9 @@ pub enum SettingsField {
     DevServerWorkingDir,
     DevServerPort,
     DevServerAutoStart,
+    AutomationOnTaskAssign,
+    AutomationOnPush,
+    AutomationOnDelete,
     KbNavDown,
     KbNavUp,
     KbNavFirst,
@@ -188,6 +196,7 @@ pub enum SettingsCategory {
     Linear,
     Prompts,
     DevServer,
+    Automation,
     KeybindNav,
     KeybindAgent,
     KeybindGit,
@@ -304,6 +313,7 @@ impl SettingsCategory {
             SettingsCategory::Linear => "Linear",
             SettingsCategory::Prompts => "Prompts",
             SettingsCategory::DevServer => "Dev Server",
+            SettingsCategory::Automation => "Automation",
             SettingsCategory::KeybindNav => "Navigation",
             SettingsCategory::KeybindAgent => "Agent Management",
             SettingsCategory::KeybindGit => "Git Operations",
@@ -374,6 +384,9 @@ impl SettingsField {
             | SettingsField::DevServerPort
             | SettingsField::DevServerAutoStart
             | SettingsField::WorktreeSymlinks => SettingsTab::DevServer,
+            SettingsField::AutomationOnTaskAssign
+            | SettingsField::AutomationOnPush
+            | SettingsField::AutomationOnDelete => SettingsTab::Automation,
             SettingsField::KbNavDown
             | SettingsField::KbNavUp
             | SettingsField::KbNavFirst
@@ -484,6 +497,15 @@ impl SettingsField {
 
     pub fn is_readonly(&self) -> bool {
         matches!(self, SettingsField::Version)
+    }
+
+    pub fn is_automation_field(&self) -> bool {
+        matches!(
+            self,
+            SettingsField::AutomationOnTaskAssign
+                | SettingsField::AutomationOnPush
+                | SettingsField::AutomationOnDelete
+        )
     }
 }
 
@@ -598,6 +620,13 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::WorktreeSymlinks),
                 SettingsItem::ActionButton(ActionButtonType::ResetTab),
             ],
+            SettingsTab::Automation => vec![
+                SettingsItem::Category(SettingsCategory::Automation),
+                SettingsItem::Field(SettingsField::AutomationOnTaskAssign),
+                SettingsItem::Field(SettingsField::AutomationOnPush),
+                SettingsItem::Field(SettingsField::AutomationOnDelete),
+                SettingsItem::ActionButton(ActionButtonType::ResetTab),
+            ],
             SettingsTab::Keybinds => vec![
                 SettingsItem::Category(SettingsCategory::KeybindNav),
                 SettingsItem::Field(SettingsField::KbNavDown),
@@ -696,6 +725,8 @@ pub struct SettingsState {
     pub pending_ui: UiConfig,
     pub repo_config: RepoConfig,
     pub pending_keybinds: Keybinds,
+    pub pending_automation: AutomationConfig,
+    pub automation_status_options: Vec<StatusOption>,
     pub capturing_keybind: Option<SettingsField>,
     pub keybind_conflicts: Vec<(String, String)>,
     pub file_browser: FileBrowserState,
@@ -722,6 +753,8 @@ impl Default for SettingsState {
             pending_ui: UiConfig::default(),
             repo_config: RepoConfig::default(),
             pending_keybinds: Keybinds::default(),
+            pending_automation: AutomationConfig::default(),
+            automation_status_options: Vec::new(),
             capturing_keybind: None,
             keybind_conflicts: Vec::new(),
             file_browser: FileBrowserState::default(),
@@ -912,12 +945,17 @@ impl SettingsState {
         self.keybind_conflicts.clear();
     }
 
+    pub fn reset_automation_defaults(&mut self) {
+        self.pending_automation = AutomationConfig::default();
+    }
+
     pub fn reset_current_tab(&mut self) {
         match self.tab {
             SettingsTab::General => self.reset_general_defaults(),
             SettingsTab::Git => self.reset_git_defaults(),
             SettingsTab::ProjectMgmt => self.reset_project_mgmt_defaults(),
             SettingsTab::DevServer => self.reset_dev_server_defaults(),
+            SettingsTab::Automation => self.reset_automation_defaults(),
             SettingsTab::Keybinds => self.reset_keybinds_defaults(),
         }
     }
@@ -927,6 +965,7 @@ impl SettingsState {
         self.reset_git_defaults();
         self.reset_project_mgmt_defaults();
         self.reset_dev_server_defaults();
+        self.reset_automation_defaults();
         self.reset_keybinds_defaults();
     }
 }

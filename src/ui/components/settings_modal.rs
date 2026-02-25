@@ -7,9 +7,9 @@ use ratatui::{
 };
 
 use crate::app::{
-    ActionButtonType, AiAgent, CodebergCiProvider, Config, ConfigLogLevel, GitProvider,
-    ProjectMgmtProvider, ResetType, SettingsCategory, SettingsField, SettingsItem, SettingsState,
-    SettingsTab, UiConfig, WorktreeLocation,
+    ActionButtonType, AiAgent, AutomationConfig, CodebergCiProvider, Config, ConfigLogLevel,
+    GitProvider, ProjectMgmtProvider, ResetType, SettingsCategory, SettingsField, SettingsItem,
+    SettingsState, SettingsTab, UiConfig, WorktreeLocation,
 };
 use crate::ui::components::file_browser;
 use crate::ui::helpers::{
@@ -24,6 +24,7 @@ pub struct SettingsModal<'a> {
     log_level: &'a ConfigLogLevel,
     worktree_location: &'a WorktreeLocation,
     ui_config: &'a UiConfig,
+    automation_config: &'a AutomationConfig,
 }
 
 impl<'a> SettingsModal<'a> {
@@ -33,6 +34,7 @@ impl<'a> SettingsModal<'a> {
         log_level: &'a ConfigLogLevel,
         worktree_location: &'a WorktreeLocation,
         ui_config: &'a UiConfig,
+        automation_config: &'a AutomationConfig,
     ) -> Self {
         Self {
             state,
@@ -40,6 +42,7 @@ impl<'a> SettingsModal<'a> {
             log_level,
             worktree_location,
             ui_config,
+            automation_config,
         }
     }
 
@@ -922,6 +925,30 @@ impl<'a> SettingsModal<'a> {
                 let btn_text = format!("Setup {}...", provider.display_name());
                 ("Setup".to_string(), btn_text, false)
             }
+            SettingsField::AutomationOnTaskAssign => {
+                let value = self
+                    .automation_config
+                    .on_task_assign
+                    .clone()
+                    .unwrap_or_else(|| "None".to_string());
+                ("On Task Assign".to_string(), value, false)
+            }
+            SettingsField::AutomationOnPush => {
+                let value = self
+                    .automation_config
+                    .on_push
+                    .clone()
+                    .unwrap_or_else(|| "None".to_string());
+                ("On Push".to_string(), value, false)
+            }
+            SettingsField::AutomationOnDelete => {
+                let value = self
+                    .automation_config
+                    .on_delete
+                    .clone()
+                    .unwrap_or_else(|| "None".to_string());
+                ("On Delete".to_string(), value, false)
+            }
             field if field.is_keybind_field() => {
                 let label = field.keybind_name().unwrap_or("Keybind").to_string();
                 let value = self
@@ -983,28 +1010,43 @@ impl<'a> SettingsModal<'a> {
 
     fn render_dropdown(&self, frame: &mut Frame, selected_index: usize) {
         let field = self.state.current_field();
-        let options: Vec<&str> = match field {
-            SettingsField::AiAgent => AiAgent::all().iter().map(|a| a.display_name()).collect(),
+        let options: Vec<String> = match field {
+            SettingsField::AiAgent => AiAgent::all()
+                .iter()
+                .map(|a| a.display_name().to_string())
+                .collect(),
             SettingsField::GitProvider => GitProvider::all()
                 .iter()
-                .map(|g| g.display_name())
+                .map(|g| g.display_name().to_string())
                 .collect(),
             SettingsField::LogLevel => ConfigLogLevel::all()
                 .iter()
-                .map(|l| l.display_name())
+                .map(|l| l.display_name().to_string())
                 .collect(),
             SettingsField::WorktreeLocation => WorktreeLocation::all()
                 .iter()
-                .map(|w| w.display_name())
+                .map(|w| w.display_name().to_string())
                 .collect(),
             SettingsField::CodebergCiProvider => CodebergCiProvider::all()
                 .iter()
-                .map(|c| c.display_name())
+                .map(|c| c.display_name().to_string())
                 .collect(),
             SettingsField::ProjectMgmtProvider => ProjectMgmtProvider::all()
                 .iter()
-                .map(|p| p.display_name())
+                .map(|p| p.display_name().to_string())
                 .collect(),
+            SettingsField::AutomationOnTaskAssign
+            | SettingsField::AutomationOnPush
+            | SettingsField::AutomationOnDelete => {
+                let mut opts = vec!["None".to_string()];
+                opts.extend(
+                    self.state
+                        .automation_status_options
+                        .iter()
+                        .map(|o| o.name.clone()),
+                );
+                opts
+            }
             _ => return,
         };
 

@@ -233,6 +233,23 @@ pub struct GlobalConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AutomationConfig {
+    #[serde(default)]
+    pub on_task_assign: Option<String>,
+    #[serde(default)]
+    pub on_push: Option<String>,
+    #[serde(default)]
+    pub on_delete: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutomationActionType {
+    TaskAssign,
+    Push,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub global: GlobalConfig,
@@ -254,6 +271,8 @@ pub struct Config {
     pub performance: PerformanceConfig,
     #[serde(default)]
     pub keybinds: Keybinds,
+    #[serde(default)]
+    pub automation: AutomationConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
