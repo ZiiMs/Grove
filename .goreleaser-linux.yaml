@@ -8,7 +8,6 @@ before:
 
 builds:
   - builder: rust
-    single_build: false
     binary: grove
     flags:
       - --release
