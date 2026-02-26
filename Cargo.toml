@@ -1,5 +1,5 @@
 [package]
-name = "grove"
+name = "grove-ai"
 version = "0.1.1"
 edition = "2021"
 description = "A TUI for managing multiple Claude Code agents with git worktree isolation"
@@ -9,6 +9,14 @@ homepage = "https://github.com/ziim/grove"
 readme = "README.md"
 keywords = ["tui", "claude", "agent", "git", "worktree"]
 categories = ["command-line-interface", "development-tools"]
+
+[lib]
+name = "grove"
+path = "src/lib.rs"
+
+[[bin]]
+name = "grove"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
