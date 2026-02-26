@@ -11,7 +11,7 @@ Flock allows you to run multiple instances of Claude Code simultaneously, each w
 - **Real-Time Monitoring**: See live output from each agent, detect status (running, waiting, error), and track activity
 - **GitLab Integration**: Automatically detect merge requests, view pipeline status, and open MRs in browser
 - **Asana Integration**: Link agents to Asana tasks, automatically move tasks through workflow stages
-- **Session Persistence**: Agent sessions persist across restarts; pause/resume agents without losing Claude's context
+- **Session Persistence**: Agent sessions persist across restarts with tmux
 - **System Metrics**: Monitor CPU and memory usage while agents work
 
 ## Prerequisites
@@ -233,8 +233,7 @@ source ~/.zshrc  # or source ~/.bashrc
 #### Git Operations
 | Key | Action |
 |-----|--------|
-| `c` | Pause agent & copy branch (checkout elsewhere) |
-| `r` | Resume paused agent |
+| `c` | Copy `cd` command to worktree |
 | `m` | Send merge main request to Claude |
 | `p` | Send /push command to Claude |
 | `f` | Fetch remote |
@@ -275,21 +274,11 @@ Press `Enter` on a selected agent to attach to its tmux session. You'll be conne
 
 To detach and return to Flock: press `Ctrl+B` then `D` (standard tmux detach).
 
-### Pause/Resume Workflow
+### Copy Worktree Path
 
-The pause/resume feature lets you temporarily free up a worktree while preserving Claude's context:
+Press `c` to copy a `cd` command for the selected agent's worktree to your clipboard. This is printed to the terminal and copied so you can easily switch to that directory in another terminal.
 
-1. **Pause** (`c`):
-   - Commits any uncommitted changes
-   - Removes the worktree (but keeps the branch)
-   - Copies the branch name to clipboard
-   - The tmux session stays alive (Claude's context preserved!)
-
-2. **Resume** (`r`):
-   - Recreates the worktree
-   - Claude picks up right where it left off
-
-This is useful when you need to checkout the branch elsewhere for testing or code review.
+This is useful when you need to work directly in the agent's worktree for debugging or manual testing.
 
 ### Asana Integration Workflow
 

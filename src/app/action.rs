@@ -27,10 +27,7 @@ pub enum Action {
         agent_id: Uuid,
     },
     DetachFromAgent,
-    PauseAgent {
-        id: Uuid,
-    },
-    ResumeAgent {
+    CopyWorktreePath {
         id: Uuid,
     },
     ToggleContinueSession {
@@ -55,9 +52,6 @@ pub enum Action {
         id: Uuid,
     },
 
-    CheckoutBranch {
-        id: Uuid,
-    },
     MergeMain {
         id: Uuid,
     },
@@ -223,16 +217,6 @@ pub enum Action {
     UpdateGitDiffContent(Option<String>),
 
     DeleteAgentComplete {
-        id: Uuid,
-        success: bool,
-        message: String,
-    },
-    PauseAgentComplete {
-        id: Uuid,
-        success: bool,
-        message: String,
-    },
-    ResumeAgentComplete {
         id: Uuid,
         success: bool,
         message: String,

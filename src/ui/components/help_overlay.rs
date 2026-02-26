@@ -88,12 +88,8 @@ impl<'a> HelpOverlay<'a> {
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(format!(
-                "  {:8} Pause & copy checkout command",
-                kb.pause.display_short()
-            )),
-            Line::from(format!(
-                "  {:8} Resume paused agent / Refresh status",
-                kb.resume.display_short()
+                "  {:8} Copy cd command to worktree",
+                kb.copy_path.display_short()
             )),
             Line::from(format!(
                 "  {:8} Toggle auto-continue session",
