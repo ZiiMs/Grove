@@ -119,6 +119,24 @@ pub struct AsanaTaskData {
     pub permalink_url: Option<String>,
     pub parent: Option<AsanaParent>,
     pub num_subtasks: Option<u32>,
+    pub memberships: Option<Vec<AsanaTaskMembership>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaTaskMembership {
+    pub project: Option<AsanaMembershipProject>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaMembershipProject {
+    pub gid: Option<String>,
+    pub section: Option<AsanaMembershipSection>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AsanaMembershipSection {
+    pub gid: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,10 +205,29 @@ pub struct AsanaTaskSummary {
     pub permalink_url: Option<String>,
     pub parent_gid: Option<String>,
     pub num_subtasks: u32,
+    pub section_name: Option<String>,
 }
 
-impl From<AsanaTaskData> for AsanaTaskSummary {
-    fn from(data: AsanaTaskData) -> Self {
+impl AsanaTaskSummary {
+    pub fn from_with_project(data: AsanaTaskData, project_gid: Option<&str>) -> Self {
+        let section_name = data.memberships.as_ref().and_then(|memberships| {
+            for membership in memberships {
+                if let Some(ref project) = membership.project {
+                    let matches_project = project_gid
+                        .map(|pg| project.gid.as_deref() == Some(pg))
+                        .unwrap_or(true);
+                    if matches_project {
+                        if let Some(ref section) = project.section {
+                            if let Some(ref name) = section.name {
+                                return Some(name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        });
+
         Self {
             gid: data.gid,
             name: data.name,
@@ -198,6 +235,13 @@ impl From<AsanaTaskData> for AsanaTaskSummary {
             permalink_url: data.permalink_url,
             parent_gid: data.parent.map(|p| p.gid),
             num_subtasks: data.num_subtasks.unwrap_or(0),
+            section_name,
         }
+    }
+}
+
+impl From<AsanaTaskData> for AsanaTaskSummary {
+    fn from(data: AsanaTaskData) -> Self {
+        Self::from_with_project(data, None)
     }
 }

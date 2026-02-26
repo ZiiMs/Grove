@@ -335,6 +335,10 @@ impl<'a> AppWidget<'a> {
                     provider_name,
                     &assigned_tasks,
                     &self.state.task_list_expanded_ids,
+                    &self.state.config.task_list.hidden_status_names,
+                    &self.state.task_list_status_options,
+                    self.state.task_list_filter_open,
+                    self.state.task_list_filter_selected,
                 )
                 .render(frame);
             }

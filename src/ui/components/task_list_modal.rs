@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame,
 };
 
-use crate::app::{TaskItemStatus, TaskListItem};
+use crate::app::{StatusOption, TaskItemStatus, TaskListItem};
 use crate::ui::helpers::centered_rect;
 
 pub struct TaskListModal<'a> {
@@ -19,9 +19,14 @@ pub struct TaskListModal<'a> {
     provider_name: &'a str,
     assigned_tasks: &'a HashMap<String, String>,
     expanded_ids: &'a HashSet<String>,
+    hidden_status_names: &'a [String],
+    status_options: &'a [StatusOption],
+    filter_open: bool,
+    filter_selected: usize,
 }
 
 impl<'a> TaskListModal<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tasks: &'a [TaskListItem],
         selected_actual_idx: usize,
@@ -30,6 +35,10 @@ impl<'a> TaskListModal<'a> {
         provider_name: &'a str,
         assigned_tasks: &'a HashMap<String, String>,
         expanded_ids: &'a HashSet<String>,
+        hidden_status_names: &'a [String],
+        status_options: &'a [StatusOption],
+        filter_open: bool,
+        filter_selected: usize,
     ) -> Self {
         Self {
             tasks,
@@ -39,10 +48,35 @@ impl<'a> TaskListModal<'a> {
             provider_name,
             assigned_tasks,
             expanded_ids,
+            hidden_status_names,
+            status_options,
+            filter_open,
+            filter_selected,
         }
     }
 
-    fn compute_visible_tasks(&self) -> Vec<(usize, &'a TaskListItem, usize)> {
+    fn is_status_hidden(&self, status_name: &str) -> bool {
+        self.hidden_status_names.contains(&status_name.to_string())
+    }
+
+    fn filter_tasks(&self) -> Vec<&'a TaskListItem> {
+        self.tasks
+            .iter()
+            .filter(|task| !self.is_status_hidden(&task.status_name))
+            .collect()
+    }
+
+    fn compute_visible_tasks(
+        &self,
+        filtered_tasks: &[&'a TaskListItem],
+    ) -> Vec<(usize, &'a TaskListItem, usize)> {
+        let task_indices: HashMap<&str, usize> = self
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id.as_str(), i))
+            .collect();
+
         let child_to_parent: HashMap<&str, &str> = self
             .tasks
             .iter()
@@ -70,23 +104,24 @@ impl<'a> TaskListModal<'a> {
         }
 
         let mut visible = Vec::new();
-        for (idx, task) in self.tasks.iter().enumerate() {
+        for task in filtered_tasks {
             let is_visible = if task.parent_id.is_none() {
                 true
             } else {
-                self.is_ancestor_expanded(task, &child_to_parent)
+                self.is_ancestor_expanded_and_visible(task, &child_to_parent)
             };
 
             if is_visible {
+                let actual_idx = *task_indices.get(task.id.as_str()).unwrap_or(&0);
                 let depth = get_depth(task, &child_to_parent);
-                visible.push((idx, task, depth));
+                visible.push((actual_idx, *task, depth));
             }
         }
 
         visible
     }
 
-    fn is_ancestor_expanded(
+    fn is_ancestor_expanded_and_visible(
         &self,
         task: &TaskListItem,
         child_to_parent: &HashMap<&str, &str>,
@@ -99,18 +134,126 @@ impl<'a> TaskListModal<'a> {
                     if !self.expanded_ids.contains(parent_id) {
                         return false;
                     }
+                    let parent_task = self.tasks.iter().find(|t| t.id == parent_id);
+                    if let Some(parent) = parent_task {
+                        if self.is_status_hidden(&parent.status_name) {
+                            return false;
+                        }
+                    }
                     current_id = parent_id;
                 }
             }
         }
     }
 
+    fn render_filter_bar(&self, frame: &mut Frame, area: Rect) {
+        let mut spans = Vec::new();
+
+        if self.hidden_status_names.is_empty() {
+            spans.push(Span::styled(
+                "[f] Filter",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            spans.push(Span::styled("Hidden: ", Style::default().fg(Color::White)));
+            for (i, name) in self.hidden_status_names.iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
+                }
+                spans.push(Span::styled(
+                    name.clone(),
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            spans.push(Span::styled("  ", Style::default()));
+            spans.push(Span::styled(
+                "[f] Filter",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        let paragraph = Paragraph::new(Line::from(spans));
+        frame.render_widget(paragraph, area);
+    }
+
+    fn render_filter_modal(&self, frame: &mut Frame, area: Rect) {
+        if self.status_options.is_empty() {
+            return;
+        }
+
+        let modal_area = centered_rect(45, 35, area);
+        frame.render_widget(Clear, modal_area);
+
+        let block = Block::default()
+            .title(" Filter Tasks ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let inner_area = block.inner(modal_area);
+        frame.render_widget(block, modal_area);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(1)])
+            .split(inner_area);
+
+        let items: Vec<ListItem> = self
+            .status_options
+            .iter()
+            .enumerate()
+            .map(|(i, opt)| {
+                let is_hidden = self.is_status_hidden(&opt.name);
+                let is_selected = i == self.filter_selected;
+
+                let (status_icon, status_color) = self
+                    .tasks
+                    .iter()
+                    .find(|t| t.status_name == opt.name)
+                    .map(|t| match &t.status {
+                        TaskItemStatus::NotStarted => ("○", Color::Gray),
+                        TaskItemStatus::InProgress => ("◐", Color::Yellow),
+                        TaskItemStatus::Completed => ("✓", Color::Green),
+                    })
+                    .unwrap_or(("○", Color::Gray));
+
+                let check = if is_hidden { "[ ]" } else { "[✓]" };
+                let text = format!("  {} {} {}", check, status_icon, opt.name);
+
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_hidden {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(status_color)
+                };
+
+                ListItem::new(Line::from(Span::styled(text, style)))
+            })
+            .collect();
+
+        let list = List::new(items);
+        frame.render_widget(list, chunks[0]);
+
+        let help = Paragraph::new(Line::from(vec![
+            Span::styled("[j/k] Navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Space] Toggle  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Esc/f] Close", Style::default().fg(Color::DarkGray)),
+        ]))
+        .alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(help, chunks[1]);
+    }
+
     pub fn render(self, frame: &mut Frame) {
         let area = centered_rect(75, 65, frame.area());
         frame.render_widget(Clear, area);
 
+        let title = format!(" {} Tasks ", self.provider_name);
+
         let block = Block::default()
-            .title(format!(" {} Tasks ", self.provider_name))
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
 
@@ -137,26 +280,76 @@ impl<'a> TaskListModal<'a> {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(3), Constraint::Length(2)])
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(3),
+                Constraint::Length(1),
+            ])
             .split(inner_area);
 
-        let visible_tasks = self.compute_visible_tasks();
+        self.render_filter_bar(frame, chunks[0]);
 
-        if visible_tasks.is_empty() {
-            let empty_text = Paragraph::new("No visible tasks")
+        let filtered_tasks = self.filter_tasks();
+
+        if filtered_tasks.is_empty() {
+            let empty_text = Paragraph::new("No tasks match current filter")
                 .style(Style::default().fg(Color::DarkGray))
                 .alignment(ratatui::layout::Alignment::Center);
-            frame.render_widget(empty_text, chunks[0]);
-            return;
+            frame.render_widget(empty_text, chunks[1]);
+        } else {
+            let visible_tasks = self.compute_visible_tasks(&filtered_tasks);
+
+            if visible_tasks.is_empty() {
+                let empty_text = Paragraph::new("No visible tasks")
+                    .style(Style::default().fg(Color::DarkGray))
+                    .alignment(ratatui::layout::Alignment::Center);
+                frame.render_widget(empty_text, chunks[1]);
+            } else {
+                self.render_task_list(frame, chunks[1], &visible_tasks);
+            }
         }
 
+        let help_spans = if self.filter_open {
+            vec![
+                Span::styled("[j/k] Navigate  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[Space] Toggle  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[Esc/f] Close", Style::default().fg(Color::DarkGray)),
+            ]
+        } else {
+            vec![
+                Span::styled("[j/k] Navigate  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[Enter] Create  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[a] Assign  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[s] Status  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[f] Filter  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[r] Refresh  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[←/→] Expand  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[Esc] Close", Style::default().fg(Color::DarkGray)),
+            ]
+        };
+
+        let help_text =
+            Paragraph::new(Line::from(help_spans)).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(help_text, chunks[2]);
+
+        if self.filter_open {
+            self.render_filter_modal(frame, area);
+        }
+    }
+
+    fn render_task_list(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        visible_tasks: &[(usize, &TaskListItem, usize)],
+    ) {
         let total_tasks = visible_tasks.len();
         let selected_visible_pos = visible_tasks
             .iter()
             .position(|(actual_idx, _, _)| *actual_idx == self.selected_actual_idx)
             .unwrap_or(0);
 
-        let available_height = chunks[0].height as usize;
+        let available_height = area.height as usize;
 
         let mut scroll_offset = self.scroll_offset.min(total_tasks.saturating_sub(1));
 
@@ -203,7 +396,7 @@ impl<'a> TaskListModal<'a> {
             .max()
             .unwrap_or(20);
 
-        let available_width = chunks[0].width as usize;
+        let available_width = area.width as usize;
         let min_width = 30;
         let max_allowed = (available_width.saturating_sub(25)).min(60);
         let max_name_width = content_based_width.clamp(min_width, max_allowed);
@@ -310,27 +503,6 @@ impl<'a> TaskListModal<'a> {
         }
 
         let list = List::new(items);
-        frame.render_widget(list, chunks[0]);
-
-        let help_text = Paragraph::new(Line::from(vec![
-            Span::styled(
-                "[↑/k][↓/j] Navigate  ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled(
-                "[Enter] Create Agent  ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled("[a] Assign  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[s] Toggle Status  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[r] Refresh  ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                "[←/→] Collapse/Expand  ",
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::styled("[Esc] Cancel", Style::default().fg(Color::DarkGray)),
-        ]))
-        .alignment(ratatui::layout::Alignment::Center);
-        frame.render_widget(help_text, chunks[1]);
+        frame.render_widget(list, area);
     }
 }

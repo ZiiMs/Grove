@@ -1467,12 +1467,27 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
     }
 
     if matches!(state.input_mode, Some(InputMode::BrowseTasks)) {
+        if state.task_list_filter_open {
+            return match key {
+                KeyCode::Char('j') | KeyCode::Down => Some(Action::TaskListFilterNext),
+                KeyCode::Char('k') | KeyCode::Up => Some(Action::TaskListFilterPrev),
+                KeyCode::Enter | KeyCode::Char(' ') => state
+                    .task_list_status_options
+                    .get(state.task_list_filter_selected)
+                    .map(|opt| Action::ToggleTaskStatusFilter {
+                        status_name: opt.name.clone(),
+                    }),
+                KeyCode::Char('f') | KeyCode::Esc => Some(Action::ToggleTaskListFilter),
+                _ => None,
+            };
+        }
         return match key {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::SelectTaskNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::SelectTaskPrev),
             KeyCode::Char('a') => Some(Action::AssignSelectedTaskToAgent),
             KeyCode::Char('s') => Some(Action::ToggleSubtaskStatus),
             KeyCode::Char('r') => Some(Action::RefreshTaskList),
+            KeyCode::Char('f') => Some(Action::ToggleTaskListFilter),
             KeyCode::Enter => Some(Action::CreateAgentFromSelectedTask),
             KeyCode::Left | KeyCode::Right => Some(Action::ToggleTaskExpand),
             KeyCode::Esc => Some(Action::ExitInputMode),
@@ -4688,6 +4703,14 @@ async fn process_action(
             let airtable_client = Arc::clone(airtable_client);
             let linear_client = Arc::clone(linear_client);
             let tx = action_tx.clone();
+
+            let asana_client_status = asana_client.clone();
+            let notion_client_status = notion_client.clone();
+            let clickup_client_status = clickup_client.clone();
+            let airtable_client_status = airtable_client.clone();
+            let linear_client_status = linear_client.clone();
+            let tx_status = action_tx.clone();
+
             tokio::spawn(async move {
                 let result = match provider {
                     ProjectMgmtProvider::Asana => {
@@ -4703,11 +4726,28 @@ async fn process_action(
                                         }
                                     })
                                     .map(|t| {
-                                        let (status, status_name) = if t.completed {
-                                            (TaskItemStatus::Completed, "Completed".to_string())
-                                        } else {
-                                            (TaskItemStatus::NotStarted, "Not Started".to_string())
-                                        };
+                                        let status_name =
+                                            t.section_name.clone().unwrap_or_else(|| {
+                                                if t.completed {
+                                                    "Completed".to_string()
+                                                } else {
+                                                    "No Section".to_string()
+                                                }
+                                            });
+                                        let status =
+                                            if status_name.to_lowercase().contains("progress")
+                                                || status_name.to_lowercase().contains("doing")
+                                                || status_name.to_lowercase().contains("review")
+                                            {
+                                                TaskItemStatus::InProgress
+                                            } else if status_name.to_lowercase().contains("done")
+                                                || status_name.to_lowercase().contains("complete")
+                                            {
+                                                TaskItemStatus::Completed
+                                            } else {
+                                                TaskItemStatus::NotStarted
+                                            };
+                                        let completed = t.completed;
                                         TaskListItem {
                                             id: t.gid,
                                             identifier: None,
@@ -4717,7 +4757,7 @@ async fn process_action(
                                             url: t.permalink_url.unwrap_or_default(),
                                             parent_id: t.parent_gid,
                                             has_children: t.num_subtasks > 0,
-                                            completed: t.completed,
+                                            completed,
                                         }
                                     })
                                     .collect();
@@ -4937,6 +4977,96 @@ async fn process_action(
                     }
                 }
             });
+
+            let tx_status = tx_status.clone();
+            tokio::spawn(async move {
+                let result: Result<Vec<StatusOption>, String> = match provider {
+                    ProjectMgmtProvider::Notion => {
+                        if !notion_client_status.is_configured().await {
+                            Err("Notion not configured".to_string())
+                        } else {
+                            match notion_client_status.get_status_options().await {
+                                Ok(opts) => Ok(opts
+                                    .all_options
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.id,
+                                        name: o.name,
+                                    })
+                                    .collect()),
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                    }
+                    ProjectMgmtProvider::Linear => {
+                        if !linear_client_status.is_configured().await {
+                            Err("Linear not configured".to_string())
+                        } else {
+                            match linear_client_status.get_workflow_states().await {
+                                Ok(states) => Ok(states
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.id,
+                                        name: s.name,
+                                    })
+                                    .collect()),
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                    }
+                    ProjectMgmtProvider::Clickup => {
+                        if !clickup_client_status.is_configured().await {
+                            Err("ClickUp not configured".to_string())
+                        } else {
+                            match clickup_client_status.get_statuses().await {
+                                Ok(statuses) => Ok(statuses
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.status.clone(),
+                                        name: s.status,
+                                    })
+                                    .collect()),
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                    }
+                    ProjectMgmtProvider::Airtable => {
+                        if !airtable_client_status.is_configured().await {
+                            Err("Airtable not configured".to_string())
+                        } else {
+                            match airtable_client_status.get_status_options().await {
+                                Ok(options) => Ok(options
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.name.clone(),
+                                        name: o.name,
+                                    })
+                                    .collect()),
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                    }
+                    ProjectMgmtProvider::Asana => {
+                        if !asana_client_status.is_configured().await {
+                            Err("Asana not configured".to_string())
+                        } else {
+                            match asana_client_status.get_sections().await {
+                                Ok(sections) => Ok(sections
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.gid,
+                                        name: s.name,
+                                    })
+                                    .collect()),
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                    }
+                };
+                if let Ok(options) = result {
+                    let _ = tx_status.send(Action::TaskListStatusOptionsLoaded { options });
+                }
+            });
         }
 
         Action::TaskListFetched { tasks } => {
@@ -4948,6 +5078,7 @@ async fn process_action(
                 .filter(|t| t.has_children)
                 .map(|t| t.id.clone())
                 .collect();
+            state.task_list_filter_selected = 0;
         }
 
         Action::TaskListFetchError { message } => {
@@ -4956,9 +5087,19 @@ async fn process_action(
             state.exit_input_mode();
         }
 
+        Action::TaskListStatusOptionsLoaded { options } => {
+            state.task_list_status_options = options;
+            if state.task_list_filter_selected >= state.task_list_status_options.len() {
+                state.task_list_filter_selected = 0;
+            }
+        }
+
         Action::SelectTaskNext => {
-            let visible_indices =
-                compute_visible_task_indices(&state.task_list, &state.task_list_expanded_ids);
+            let visible_indices = compute_visible_task_indices(
+                &state.task_list,
+                &state.task_list_expanded_ids,
+                &state.config.task_list.hidden_status_names,
+            );
             if !visible_indices.is_empty() {
                 let visible_pos = visible_indices
                     .iter()
@@ -4970,8 +5111,11 @@ async fn process_action(
         }
 
         Action::SelectTaskPrev => {
-            let visible_indices =
-                compute_visible_task_indices(&state.task_list, &state.task_list_expanded_ids);
+            let visible_indices = compute_visible_task_indices(
+                &state.task_list,
+                &state.task_list_expanded_ids,
+                &state.config.task_list.hidden_status_names,
+            );
             if !visible_indices.is_empty() {
                 let visible_pos = visible_indices
                     .iter()
@@ -4996,6 +5140,45 @@ async fn process_action(
                     }
                 }
             }
+        }
+
+        Action::ToggleTaskListFilter => {
+            state.task_list_filter_open = !state.task_list_filter_open;
+            if state.task_list_filter_open {
+                state.task_list_filter_selected = 0;
+            }
+        }
+
+        Action::TaskListFilterNext => {
+            let total = state.task_list_status_options.len();
+            if total > 0 {
+                state.task_list_filter_selected = (state.task_list_filter_selected + 1) % total;
+            }
+        }
+
+        Action::TaskListFilterPrev => {
+            let total = state.task_list_status_options.len();
+            if total > 0 {
+                if state.task_list_filter_selected == 0 {
+                    state.task_list_filter_selected = total - 1;
+                } else {
+                    state.task_list_filter_selected -= 1;
+                }
+            }
+        }
+
+        Action::ToggleTaskStatusFilter { status_name } => {
+            let hidden = &mut state.config.task_list.hidden_status_names;
+            if let Some(pos) = hidden.iter().position(|s| s == &status_name) {
+                hidden.remove(pos);
+            } else {
+                hidden.push(status_name);
+            }
+            if let Err(e) = state.config.save() {
+                tracing::error!("Failed to save config: {}", e);
+            }
+            state.task_list_selected = 0;
+            state.task_list_scroll = 0;
         }
 
         Action::ToggleSubtaskStatus => {
@@ -10162,6 +10345,7 @@ fn parse_asana_task_gid(input: &str) -> String {
 fn compute_visible_task_indices(
     tasks: &[TaskListItem],
     expanded_ids: &std::collections::HashSet<String>,
+    hidden_status_names: &[String],
 ) -> Vec<usize> {
     use std::collections::{HashMap, HashSet};
 
@@ -10170,10 +10354,12 @@ fn compute_visible_task_indices(
         .filter_map(|t| t.parent_id.as_ref().map(|p| (t.id.as_str(), p.as_str())))
         .collect();
 
-    fn is_ancestor_expanded(
+    fn is_ancestor_expanded_and_visible(
         task: &TaskListItem,
         child_to_parent: &HashMap<&str, &str>,
         expanded_ids: &HashSet<String>,
+        hidden_status_names: &[String],
+        tasks: &[TaskListItem],
     ) -> bool {
         let mut current_id = task.id.as_str();
         loop {
@@ -10182,6 +10368,11 @@ fn compute_visible_task_indices(
                 Some(&parent_id) => {
                     if !expanded_ids.contains(parent_id) {
                         return false;
+                    }
+                    if let Some(parent) = tasks.iter().find(|t| t.id == parent_id) {
+                        if hidden_status_names.contains(&parent.status_name) {
+                            return false;
+                        }
                     }
                     current_id = parent_id;
                 }
@@ -10193,10 +10384,19 @@ fn compute_visible_task_indices(
         .iter()
         .enumerate()
         .filter(|(_, task)| {
+            if hidden_status_names.contains(&task.status_name) {
+                return false;
+            }
             if task.parent_id.is_none() {
                 true
             } else {
-                is_ancestor_expanded(task, &child_to_parent, expanded_ids)
+                is_ancestor_expanded_and_visible(
+                    task,
+                    &child_to_parent,
+                    expanded_ids,
+                    hidden_status_names,
+                    tasks,
+                )
             }
         })
         .map(|(i, _)| i)

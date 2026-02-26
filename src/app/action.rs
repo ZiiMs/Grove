@@ -144,12 +144,22 @@ pub enum Action {
     TaskListFetchError {
         message: String,
     },
+    TaskListStatusOptionsLoaded {
+        options: Vec<crate::app::StatusOption>,
+    },
     SelectTaskNext,
     SelectTaskPrev,
     CreateAgentFromSelectedTask,
     AssignSelectedTaskToAgent,
     ToggleTaskExpand,
     ToggleSubtaskStatus,
+
+    ToggleTaskListFilter,
+    TaskListFilterNext,
+    TaskListFilterPrev,
+    ToggleTaskStatusFilter {
+        status_name: String,
+    },
 
     SubtaskStatusDropdownNext,
     SubtaskStatusDropdownPrev,
