@@ -949,6 +949,22 @@ impl<'a> SettingsModal<'a> {
                     .unwrap_or_else(|| "None".to_string());
                 ("On Delete".to_string(), value, false)
             }
+            SettingsField::AutomationOnTaskAssignSubtask => {
+                let value = self
+                    .automation_config
+                    .on_task_assign_subtask
+                    .clone()
+                    .unwrap_or_else(|| "None".to_string());
+                ("On Task Assign".to_string(), value, false)
+            }
+            SettingsField::AutomationOnDeleteSubtask => {
+                let value = self
+                    .automation_config
+                    .on_delete_subtask
+                    .clone()
+                    .unwrap_or_else(|| "None".to_string());
+                ("On Delete".to_string(), value, false)
+            }
             field if field.is_keybind_field() => {
                 let label = field.keybind_name().unwrap_or("Keybind").to_string();
                 let value = self
@@ -1046,6 +1062,14 @@ impl<'a> SettingsModal<'a> {
                         .map(|o| o.name.clone()),
                 );
                 opts
+            }
+            SettingsField::AutomationOnTaskAssignSubtask
+            | SettingsField::AutomationOnDeleteSubtask => {
+                vec![
+                    "None".to_string(),
+                    "Complete".to_string(),
+                    "Incomplete".to_string(),
+                ]
             }
             _ => return,
         };

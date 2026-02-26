@@ -240,6 +240,10 @@ pub struct AutomationConfig {
     pub on_push: Option<String>,
     #[serde(default)]
     pub on_delete: Option<String>,
+    #[serde(default)]
+    pub on_task_assign_subtask: Option<String>,
+    #[serde(default)]
+    pub on_delete_subtask: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

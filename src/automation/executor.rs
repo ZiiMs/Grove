@@ -9,8 +9,6 @@ pub async fn execute_automation(
     config: &AutomationConfig,
     action_type: AutomationActionType,
     task_gid: &str,
-    in_progress_override_gid: Option<&str>,
-    done_override_gid: Option<&str>,
 ) -> Result<()> {
     let status_name = match action_type {
         AutomationActionType::TaskAssign => &config.on_task_assign,
@@ -38,31 +36,6 @@ pub async fn execute_automation(
         return Ok(());
     }
 
-    if lower == "completed" || lower == "done" {
-        asana_client.complete_task(task_gid).await?;
-        if let Some(done_gid) = done_override_gid {
-            let _ = asana_client.move_to_done(task_gid, Some(done_gid)).await;
-        } else {
-            let _ = asana_client.move_to_done(task_gid, None).await;
-        }
-        debug!("Automation: marked task {} as completed", task_gid);
-        return Ok(());
-    }
-
-    if lower.contains("in progress") {
-        asana_client
-            .move_to_in_progress(task_gid, in_progress_override_gid)
-            .await?;
-        debug!("Automation: moved task {} to In Progress", task_gid);
-        return Ok(());
-    }
-
-    if lower.contains("not started") || lower.contains("todo") || lower.contains("to do") {
-        asana_client.move_to_not_started(task_gid, None).await?;
-        debug!("Automation: moved task {} to Not Started", task_gid);
-        return Ok(());
-    }
-
     let sections = match asana_client.get_sections().await {
         Ok(s) => s,
         Err(e) => {
@@ -71,7 +44,7 @@ pub async fn execute_automation(
         }
     };
 
-    for section in sections {
+    for section in &sections {
         if section.name.eq_ignore_ascii_case(status) {
             asana_client
                 .move_task_to_section(task_gid, &section.gid)
