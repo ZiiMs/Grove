@@ -23,12 +23,16 @@ fn build_version() -> String {
     if let Ok(v) = env::var("VERSION") {
         return v;
     }
-    git_describe().unwrap_or_else(|_| "dev".to_string())
+    let version = env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "dev".to_string());
+    match git_hash() {
+        Ok(hash) => format!("{} ({})", version, hash),
+        Err(_) => version,
+    }
 }
 
-fn git_describe() -> Result<String, Box<dyn std::error::Error>> {
+fn git_hash() -> Result<String, Box<dyn std::error::Error>> {
     let output = Command::new("git")
-        .args(["describe", "--tags", "--always", "--dirty"])
+        .args(["rev-parse", "--short", "HEAD"])
         .output()?;
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
