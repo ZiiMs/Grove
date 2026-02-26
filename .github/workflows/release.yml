@@ -16,6 +16,12 @@ jobs:
         with:
           fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: '0.13.0'
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild
       - uses: goreleaser/goreleaser-action@v6
         with:
           args: release --config .goreleaser-linux.yaml --clean
