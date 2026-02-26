@@ -134,35 +134,37 @@ cargo fmt && git add . && git commit
 
 ## Version System
 
-Grove uses **git-based versioning** - automatically generated at build time:
+Grove uses **semver + git hash versioning** - automatically generated at build time:
 
-- **Format**: `YYYY.MM.DD-hash` (e.g., `2026.02.22-abc1234`)
-- **Releases**: Tagged commits show the tag instead (e.g., `v1.0.0`)
+- **Format**: `{version} ({hash})` (e.g., `0.1.0 (abc1234)`)
+- **Version**: Read from `Cargo.toml` (managed by release-plz)
+- **Hash**: Short git commit hash for unique identification
 
 ### No Manual Updates Required
 
-- Version is extracted from git at compile time via `build.rs`
+- Version comes from `Cargo.toml` `version` field
+- Git hash is extracted at compile time via `build.rs`
 - Each worktree/branch automatically gets its unique hash
-- **Never edit version manually** - it will conflict across PRs
+- **Never edit version manually** - release-plz handles it
 
 ### Creating a Release
 
-```bash
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
-cargo build --release
-```
+Releases are automated via release-plz:
 
-The binary will show `v1.0.0` instead of the date-hash format.
+1. Merge PRs to `main`
+2. release-plz creates a PR with version bump and changelog
+3. Merge the release PR
+4. release-plz tags the release and publishes
+
+The binary will show the semver from Cargo.toml plus the current commit hash.
 
 ### How It Works
 
 1. `build.rs` runs before every compilation
-2. Checks for git tag (if on exact tag, use that)
-3. Otherwise, builds `YYYY.MM.DD-hash` from:
-   - Current date
-   - `git rev-parse --short HEAD`
-4. Writes to `$OUT_DIR/version.txt`, embedded in binary
+2. Reads version from `CARGO_PKG_VERSION` environment variable (Cargo.toml)
+3. Gets short git hash via `git rev-parse --short HEAD`
+4. Combines into `{version} ({hash})` format
+5. Writes to `$OUT_DIR/version.txt`, embedded in binary
 
 ## Testing
 
