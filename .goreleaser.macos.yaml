@@ -5,7 +5,6 @@ force_token: github
 before:
   hooks:
     - rustup default stable
-    - cargo install --locked cargo-zigbuild
     - cargo fetch --locked
 
 builds:
@@ -14,8 +13,10 @@ builds:
     flags:
       - --release
     targets:
-      - x86_64-unknown-linux-gnu
-      - aarch64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+    env:
+      - CGO_ENABLED=0
 
 archives:
   - formats: [tar.gz]
@@ -25,20 +26,6 @@ archives:
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
-
-nfpms:
-  - id: grove
-    package_name: grove
-    vendor: ziim
-    homepage: https://github.com/ziim/grove
-    maintainer: ziim <[email protected]>
-    description: A TUI for managing multiple Claude Code agents with git worktree isolation
-    license: MIT
-    formats:
-      - deb
-      - rpm
-      - archlinux
-    bindir: /usr/bin
 
 homebrew_casks:
   - name: grove
@@ -56,31 +43,3 @@ homebrew_casks:
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/grove"]
           end
-
-changelog:
-  use: github
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^ci:"
-      - "^chore:"
-
-release:
-  footer: >-
-    ---
-
-    ## Installation
-
-    **Homebrew (macOS)**:
-
-    brew tap ziim/grove
-    brew install grove
-
-
-    **Linux packages**: Download `.deb`, `.rpm`, or `.pkg.tar.zst` from the assets below.
-
-    ---
-
-    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
