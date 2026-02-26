@@ -136,6 +136,7 @@ impl<'a> AppWidget<'a> {
                 &self.state.config.global.log_level,
                 &self.state.config.global.worktree_location,
                 &self.state.config.ui,
+                &self.state.settings.pending_automation,
             )
             .render(frame);
         }
@@ -410,13 +411,6 @@ impl<'a> AppWidget<'a> {
 
         self.render_preview_tabs(frame, chunks[0]);
 
-        if let Some(agent) = self.state.selected_agent() {
-            if matches!(agent.status, crate::agent::AgentStatus::Paused) {
-                self.render_paused_preview(frame, chunks[1], &agent.name);
-                return;
-            }
-        }
-
         match self.state.preview_tab {
             PreviewTab::Preview => self.render_preview_content(frame, chunks[1]),
             PreviewTab::GitDiff => self.render_gitdiff_content(frame, chunks[1]),
@@ -514,38 +508,6 @@ impl<'a> AppWidget<'a> {
         } else {
             EmptyDiffWidget::render(frame, area);
         }
-    }
-
-    fn render_paused_preview(&self, frame: &mut Frame, area: Rect, agent_name: &str) {
-        let paused_art = vec![
-            "",
-            "",
-            "  ██████╗  █████╗ ██╗   ██╗███████╗███████╗██████╗ ",
-            "  ██╔══██╗██╔══██╗██║   ██║██╔════╝██╔════╝██╔══██╗",
-            "  ██████╔╝███████║██║   ██║███████╗█████╗  ██║  ██║",
-            "  ██╔═══╝ ██╔══██║██║   ██║╚════██║██╔══╝  ██║  ██║",
-            "  ██║     ██║  ██║╚██████╔╝███████║███████╗██████╔╝",
-            "  ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚══════╝╚═════╝ ",
-            "",
-            "",
-            "  Press 'r' to resume this agent",
-        ];
-
-        let lines: Vec<Line> = paused_art
-            .iter()
-            .map(|&line| Line::from(Span::styled(line, Style::default().fg(Color::Yellow))))
-            .collect();
-
-        let paragraph = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .title(format!(" PREVIEW: {} ", agent_name))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow)),
-            )
-            .alignment(Alignment::Left);
-
-        frame.render_widget(paragraph, area);
     }
 
     fn render_system_metrics(&self, frame: &mut Frame, area: Rect) {

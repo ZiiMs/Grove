@@ -1167,12 +1167,6 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         }
     }
 
-    // Check if selected agent is paused
-    let is_paused = state
-        .selected_agent()
-        .map(|a| matches!(a.status, grove::agent::AgentStatus::Paused))
-        .unwrap_or(false);
-
     let kb = &state.config.keybinds;
 
     // Quit (Ctrl+C always works)
@@ -1197,15 +1191,8 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return Some(Action::SelectLast);
     }
 
-    // Resume (only when paused)
-    if is_paused && matches_keybind(key, &kb.resume) {
-        return state
-            .selected_agent_id()
-            .map(|id| Action::ResumeAgent { id });
-    }
-
-    // Refresh selected agent status (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.resume) && state.selected_agent_id().is_some() {
+    // Refresh selected agent status
+    if matches_keybind(key, &kb.refresh_task_list) && state.selected_agent_id().is_some() {
         return Some(Action::RefreshSelected);
     }
 
@@ -1259,35 +1246,32 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         };
     }
 
-    // Pause (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.pause) {
+    // Copy worktree path to clipboard
+    if matches_keybind(key, &kb.copy_path) {
         return state
             .selected_agent_id()
-            .map(|id| Action::PauseAgent { id });
+            .map(|id| Action::CopyWorktreePath { id });
     }
 
-    // Merge (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.merge) && state.selected_agent_id().is_some() {
+    // Merge
+    if matches_keybind(key, &kb.merge) && state.selected_agent_id().is_some() {
         return Some(Action::EnterInputMode(InputMode::ConfirmMerge));
     }
 
-    // Push (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.push) && state.selected_agent_id().is_some() {
+    // Push
+    if matches_keybind(key, &kb.push) && state.selected_agent_id().is_some() {
         return Some(Action::EnterInputMode(InputMode::ConfirmPush));
     }
 
-    // Fetch (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.fetch) {
+    // Fetch
+    if matches_keybind(key, &kb.fetch) {
         return state
             .selected_agent_id()
             .map(|id| Action::FetchRemote { id });
     }
 
-    // Summary (only when not paused)
-    if !is_paused
-        && matches_keybind(key, &kb.summary)
-        && !key.modifiers.contains(KeyModifiers::CONTROL)
-    {
+    // Summary
+    if matches_keybind(key, &kb.summary) && !key.modifiers.contains(KeyModifiers::CONTROL) {
         return state
             .selected_agent_id()
             .map(|id| Action::RequestSummary { id });
@@ -1325,7 +1309,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     }
 
     // Open in editor
-    if !is_paused && matches_keybind(key, &kb.open_editor) {
+    if matches_keybind(key, &kb.open_editor) {
         return state
             .selected_agent_id()
             .map(|id| Action::OpenInEditor { id });
@@ -2191,10 +2175,6 @@ async fn process_action(
             status_reason,
         } => {
             if let Some(agent) = state.agents.get_mut(&id) {
-                if matches!(agent.status, grove::agent::AgentStatus::Paused) {
-                    return Ok(false);
-                }
-
                 let old_label = agent.status.label();
                 let new_label = status.label();
                 let name = agent.name.clone();
@@ -2222,176 +2202,25 @@ async fn process_action(
             }
         }
 
-        // Git operations
-        Action::CheckoutBranch { id: _ } => {
-            // Deprecated - use PauseAgent instead
-        }
+        Action::CopyWorktreePath { id } => {
+            if let Some(agent) = state.agents.get(&id) {
+                let worktree_path = agent.worktree_path.clone();
+                let cd_cmd = format!("cd {}", worktree_path);
 
-        Action::PauseAgent { id } => {
-            // Get agent info before spawning background task
-            let agent_info = state.agents.get(&id).map(|a| {
-                (
-                    a.name.clone(),
-                    a.branch.clone(),
-                    a.worktree_path.clone(),
-                    a.tmux_session.clone(),
-                )
-            });
+                // Copy to clipboard
+                let clipboard_result = Clipboard::new().and_then(|mut c| c.set_text(&cd_cmd));
 
-            if let Some((name, branch, worktree_path, _tmux_session)) = agent_info {
-                state.log_info(format!("Pausing agent '{}'...", name));
-                state.loading_message = Some(format!("Pausing '{}'...", name));
+                // Print to stdout (visible when app exits)
+                println!("{}", cd_cmd);
 
-                // Spawn background task
-                let tx = action_tx.clone();
-                let name_clone = name.clone();
-                let branch_clone = branch.clone();
-                tokio::spawn(async move {
-                    // 1. Commit any uncommitted changes
-                    let commit_result = std::process::Command::new("git")
-                        .args(["-C", &worktree_path, "add", "-A"])
-                        .output();
-                    if commit_result.is_ok() {
-                        let _ = std::process::Command::new("git")
-                            .args([
-                                "-C",
-                                &worktree_path,
-                                "commit",
-                                "-m",
-                                &format!("[GROVE] {}", name_clone),
-                            ])
-                            .output();
-                    }
+                let message = if clipboard_result.is_ok() {
+                    format!("Copied: {}", cd_cmd)
+                } else {
+                    format!("cd command: {}", cd_cmd)
+                };
 
-                    // 2. DON'T kill tmux session - just leave it running (preserves Claude context)
-                    // The tmux session stays alive but detached
-
-                    // 3. DON'T remove worktree - keep it so agent stays functional
-                    // The worktree stays intact so the agent can continue working
-
-                    // 4. Get HEAD commit SHA for checkout command
-                    let head_sha = std::process::Command::new("git")
-                        .args(["-C", &worktree_path, "rev-parse", "HEAD"])
-                        .output()
-                        .ok()
-                        .and_then(|output| {
-                            if output.status.success() {
-                                String::from_utf8(output.stdout).ok()
-                            } else {
-                                None
-                            }
-                        })
-                        .map(|s| s.trim().to_string())
-                        .unwrap_or_else(|| branch_clone.clone());
-
-                    // 5. Copy detach checkout command to clipboard
-                    let checkout_cmd = format!("git checkout --detach {}", head_sha);
-                    let clipboard_result =
-                        Clipboard::new().and_then(|mut c| c.set_text(&checkout_cmd));
-                    let message = if clipboard_result.is_ok() {
-                        "Checkout command copied. Press 'r' to resume.".to_string()
-                    } else {
-                        format!("Paused '{}'. Press 'r' to resume.", name_clone)
-                    };
-
-                    // Send completion
-                    let _ = tx.send(Action::PauseAgentComplete {
-                        id,
-                        success: true,
-                        message,
-                    });
-                });
-            }
-        }
-
-        Action::ResumeAgent { id } => {
-            let agent_info = state.agents.get(&id).map(|a| {
-                (
-                    a.name.clone(),
-                    a.branch.clone(),
-                    a.worktree_path.clone(),
-                    a.tmux_session.clone(),
-                )
-            });
-
-            if let Some((name, branch, worktree_path, tmux_session)) = agent_info {
-                state.log_info(format!("Resuming agent '{}'...", name));
-                state.loading_message = Some(format!("Resuming '{}'...", name));
-
-                let tx = action_tx.clone();
-                let name_clone = name.clone();
-                let ai_agent = state.config.global.ai_agent.clone();
-                let repo_path = state.repo_path.clone();
-                let worktree_symlinks = state
-                    .settings
-                    .repo_config
-                    .dev_server
-                    .worktree_symlinks
-                    .clone();
-                let worktree_base = state.worktree_base.clone();
-                tokio::spawn(async move {
-                    // Check if worktree already exists
-                    let worktree_exists = std::path::Path::new(&worktree_path).exists();
-
-                    if !worktree_exists {
-                        // Recreate worktree
-                        let worktree_result = std::process::Command::new("git")
-                            .args(["worktree", "add", &worktree_path, &branch])
-                            .output();
-
-                        if let Err(e) = worktree_result {
-                            let _ = tx.send(Action::ResumeAgentComplete {
-                                id,
-                                success: false,
-                                message: format!("Failed to recreate worktree: {}", e),
-                            });
-                            return;
-                        }
-
-                        let worktree_output = worktree_result.unwrap();
-                        if !worktree_output.status.success() {
-                            let stderr = String::from_utf8_lossy(&worktree_output.stderr);
-                            let message = if stderr.contains("already checked out") {
-                                "Cannot resume: branch is checked out elsewhere. Switch branches first.".to_string()
-                            } else {
-                                format!("Failed to resume: {}", stderr)
-                            };
-                            let _ = tx.send(Action::ResumeAgentComplete {
-                                id,
-                                success: false,
-                                message,
-                            });
-                            return;
-                        }
-
-                        // Create symlinks for newly created worktree
-                        let worktree = grove::git::Worktree::new(&repo_path, worktree_base);
-                        if let Err(e) = worktree.create_symlinks(&worktree_path, &worktree_symlinks)
-                        {
-                            // Log but don't fail - symlinks are optional
-                            eprintln!("Warning: Failed to create symlinks: {}", e);
-                        }
-                    }
-
-                    let session = grove::tmux::TmuxSession::new(&tmux_session);
-                    if !session.exists() {
-                        if let Err(e) = session.create(&worktree_path, ai_agent.command()) {
-                            let _ = tx.send(Action::ResumeAgentComplete {
-                                id,
-                                success: false,
-                                message: format!("Failed to create tmux session: {}", e),
-                            });
-                            return;
-                        }
-                    }
-                    // If session exists, Claude context is preserved!
-
-                    let _ = tx.send(Action::ResumeAgentComplete {
-                        id,
-                        success: true,
-                        message: format!("Resumed '{}'", name_clone),
-                    });
-                });
+                state.log_info(&message);
+                state.show_success(message);
             }
         }
 
@@ -2503,6 +2332,11 @@ async fn process_action(
                         "Sent push command to {}",
                         agent_type.display_name()
                     ));
+
+                    let _ = action_tx.send(Action::ExecuteAutomation {
+                        agent_id: id,
+                        action_type: grove::app::config::AutomationActionType::Push,
+                    });
                 }
             }
         }
@@ -2903,6 +2737,11 @@ async fn process_action(
                                 let _ = tx.send(Action::UpdateProjectTaskStatus {
                                     id,
                                     status: ProjectMgmtTaskStatus::Asana(status),
+                                });
+                                let _ = tx.send(Action::ExecuteAutomation {
+                                    agent_id: id,
+                                    action_type:
+                                        grove::app::config::AutomationActionType::TaskAssign,
                                 });
                             }
                             Err(e) => {
@@ -4633,11 +4472,23 @@ async fn process_action(
             state.exit_input_mode();
 
             if let Some(agent) = state.agents.get(&id) {
-                match &agent.pm_task_status {
-                    ProjectMgmtTaskStatus::Asana(asana_status) => {
-                        if let Some(task_gid) = asana_status.gid() {
-                            let gid = task_gid.to_string();
+                let task_id = agent.pm_task_status.id().map(|s| s.to_string());
+                let pm_status = agent.pm_task_status.clone();
+
+                if let Some(gid) = task_id {
+                    let automation_config = state.config.automation.clone();
+                    let provider = state.settings.repo_config.project_mgmt.provider;
+
+                    match provider {
+                        ProjectMgmtProvider::Asana => {
                             let client = Arc::clone(asana_client);
+                            let in_progress_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .in_progress_section_gid
+                                .clone();
                             let done_gid = state
                                 .settings
                                 .repo_config
@@ -4645,90 +4496,127 @@ async fn process_action(
                                 .asana
                                 .done_section_gid
                                 .clone();
+                            let gid_clone = gid.clone();
+
                             tokio::spawn(async move {
-                                let _ = client.move_to_done(&gid, done_gid.as_deref()).await;
-                                let _ = client.complete_task(&gid).await;
+                                let _ = grove::automation::execute_automation(
+                                    &client,
+                                    &automation_config,
+                                    grove::app::config::AutomationActionType::Delete,
+                                    &gid_clone,
+                                    in_progress_gid.as_deref(),
+                                    done_gid.as_deref(),
+                                )
+                                .await;
                             });
-                            state.log_info("Moving Asana task to Done".to_string());
+                            state.log_info("Executing automation for Asana task".to_string());
                         }
-                    }
-                    ProjectMgmtTaskStatus::Notion(notion_status) => {
-                        if let Some(page_id) = notion_status.page_id() {
-                            let pid = page_id.to_string();
-                            let client = Arc::clone(notion_client);
-                            let status_prop_name = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .notion
-                                .status_property_name
-                                .clone();
-                            tokio::spawn(async move {
-                                if let Ok(opts) = client.get_status_options().await {
-                                    if let Some(done_id) = opts.done_id {
-                                        let prop_name = status_prop_name
-                                            .unwrap_or_else(|| "Status".to_string());
-                                        let _ = client
-                                            .update_page_status(&pid, &prop_name, &done_id)
-                                            .await;
+                        _ => {
+                            if let Some(status_name) = &automation_config.on_delete {
+                                if status_name.to_lowercase() != "none" {
+                                    match &pm_status {
+                                        ProjectMgmtTaskStatus::Notion(notion_status) => {
+                                            if let Some(page_id) = notion_status.page_id() {
+                                                let pid = page_id.to_string();
+                                                let client = Arc::clone(notion_client);
+                                                let status_prop_name = state
+                                                    .settings
+                                                    .repo_config
+                                                    .project_mgmt
+                                                    .notion
+                                                    .status_property_name
+                                                    .clone();
+                                                tokio::spawn(async move {
+                                                    if let Ok(opts) =
+                                                        client.get_status_options().await
+                                                    {
+                                                        let prop_name = status_prop_name
+                                                            .unwrap_or_else(|| {
+                                                                "Status".to_string()
+                                                            });
+                                                        let _ = client
+                                                            .update_page_status(
+                                                                &pid,
+                                                                &prop_name,
+                                                                &opts.done_id.unwrap_or_default(),
+                                                            )
+                                                            .await;
+                                                    }
+                                                });
+                                                state.log_info(
+                                                    "Moving Notion task to Done".to_string(),
+                                                );
+                                            }
+                                        }
+                                        ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
+                                            if let Some(task_id) = clickup_status.id() {
+                                                let tid = task_id.to_string();
+                                                let client = Arc::clone(clickup_client);
+                                                let done_status = state
+                                                    .settings
+                                                    .repo_config
+                                                    .project_mgmt
+                                                    .clickup
+                                                    .done_status
+                                                    .clone();
+                                                tokio::spawn(async move {
+                                                    let _ = client
+                                                        .move_to_done(&tid, done_status.as_deref())
+                                                        .await;
+                                                });
+                                                state.log_info(
+                                                    "Moving ClickUp task to Done".to_string(),
+                                                );
+                                            }
+                                        }
+                                        ProjectMgmtTaskStatus::Airtable(airtable_status) => {
+                                            if let Some(record_id) = airtable_status.id() {
+                                                let rid = record_id.to_string();
+                                                let client = Arc::clone(airtable_client);
+                                                let done_option = state
+                                                    .settings
+                                                    .repo_config
+                                                    .project_mgmt
+                                                    .airtable
+                                                    .done_option
+                                                    .clone();
+                                                tokio::spawn(async move {
+                                                    let _ = client
+                                                        .move_to_done(&rid, done_option.as_deref())
+                                                        .await;
+                                                });
+                                                state.log_info(
+                                                    "Moving Airtable task to Done".to_string(),
+                                                );
+                                            }
+                                        }
+                                        ProjectMgmtTaskStatus::Linear(linear_status) => {
+                                            if let Some(issue_id) = linear_status.id() {
+                                                let iid = issue_id.to_string();
+                                                let client = Arc::clone(linear_client);
+                                                let done_state = state
+                                                    .settings
+                                                    .repo_config
+                                                    .project_mgmt
+                                                    .linear
+                                                    .done_state
+                                                    .clone();
+                                                tokio::spawn(async move {
+                                                    let _ = client
+                                                        .move_to_done(&iid, done_state.as_deref())
+                                                        .await;
+                                                });
+                                                state.log_info(
+                                                    "Moving Linear task to Done".to_string(),
+                                                );
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
-                            });
-                            state.log_info("Moving Notion task to Done".to_string());
+                            }
                         }
                     }
-                    ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
-                        if let Some(task_id) = clickup_status.id() {
-                            let tid = task_id.to_string();
-                            let client = Arc::clone(clickup_client);
-                            let done_status = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .clickup
-                                .done_status
-                                .clone();
-                            tokio::spawn(async move {
-                                let _ = client.move_to_done(&tid, done_status.as_deref()).await;
-                            });
-                            state.log_info("Moving ClickUp task to Done".to_string());
-                        }
-                    }
-                    ProjectMgmtTaskStatus::Airtable(airtable_status) => {
-                        if let Some(record_id) = airtable_status.id() {
-                            let rid = record_id.to_string();
-                            let client = Arc::clone(airtable_client);
-                            let done_option = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .airtable
-                                .done_option
-                                .clone();
-                            tokio::spawn(async move {
-                                let _ = client.move_to_done(&rid, done_option.as_deref()).await;
-                            });
-                            state.log_info("Moving Airtable task to Done".to_string());
-                        }
-                    }
-                    ProjectMgmtTaskStatus::Linear(linear_status) => {
-                        if let Some(issue_id) = linear_status.id() {
-                            let iid = issue_id.to_string();
-                            let client = Arc::clone(linear_client);
-                            let done_state = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .linear
-                                .done_state
-                                .clone();
-                            tokio::spawn(async move {
-                                let _ = client.move_to_done(&iid, done_state.as_deref()).await;
-                            });
-                            state.log_info("Moving Linear task to Done".to_string());
-                        }
-                    }
-                    ProjectMgmtTaskStatus::None => {}
                 }
             }
 
@@ -6169,42 +6057,6 @@ async fn process_action(
             state.show_info(message);
         }
 
-        Action::PauseAgentComplete {
-            id,
-            success,
-            message,
-        } => {
-            state.loading_message = None;
-            if success {
-                if let Some(agent) = state.agents.get_mut(&id) {
-                    agent.status = grove::agent::AgentStatus::Paused;
-                }
-                state.log_info(&message);
-                state.show_success(message);
-            } else {
-                state.log_error(&message);
-                state.show_error(message);
-            }
-        }
-
-        Action::ResumeAgentComplete {
-            id,
-            success,
-            message,
-        } => {
-            state.loading_message = None;
-            if success {
-                if let Some(agent) = state.agents.get_mut(&id) {
-                    agent.status = grove::agent::AgentStatus::Running;
-                }
-                state.log_info(&message);
-                state.show_success(message);
-            } else {
-                state.log_error(&message);
-                state.show_error(message);
-            }
-        }
-
         // Settings actions
         Action::ToggleSettings => {
             if state.settings.active {
@@ -6222,23 +6074,34 @@ async fn process_action(
                 state.settings.pending_worktree_location = state.config.global.worktree_location;
                 state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
+                state.settings.pending_automation = state.config.automation.clone();
             }
         }
 
         Action::SettingsSwitchSection => {
-            state.settings.tab = state.settings.next_tab();
+            let new_tab = state.settings.next_tab();
+            state.settings.tab = new_tab;
             state.settings.field_index = 0;
             state.settings.scroll_offset = 0;
             state.settings.dropdown = grove::app::DropdownState::Closed;
             state.settings.editing_text = false;
+
+            if matches!(new_tab, grove::app::SettingsTab::Automation) {
+                let _ = action_tx.send(Action::LoadAutomationStatusOptions);
+            }
         }
 
         Action::SettingsSwitchSectionBack => {
-            state.settings.tab = state.settings.prev_tab();
+            let new_tab = state.settings.prev_tab();
+            state.settings.tab = new_tab;
             state.settings.field_index = 0;
             state.settings.scroll_offset = 0;
             state.settings.dropdown = grove::app::DropdownState::Closed;
             state.settings.editing_text = false;
+
+            if matches!(new_tab, grove::app::SettingsTab::Automation) {
+                let _ = action_tx.send(Action::LoadAutomationStatusOptions);
+            }
         }
 
         Action::SettingsSelectNext => {
@@ -6766,6 +6629,63 @@ async fn process_action(
                     state.settings.repo_config.dev_server.auto_start =
                         !state.settings.repo_config.dev_server.auto_start;
                 }
+                grove::app::SettingsField::AutomationOnTaskAssign => {
+                    let current = &state.settings.pending_automation.on_task_assign;
+                    let idx = if current.is_none() {
+                        0
+                    } else if let Some(ref name) = current {
+                        state
+                            .settings
+                            .automation_status_options
+                            .iter()
+                            .position(|o| &o.name == name)
+                            .map(|i| i + 1)
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
+                grove::app::SettingsField::AutomationOnPush => {
+                    let current = &state.settings.pending_automation.on_push;
+                    let idx = if current.is_none() {
+                        0
+                    } else if let Some(ref name) = current {
+                        state
+                            .settings
+                            .automation_status_options
+                            .iter()
+                            .position(|o| &o.name == name)
+                            .map(|i| i + 1)
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
+                grove::app::SettingsField::AutomationOnDelete => {
+                    let current = &state.settings.pending_automation.on_delete;
+                    let idx = if current.is_none() {
+                        0
+                    } else if let Some(ref name) = current {
+                        state
+                            .settings
+                            .automation_status_options
+                            .iter()
+                            .position(|o| &o.name == name)
+                            .map(|i| i + 1)
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
                 _ => {
                     // Keybind fields are handled by SettingsStartKeybindCapture
                 }
@@ -7222,6 +7142,40 @@ async fn process_action(
                             state.settings.repo_config.project_mgmt.provider = *provider;
                         }
                     }
+                    grove::app::SettingsField::AutomationOnTaskAssign => {
+                        if selected_index == 0 {
+                            state.settings.pending_automation.on_task_assign = None;
+                        } else if let Some(opt) = state
+                            .settings
+                            .automation_status_options
+                            .get(selected_index - 1)
+                        {
+                            state.settings.pending_automation.on_task_assign =
+                                Some(opt.name.clone());
+                        }
+                    }
+                    grove::app::SettingsField::AutomationOnPush => {
+                        if selected_index == 0 {
+                            state.settings.pending_automation.on_push = None;
+                        } else if let Some(opt) = state
+                            .settings
+                            .automation_status_options
+                            .get(selected_index - 1)
+                        {
+                            state.settings.pending_automation.on_push = Some(opt.name.clone());
+                        }
+                    }
+                    grove::app::SettingsField::AutomationOnDelete => {
+                        if selected_index == 0 {
+                            state.settings.pending_automation.on_delete = None;
+                        } else if let Some(opt) = state
+                            .settings
+                            .automation_status_options
+                            .get(selected_index - 1)
+                        {
+                            state.settings.pending_automation.on_delete = Some(opt.name.clone());
+                        }
+                    }
                     _ => {}
                 }
                 state.settings.dropdown = grove::app::DropdownState::Closed;
@@ -7299,6 +7253,7 @@ async fn process_action(
             state.config.global.debug_mode = state.settings.pending_debug_mode;
             state.config.ui = state.settings.pending_ui.clone();
             state.config.keybinds = state.settings.pending_keybinds.clone();
+            state.config.automation = state.settings.pending_automation.clone();
 
             if let Err(e) = state.config.save() {
                 state.log_error(format!("Failed to save config: {}", e));
@@ -8885,6 +8840,99 @@ async fn process_action(
         }
         Action::GitSetupCloseDropdown => {
             state.git_setup.dropdown_open = false;
+        }
+
+        // Automation Actions
+        Action::LoadAutomationStatusOptions => {
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            let tx = action_tx.clone();
+
+            match provider {
+                grove::app::config::ProjectMgmtProvider::Asana => {
+                    let client = asana_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_sections().await {
+                            Ok(sections) => {
+                                let options: Vec<StatusOption> = sections
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.gid,
+                                        name: s.name,
+                                    })
+                                    .chain(std::iter::once(StatusOption {
+                                        id: "completed".to_string(),
+                                        name: "Completed".to_string(),
+                                    }))
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Asana sections for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: vec![StatusOption {
+                                        id: "completed".to_string(),
+                                        name: "Completed".to_string(),
+                                    }],
+                                });
+                            }
+                        }
+                    });
+                }
+                _ => {
+                    let _ = action_tx.send(Action::AutomationStatusOptionsLoaded {
+                        options: vec![StatusOption {
+                            id: "completed".to_string(),
+                            name: "Completed".to_string(),
+                        }],
+                    });
+                }
+            }
+        }
+
+        Action::AutomationStatusOptionsLoaded { options } => {
+            state.settings.automation_status_options = options;
+        }
+
+        Action::ExecuteAutomation {
+            agent_id,
+            action_type,
+        } => {
+            if let Some(agent) = state.agents.get(&agent_id) {
+                if let Some(task_id) = agent.pm_task_status.id() {
+                    let config = state.config.automation.clone();
+                    let in_progress_gid = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .asana
+                        .in_progress_section_gid
+                        .clone();
+                    let done_gid = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .asana
+                        .done_section_gid
+                        .clone();
+                    let client = asana_client.clone();
+                    let task_id = task_id.to_string();
+
+                    tokio::spawn(async move {
+                        let _ = grove::automation::execute_automation(
+                            &client,
+                            &config,
+                            action_type,
+                            &task_id,
+                            in_progress_gid.as_deref(),
+                            done_gid.as_deref(),
+                        )
+                        .await;
+                    });
+                }
+            }
         }
 
         // Dev Server Actions

@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod app;
+pub mod automation;
 pub mod cache;
 pub mod ci;
 pub mod core;

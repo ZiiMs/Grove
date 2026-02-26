@@ -1,6 +1,7 @@
 use uuid::Uuid;
 
 use crate::agent::{ProjectMgmtTaskStatus, StatusReason};
+use crate::app::config::AutomationActionType;
 use crate::app::task_list::TaskListItem;
 use crate::app::ToastLevel;
 
@@ -26,10 +27,7 @@ pub enum Action {
         agent_id: Uuid,
     },
     DetachFromAgent,
-    PauseAgent {
-        id: Uuid,
-    },
-    ResumeAgent {
+    CopyWorktreePath {
         id: Uuid,
     },
     ToggleContinueSession {
@@ -54,9 +52,6 @@ pub enum Action {
         id: Uuid,
     },
 
-    CheckoutBranch {
-        id: Uuid,
-    },
     MergeMain {
         id: Uuid,
     },
@@ -226,16 +221,6 @@ pub enum Action {
         success: bool,
         message: String,
     },
-    PauseAgentComplete {
-        id: Uuid,
-        success: bool,
-        message: String,
-    },
-    ResumeAgentComplete {
-        id: Uuid,
-        success: bool,
-        message: String,
-    },
 
     CopyAgentName {
         id: Uuid,
@@ -391,6 +376,16 @@ pub enum Action {
         message: String,
     },
     GitSetupComplete,
+
+    // Automation
+    LoadAutomationStatusOptions,
+    AutomationStatusOptionsLoaded {
+        options: Vec<crate::app::StatusOption>,
+    },
+    ExecuteAutomation {
+        agent_id: Uuid,
+        action_type: AutomationActionType,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
