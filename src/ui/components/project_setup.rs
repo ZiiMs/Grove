@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::app::config::{GitProvider, ProjectMgmtProvider};
 use crate::app::ProjectSetupState;
+use crate::ui::components::file_browser;
 use crate::ui::helpers::centered_rect;
 
 pub struct ProjectSetupWizard<'a> {
@@ -36,7 +37,7 @@ impl<'a> ProjectSetupWizard<'a> {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
-                Constraint::Min(14),
+                Constraint::Min(19),
                 Constraint::Length(3),
             ])
             .split(inner);
@@ -50,6 +51,9 @@ impl<'a> ProjectSetupWizard<'a> {
         }
         if self.state.pm_provider_dropdown_open {
             self.render_pm_dropdown(frame, area);
+        }
+        if self.state.file_browser.active {
+            self.render_file_browser(frame);
         }
     }
 
@@ -82,6 +86,11 @@ impl<'a> ProjectSetupWizard<'a> {
             Line::from(""),
             self.render_pm_dropdown_row(),
             self.render_pm_setup_row(pm_configured),
+            Line::from(""),
+            self.render_symlinks_row(),
+            self.render_symlinks_button(),
+            self.render_symlinks_info(),
+            self.render_symlinks_info_2(),
             Line::from(""),
             self.render_buttons(),
         ];
@@ -206,9 +215,72 @@ impl<'a> ProjectSetupWizard<'a> {
         ])
     }
 
+    fn render_symlinks_row(&self) -> Line<'static> {
+        let is_selected = self.state.selected_index == 4;
+        let symlinks = &self.state.config.dev_server.worktree_symlinks;
+        let symlinks_text = if symlinks.is_empty() {
+            "None".to_string()
+        } else {
+            symlinks.join(", ")
+        };
+
+        let label_style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let value_style = if is_selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        Line::from(vec![
+            Span::styled("  Symlinks: ", label_style),
+            Span::styled(symlinks_text, value_style),
+        ])
+    }
+
+    fn render_symlinks_button(&self) -> Line<'static> {
+        let is_selected = self.state.selected_index == 5;
+
+        let button_style = if is_selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+
+        Line::from(vec![
+            Span::styled("           ", Style::default()),
+            Span::styled("[ Select ]", button_style),
+        ])
+    }
+
+    fn render_symlinks_info(&self) -> Line<'static> {
+        Line::from(vec![Span::styled(
+            "  Symlinks share files across worktrees that git ignores",
+            Style::default().fg(Color::DarkGray),
+        )])
+    }
+
+    fn render_symlinks_info_2(&self) -> Line<'static> {
+        Line::from(vec![Span::styled(
+            "  (e.g., .env, .env.local, credentials). Useful for config each agent needs.",
+            Style::default().fg(Color::DarkGray),
+        )])
+    }
+
     fn render_buttons(&self) -> Line<'static> {
-        let save_selected = self.state.selected_index == 4;
-        let close_selected = self.state.selected_index == 5;
+        let save_selected = self.state.selected_index == 6;
+        let close_selected = self.state.selected_index == 7;
 
         let save_style = if save_selected {
             Style::default()
@@ -240,6 +312,8 @@ impl<'a> ProjectSetupWizard<'a> {
         let hint = if self.state.git_provider_dropdown_open || self.state.pm_provider_dropdown_open
         {
             "[↑/k][↓/j] Navigate  [Enter] Select  [Esc] Cancel"
+        } else if self.state.file_browser.active {
+            "[↑/↓] Navigate  [Space/Enter] Toggle  [→] Enter dir  [←] Parent  [Esc] Done"
         } else {
             "[↑/k][↓/j] Navigate  [Enter] Select/Dropdown  [c] Save  [Esc] Close"
         };
@@ -250,6 +324,18 @@ impl<'a> ProjectSetupWizard<'a> {
         )))
         .alignment(Alignment::Center);
         frame.render_widget(paragraph, area);
+    }
+
+    fn render_file_browser(&self, frame: &mut Frame) {
+        let fb = &self.state.file_browser;
+        let widget = file_browser::FileBrowserWidget::new(
+            &fb.entries,
+            fb.selected_index,
+            &fb.selected_files,
+            &fb.current_path,
+            &fb.current_path,
+        );
+        widget.render(frame);
     }
 
     fn render_git_dropdown(&self, frame: &mut Frame, popup_area: Rect) {

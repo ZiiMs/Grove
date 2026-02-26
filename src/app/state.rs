@@ -1059,6 +1059,48 @@ pub struct ProjectSetupState {
     pub git_provider_dropdown_index: usize,
     pub pm_provider_dropdown_open: bool,
     pub pm_provider_dropdown_index: usize,
+    pub file_browser: FileBrowserState,
+}
+
+impl ProjectSetupState {
+    pub fn init_file_browser(&mut self, repo_path: &str) {
+        let repo_path_buf = PathBuf::from(repo_path);
+        let symlinks = &self.config.dev_server.worktree_symlinks;
+
+        let mut selected_files = HashSet::new();
+        for symlink in symlinks {
+            selected_files.insert(repo_path_buf.join(symlink));
+        }
+
+        let entries = crate::ui::components::file_browser::load_directory_entries(
+            &repo_path_buf,
+            &selected_files,
+            &repo_path_buf,
+        );
+
+        self.file_browser = FileBrowserState {
+            active: true,
+            current_path: repo_path_buf,
+            entries,
+            selected_index: 0,
+            selected_files,
+        };
+    }
+
+    pub fn save_symlinks_from_browser(&mut self, repo_path: &str) {
+        let repo_path_buf = PathBuf::from(repo_path);
+        let symlinks: Vec<String> = self
+            .file_browser
+            .selected_files
+            .iter()
+            .filter_map(|p| {
+                p.strip_prefix(&repo_path_buf)
+                    .ok()
+                    .map(|s| s.to_string_lossy().to_string())
+            })
+            .collect();
+        self.config.dev_server.worktree_symlinks = symlinks;
+    }
 }
 
 #[derive(Debug, Clone)]
