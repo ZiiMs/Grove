@@ -4663,20 +4663,6 @@ async fn process_action(
                     match provider {
                         ProjectMgmtProvider::Asana => {
                             let client = Arc::clone(asana_client);
-                            let in_progress_gid = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .asana
-                                .in_progress_section_gid
-                                .clone();
-                            let done_gid = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .asana
-                                .done_section_gid
-                                .clone();
                             let gid_clone = gid.clone();
 
                             tokio::spawn(async move {
@@ -4685,8 +4671,6 @@ async fn process_action(
                                     &automation_config,
                                     grove::app::config::AutomationActionType::Delete,
                                     &gid_clone,
-                                    in_progress_gid.as_deref(),
-                                    done_gid.as_deref(),
                                 )
                                 .await;
                             });
@@ -9265,20 +9249,6 @@ async fn process_action(
                     match provider {
                         grove::app::config::ProjectMgmtProvider::Asana => {
                             let client = asana_client.clone();
-                            let in_progress_gid = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .asana
-                                .in_progress_section_gid
-                                .clone();
-                            let done_gid = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .asana
-                                .done_section_gid
-                                .clone();
                             let task_id = task_id.to_string();
 
                             tokio::spawn(async move {
@@ -9287,8 +9257,6 @@ async fn process_action(
                                     &config,
                                     action_type,
                                     &task_id,
-                                    in_progress_gid.as_deref(),
-                                    done_gid.as_deref(),
                                 )
                                 .await;
                             });
