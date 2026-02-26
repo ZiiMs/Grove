@@ -589,8 +589,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "grove"
-version = "0.1.1"
+name = "grove-ai"
+version = "0.1.2"
 dependencies = [
  "ansi-to-tui",
  "anyhow",
