@@ -2068,6 +2068,8 @@ async fn process_action(
                         state.log_info(format!("Linked task '{}' to agent", task_item.name));
                     }
 
+                    let agent_id = agent.id;
+                    let has_task = task.is_some();
                     state.add_agent(agent);
                     state.select_last();
                     state.toast = None;
@@ -2081,6 +2083,14 @@ async fn process_action(
                             .collect(),
                     );
                     let _ = selected_watch_tx.send(state.selected_agent_id());
+
+                    // Trigger automation if a task was assigned
+                    if has_task {
+                        let _ = action_tx.send(Action::ExecuteAutomation {
+                            agent_id,
+                            action_type: grove::app::config::AutomationActionType::TaskAssign,
+                        });
+                    }
                 }
                 Err(e) => {
                     state.log_error(format!("Failed to create agent: {}", e));
