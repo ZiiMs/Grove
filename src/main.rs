@@ -9232,34 +9232,187 @@ async fn process_action(
             if let Some(agent) = state.agents.get(&agent_id) {
                 if let Some(task_id) = agent.pm_task_status.id() {
                     let config = state.config.automation.clone();
-                    let in_progress_gid = state
-                        .settings
-                        .repo_config
-                        .project_mgmt
-                        .asana
-                        .in_progress_section_gid
-                        .clone();
-                    let done_gid = state
-                        .settings
-                        .repo_config
-                        .project_mgmt
-                        .asana
-                        .done_section_gid
-                        .clone();
-                    let client = asana_client.clone();
-                    let task_id = task_id.to_string();
+                    let provider = state.settings.repo_config.project_mgmt.provider;
 
-                    tokio::spawn(async move {
-                        let _ = grove::automation::execute_automation(
-                            &client,
-                            &config,
-                            action_type,
-                            &task_id,
-                            in_progress_gid.as_deref(),
-                            done_gid.as_deref(),
-                        )
-                        .await;
-                    });
+                    let status_name = match action_type {
+                        grove::app::config::AutomationActionType::TaskAssign => {
+                            config.on_task_assign.clone()
+                        }
+                        grove::app::config::AutomationActionType::Push => config.on_push.clone(),
+                        grove::app::config::AutomationActionType::Delete => {
+                            config.on_delete.clone()
+                        }
+                    };
+
+                    let status = match status_name {
+                        Some(s) if !s.is_empty() && s.to_lowercase() != "none" => s,
+                        _ => {
+                            tracing::debug!(
+                                "No automation configured for {:?}, skipping",
+                                action_type
+                            );
+                            return Ok(false);
+                        }
+                    };
+
+                    tracing::info!(
+                        "Executing automation: {:?} -> {} for task {}",
+                        action_type,
+                        status,
+                        task_id
+                    );
+
+                    match provider {
+                        grove::app::config::ProjectMgmtProvider::Asana => {
+                            let client = asana_client.clone();
+                            let in_progress_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .in_progress_section_gid
+                                .clone();
+                            let done_gid = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .asana
+                                .done_section_gid
+                                .clone();
+                            let task_id = task_id.to_string();
+
+                            tokio::spawn(async move {
+                                let _ = grove::automation::execute_automation(
+                                    &client,
+                                    &config,
+                                    action_type,
+                                    &task_id,
+                                    in_progress_gid.as_deref(),
+                                    done_gid.as_deref(),
+                                )
+                                .await;
+                            });
+                        }
+                        grove::app::config::ProjectMgmtProvider::Notion => {
+                            let client = notion_client.clone();
+                            let status_prop_name = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone();
+                            let task_id = task_id.to_string();
+                            let status_lower = status.to_lowercase();
+
+                            tokio::spawn(async move {
+                                if status_lower == "completed" || status_lower == "done" {
+                                    if let Ok(opts) = client.get_status_options().await {
+                                        if let Some(done_id) = opts.done_id {
+                                            let prop_name = status_prop_name
+                                                .unwrap_or_else(|| "Status".to_string());
+                                            let _ = client
+                                                .update_page_status(&task_id, &prop_name, &done_id)
+                                                .await;
+                                            tracing::info!(
+                                                "Automation: marked Notion task {} as completed",
+                                                task_id
+                                            );
+                                        }
+                                    }
+                                } else if let Ok(opts) = client.get_status_options().await {
+                                    for opt in &opts.all_options {
+                                        if opt.name.eq_ignore_ascii_case(&status) {
+                                            let prop_name = status_prop_name
+                                                .unwrap_or_else(|| "Status".to_string());
+                                            let _ = client
+                                                .update_page_status(&task_id, &prop_name, &opt.id)
+                                                .await;
+                                            tracing::info!(
+                                                "Automation: moved Notion task {} to {}",
+                                                task_id,
+                                                opt.name
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        grove::app::config::ProjectMgmtProvider::Clickup => {
+                            let client = clickup_client.clone();
+                            let task_id = task_id.to_string();
+                            let status_lower = status.to_lowercase();
+
+                            tokio::spawn(async move {
+                                if status_lower == "completed" || status_lower == "done" {
+                                    let done_status = "Done";
+                                    let _ = client.move_to_done(&task_id, Some(done_status)).await;
+                                    tracing::info!(
+                                        "Automation: marked ClickUp task {} as completed",
+                                        task_id
+                                    );
+                                } else {
+                                    let _ = client.update_task_status(&task_id, &status).await;
+                                    tracing::info!(
+                                        "Automation: moved ClickUp task {} to {}",
+                                        task_id,
+                                        status
+                                    );
+                                }
+                            });
+                        }
+                        grove::app::config::ProjectMgmtProvider::Airtable => {
+                            let client = airtable_client.clone();
+                            let task_id = task_id.to_string();
+
+                            tokio::spawn(async move {
+                                let _ = client.update_record_status(&task_id, &status).await;
+                                tracing::info!(
+                                    "Automation: moved Airtable task {} to {}",
+                                    task_id,
+                                    status
+                                );
+                            });
+                        }
+                        grove::app::config::ProjectMgmtProvider::Linear => {
+                            let client = linear_client.clone();
+                            let task_id = task_id.to_string();
+                            let status_lower = status.to_lowercase();
+                            let done_state = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .linear
+                                .done_state
+                                .clone();
+
+                            tokio::spawn(async move {
+                                if status_lower == "completed" || status_lower == "done" {
+                                    let _ =
+                                        client.move_to_done(&task_id, done_state.as_deref()).await;
+                                    tracing::info!(
+                                        "Automation: marked Linear task {} as completed",
+                                        task_id
+                                    );
+                                } else if let Ok(states) = client.get_workflow_states().await {
+                                    for workflow_state in states {
+                                        if workflow_state.name.eq_ignore_ascii_case(&status) {
+                                            let _ = client
+                                                .update_issue_status(&task_id, &workflow_state.id)
+                                                .await;
+                                            tracing::info!(
+                                                "Automation: moved Linear task {} to {}",
+                                                task_id,
+                                                workflow_state.name
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
                 }
             }
         }
