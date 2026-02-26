@@ -7348,6 +7348,7 @@ async fn process_action(
                             grove::app::ProjectMgmtProvider::all().get(selected_index)
                         {
                             state.settings.repo_config.project_mgmt.provider = *provider;
+                            let _ = action_tx.send(Action::LoadAutomationStatusOptions);
                         }
                     }
                     grove::app::SettingsField::AutomationOnTaskAssign => {
