@@ -5600,6 +5600,7 @@ async fn process_action(
                         agent.pm_task_status = pm_status;
                         state.log_info(format!("Linked task '{}' to agent", task.name));
 
+                        let agent_id = agent.id;
                         state.add_agent(agent);
                         state.select_last();
                         state.toast = None;
@@ -5614,6 +5615,11 @@ async fn process_action(
                                 .collect(),
                         );
                         let _ = selected_watch_tx.send(state.selected_agent_id());
+
+                        let _ = action_tx.send(Action::ExecuteAutomation {
+                            agent_id,
+                            action_type: grove::app::config::AutomationActionType::TaskAssign,
+                        });
                     }
                     Err(e) => {
                         state.log_error(format!("Failed to create agent: {}", e));
@@ -9317,6 +9323,20 @@ async fn process_action(
                                                     .to_string(),
                                                 level: grove::app::ToastLevel::Success,
                                             });
+                                            if let Ok(task) = client.get_task(&task_id).await {
+                                                let new_status = ProjectMgmtTaskStatus::Asana(
+                                                    AsanaTaskStatus::Completed {
+                                                        gid: task.gid,
+                                                        name: task.name,
+                                                        is_subtask: task.parent.is_some(),
+                                                        status_name: "Complete".to_string(),
+                                                    },
+                                                );
+                                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                                    id: agent_id,
+                                                    status: new_status,
+                                                });
+                                            }
                                         }
                                         Err(e) => {
                                             let _ = tx.send(Action::ShowError(format!(
@@ -9333,6 +9353,27 @@ async fn process_action(
                                                     .to_string(),
                                                 level: grove::app::ToastLevel::Success,
                                             });
+                                            if let Ok(task) = client.get_task(&task_id).await {
+                                                let url = task.permalink_url.unwrap_or_else(|| {
+                                                    format!(
+                                                        "https://app.asana.com/0/0/{}/f",
+                                                        task.gid
+                                                    )
+                                                });
+                                                let new_status = ProjectMgmtTaskStatus::Asana(
+                                                    AsanaTaskStatus::InProgress {
+                                                        gid: task.gid,
+                                                        name: task.name,
+                                                        url,
+                                                        is_subtask: task.parent.is_some(),
+                                                        status_name: "Incomplete".to_string(),
+                                                    },
+                                                );
+                                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                                    id: agent_id,
+                                                    status: new_status,
+                                                });
+                                            }
                                         }
                                         Err(e) => {
                                             let _ = tx.send(Action::ShowError(format!(
@@ -9360,6 +9401,30 @@ async fn process_action(
                                                             ),
                                                             level: grove::app::ToastLevel::Success,
                                                         });
+                                                        if let Ok(task) =
+                                                            client.get_task(&task_id).await
+                                                        {
+                                                            let url = task.permalink_url
+                                                                .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
+                                                            let new_status =
+                                                                ProjectMgmtTaskStatus::Asana(
+                                                                    AsanaTaskStatus::InProgress {
+                                                                        gid: task.gid,
+                                                                        name: task.name,
+                                                                        url,
+                                                                        is_subtask: false,
+                                                                        status_name: section
+                                                                            .name
+                                                                            .clone(),
+                                                                    },
+                                                                );
+                                                            let _ = tx.send(
+                                                                Action::UpdateProjectTaskStatus {
+                                                                    id: agent_id,
+                                                                    status: new_status,
+                                                                },
+                                                            );
+                                                        }
                                                         found = true;
                                                     }
                                                     Err(e) => {
@@ -9421,6 +9486,28 @@ async fn process_action(
                                                         ),
                                                         level: grove::app::ToastLevel::Success,
                                                     });
+                                                    if let Ok(page) =
+                                                        client.get_page(&task_id).await
+                                                    {
+                                                        let new_status =
+                                                            ProjectMgmtTaskStatus::Notion(
+                                                                NotionTaskStatus::Linked {
+                                                                    page_id: page.id,
+                                                                    name: page.name,
+                                                                    url: page.url,
+                                                                    status_option_id: opt
+                                                                        .id
+                                                                        .clone(),
+                                                                    status_name: opt.name.clone(),
+                                                                },
+                                                            );
+                                                        let _ = tx.send(
+                                                            Action::UpdateProjectTaskStatus {
+                                                                id: agent_id,
+                                                                status: new_status,
+                                                            },
+                                                        );
+                                                    }
                                                     found = true;
                                                 }
                                                 Err(e) => {
@@ -9462,6 +9549,33 @@ async fn process_action(
                                         message: format!("Automation: Moved task to '{}'", status),
                                         level: grove::app::ToastLevel::Success,
                                     });
+                                    if let Ok(task) = client.get_task(&task_id).await {
+                                        let url = task.url.clone().unwrap_or_default();
+                                        let is_subtask = task.parent.is_some();
+                                        let new_status = if task.status.status_type == "closed" {
+                                            ProjectMgmtTaskStatus::ClickUp(
+                                                ClickUpTaskStatus::Completed {
+                                                    id: task.id,
+                                                    name: task.name,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        } else {
+                                            ProjectMgmtTaskStatus::ClickUp(
+                                                ClickUpTaskStatus::InProgress {
+                                                    id: task.id,
+                                                    name: task.name,
+                                                    url,
+                                                    status: task.status.status,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        };
+                                        let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                            id: agent_id,
+                                            status: new_status,
+                                        });
+                                    }
                                 }
                                 Err(e) => {
                                     let _ = tx.send(Action::ShowError(format!(
@@ -9485,6 +9599,44 @@ async fn process_action(
                                         message: format!("Automation: Moved task to '{}'", status),
                                         level: grove::app::ToastLevel::Success,
                                     });
+                                    if let Ok(record) = client.get_record(&task_id).await {
+                                        let status_name = record.status.clone().unwrap_or_default();
+                                        let is_subtask = record.parent_id.is_some();
+                                        let is_completed =
+                                            status_name.to_lowercase().contains("done")
+                                                || status_name.to_lowercase().contains("complete");
+                                        let new_status = if is_completed {
+                                            ProjectMgmtTaskStatus::Airtable(
+                                                AirtableTaskStatus::Completed {
+                                                    id: record.id,
+                                                    name: record.name,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        } else if status_name.to_lowercase().contains("progress") {
+                                            ProjectMgmtTaskStatus::Airtable(
+                                                AirtableTaskStatus::InProgress {
+                                                    id: record.id,
+                                                    name: record.name,
+                                                    url: record.url,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        } else {
+                                            ProjectMgmtTaskStatus::Airtable(
+                                                AirtableTaskStatus::NotStarted {
+                                                    id: record.id,
+                                                    name: record.name,
+                                                    url: record.url,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        };
+                                        let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                            id: agent_id,
+                                            status: new_status,
+                                        });
+                                    }
                                 }
                                 Err(e) => {
                                     let _ = tx.send(Action::ShowError(format!(
@@ -9519,6 +9671,32 @@ async fn process_action(
                                                         ),
                                                         level: grove::app::ToastLevel::Success,
                                                     });
+                                                    if let Ok(issue) =
+                                                        client.get_issue(&task_id).await
+                                                    {
+                                                        let identifier = issue.identifier.clone();
+                                                        let new_status =
+                                                            ProjectMgmtTaskStatus::Linear(
+                                                                LinearTaskStatus::InProgress {
+                                                                    id: issue.id,
+                                                                    identifier,
+                                                                    name: issue.title,
+                                                                    status_name: workflow_state
+                                                                        .name
+                                                                        .clone(),
+                                                                    url: issue.url,
+                                                                    is_subtask: issue
+                                                                        .parent_id
+                                                                        .is_some(),
+                                                                },
+                                                            );
+                                                        let _ = tx.send(
+                                                            Action::UpdateProjectTaskStatus {
+                                                                id: agent_id,
+                                                                status: new_status,
+                                                            },
+                                                        );
+                                                    }
                                                     found = true;
                                                 }
                                                 Err(e) => {
