@@ -9,7 +9,10 @@ use sysinfo::System;
 use anyhow::Result;
 
 use crossterm::{
-    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, poll, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+        EnableMouseCapture, Event, KeyCode, KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -282,7 +285,12 @@ async fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -757,7 +765,12 @@ async fn main() -> Result<()> {
 
                 // Leave TUI mode
                 disable_raw_mode()?;
-                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    LeaveAlternateScreen,
+                    DisableMouseCapture,
+                    DisableBracketedPaste
+                )?;
 
                 // Attach to tmux (blocks until detach)
                 let tmux_session = grove::tmux::TmuxSession::new(&session_name);
@@ -765,7 +778,12 @@ async fn main() -> Result<()> {
 
                 // Restore TUI mode
                 enable_raw_mode()?;
-                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    EnterAlternateScreen,
+                    EnableMouseCapture,
+                    EnableBracketedPaste
+                )?;
                 terminal.clear()?;
 
                 // Drain any stale input events
@@ -795,7 +813,12 @@ async fn main() -> Result<()> {
 
                 // Leave TUI mode
                 disable_raw_mode()?;
-                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    LeaveAlternateScreen,
+                    DisableMouseCapture,
+                    DisableBracketedPaste
+                )?;
 
                 // Attach to tmux (blocks until detach)
                 let ai_agent = state.config.global.ai_agent.clone();
@@ -803,7 +826,12 @@ async fn main() -> Result<()> {
 
                 // Restore TUI mode
                 enable_raw_mode()?;
-                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    EnterAlternateScreen,
+                    EnableMouseCapture,
+                    EnableBracketedPaste
+                )?;
                 terminal.clear()?;
 
                 // Drain any stale input events
@@ -834,7 +862,12 @@ async fn main() -> Result<()> {
 
                 // Leave TUI mode
                 disable_raw_mode()?;
-                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    LeaveAlternateScreen,
+                    DisableMouseCapture,
+                    DisableBracketedPaste
+                )?;
 
                 // Run editor (blocks until exit)
                 let editor_result = std::process::Command::new("sh")
@@ -844,7 +877,12 @@ async fn main() -> Result<()> {
 
                 // Restore TUI mode
                 enable_raw_mode()?;
-                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    EnterAlternateScreen,
+                    EnableMouseCapture,
+                    EnableBracketedPaste
+                )?;
                 terminal.clear()?;
 
                 // Drain any stale input events
@@ -985,7 +1023,8 @@ async fn main() -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
@@ -1108,6 +1147,17 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Handle project setup wizard
     if state.show_project_setup {
         if let Some(wizard) = &state.project_setup {
+            if wizard.file_browser.active {
+                return match key.code {
+                    KeyCode::Esc => Some(Action::ProjectSetupCloseFileBrowser),
+                    KeyCode::Enter | KeyCode::Char(' ') => Some(Action::FileBrowserToggle),
+                    KeyCode::Up | KeyCode::Char('k') => Some(Action::FileBrowserSelectPrev),
+                    KeyCode::Down | KeyCode::Char('j') => Some(Action::FileBrowserSelectNext),
+                    KeyCode::Right => Some(Action::FileBrowserEnterDir),
+                    KeyCode::Left => Some(Action::FileBrowserGoParent),
+                    _ => None,
+                };
+            }
             return match key.code {
                 KeyCode::Esc => {
                     if wizard.git_provider_dropdown_open || wizard.pm_provider_dropdown_open {
@@ -7653,38 +7703,99 @@ async fn process_action(
         }
 
         Action::FileBrowserToggle => {
-            let fb = &mut state.settings.file_browser;
-            if let Some(entry) = fb.entries.get(fb.selected_index) {
-                if !entry.is_dir || entry.name == ".." {
-                    if fb.selected_files.contains(&entry.path) {
-                        fb.selected_files.remove(&entry.path);
-                    } else {
-                        fb.selected_files.insert(entry.path.clone());
+            if state.settings.file_browser.active {
+                let fb = &mut state.settings.file_browser;
+                if let Some(entry) = fb.entries.get(fb.selected_index) {
+                    if !entry.is_dir || entry.name == ".." {
+                        if fb.selected_files.contains(&entry.path) {
+                            fb.selected_files.remove(&entry.path);
+                        } else {
+                            fb.selected_files.insert(entry.path.clone());
+                        }
+                        fb.entries = grove::ui::components::file_browser::load_directory_entries(
+                            &fb.current_path,
+                            &fb.selected_files,
+                            &fb.current_path,
+                        );
                     }
-                    fb.entries = grove::ui::components::file_browser::load_directory_entries(
-                        &fb.current_path,
-                        &fb.selected_files,
-                        &fb.current_path,
-                    );
+                }
+            } else if let Some(wizard) = &mut state.project_setup {
+                if wizard.file_browser.active {
+                    let fb = &mut wizard.file_browser;
+                    if let Some(entry) = fb.entries.get(fb.selected_index) {
+                        if !entry.is_dir || entry.name == ".." {
+                            if fb.selected_files.contains(&entry.path) {
+                                fb.selected_files.remove(&entry.path);
+                            } else {
+                                fb.selected_files.insert(entry.path.clone());
+                            }
+                            fb.entries =
+                                grove::ui::components::file_browser::load_directory_entries(
+                                    &fb.current_path,
+                                    &fb.selected_files,
+                                    &fb.current_path,
+                                );
+                        }
+                    }
                 }
             }
         }
 
         Action::FileBrowserSelectNext => {
-            let fb = &mut state.settings.file_browser;
-            fb.selected_index = (fb.selected_index + 1).min(fb.entries.len().saturating_sub(1));
+            if state.settings.file_browser.active {
+                let fb = &mut state.settings.file_browser;
+                fb.selected_index = (fb.selected_index + 1).min(fb.entries.len().saturating_sub(1));
+            } else if let Some(wizard) = &mut state.project_setup {
+                let fb = &mut wizard.file_browser;
+                fb.selected_index = (fb.selected_index + 1).min(fb.entries.len().saturating_sub(1));
+            }
         }
 
         Action::FileBrowserSelectPrev => {
-            let fb = &mut state.settings.file_browser;
-            fb.selected_index = fb.selected_index.saturating_sub(1);
+            if state.settings.file_browser.active {
+                let fb = &mut state.settings.file_browser;
+                fb.selected_index = fb.selected_index.saturating_sub(1);
+            } else if let Some(wizard) = &mut state.project_setup {
+                let fb = &mut wizard.file_browser;
+                fb.selected_index = fb.selected_index.saturating_sub(1);
+            }
         }
 
         Action::FileBrowserEnterDir => {
-            let fb = &mut state.settings.file_browser;
-            if let Some(entry) = fb.entries.get(fb.selected_index) {
-                if entry.is_dir {
-                    fb.current_path = entry.path.clone();
+            if state.settings.file_browser.active {
+                let fb = &mut state.settings.file_browser;
+                if let Some(entry) = fb.entries.get(fb.selected_index) {
+                    if entry.is_dir {
+                        fb.current_path = entry.path.clone();
+                        fb.selected_index = 0;
+                        fb.entries = grove::ui::components::file_browser::load_directory_entries(
+                            &fb.current_path,
+                            &fb.selected_files,
+                            &fb.current_path,
+                        );
+                    }
+                }
+            } else if let Some(wizard) = &mut state.project_setup {
+                let fb = &mut wizard.file_browser;
+                if let Some(entry) = fb.entries.get(fb.selected_index) {
+                    if entry.is_dir {
+                        fb.current_path = entry.path.clone();
+                        fb.selected_index = 0;
+                        fb.entries = grove::ui::components::file_browser::load_directory_entries(
+                            &fb.current_path,
+                            &fb.selected_files,
+                            &fb.current_path,
+                        );
+                    }
+                }
+            }
+        }
+
+        Action::FileBrowserGoParent => {
+            if state.settings.file_browser.active {
+                let fb = &mut state.settings.file_browser;
+                if let Some(parent) = fb.current_path.parent() {
+                    fb.current_path = parent.to_path_buf();
                     fb.selected_index = 0;
                     fb.entries = grove::ui::components::file_browser::load_directory_entries(
                         &fb.current_path,
@@ -7692,19 +7803,17 @@ async fn process_action(
                         &fb.current_path,
                     );
                 }
-            }
-        }
-
-        Action::FileBrowserGoParent => {
-            let fb = &mut state.settings.file_browser;
-            if let Some(parent) = fb.current_path.parent() {
-                fb.current_path = parent.to_path_buf();
-                fb.selected_index = 0;
-                fb.entries = grove::ui::components::file_browser::load_directory_entries(
-                    &fb.current_path,
-                    &fb.selected_files,
-                    &fb.current_path,
-                );
+            } else if let Some(wizard) = &mut state.project_setup {
+                let fb = &mut wizard.file_browser;
+                if let Some(parent) = fb.current_path.parent() {
+                    fb.current_path = parent.to_path_buf();
+                    fb.selected_index = 0;
+                    fb.entries = grove::ui::components::file_browser::load_directory_entries(
+                        &fb.current_path,
+                        &fb.selected_files,
+                        &fb.current_path,
+                    );
+                }
             }
         }
 
@@ -7846,7 +7955,7 @@ async fn process_action(
         // Project Setup Wizard Actions
         Action::ProjectSetupNavigateNext => {
             if let Some(wizard) = &mut state.project_setup {
-                if wizard.selected_index < 5 {
+                if wizard.selected_index < 7 {
                     wizard.selected_index += 1;
                 }
             }
@@ -7927,7 +8036,11 @@ async fn process_action(
                         state.pm_setup.in_progress_state.clear();
                         state.pm_setup.done_state.clear();
                     }
-                    4 => {
+                    4 => {}
+                    5 => {
+                        wizard.init_file_browser(&state.repo_path);
+                    }
+                    6 => {
                         if let Some(wizard) = state.project_setup.take() {
                             if let Err(e) = wizard.config.save(&state.repo_path) {
                                 state.log_error(format!("Failed to save project config: {}", e));
@@ -7938,7 +8051,7 @@ async fn process_action(
                         }
                         state.show_project_setup = false;
                     }
-                    5 => {
+                    7 => {
                         state.show_project_setup = false;
                         state.project_setup = None;
                         state.log_info("Project setup closed".to_string());
@@ -8021,6 +8134,17 @@ async fn process_action(
                 }
             }
             state.show_project_setup = false;
+        }
+        Action::ProjectSetupOpenSymlinks => {
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.init_file_browser(&state.repo_path);
+            }
+        }
+        Action::ProjectSetupCloseFileBrowser => {
+            if let Some(wizard) = &mut state.project_setup {
+                wizard.save_symlinks_from_browser(&state.repo_path);
+                wizard.file_browser.active = false;
+            }
         }
 
         // PM Setup Wizard Actions

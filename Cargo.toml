@@ -1,6 +1,6 @@
 [package]
-name = "grove"
-version = "0.1.0"
+name = "grove-ai"
+version = "0.1.3"
 edition = "2021"
 description = "A TUI for managing multiple Claude Code agents with git worktree isolation"
 license = "MIT"
@@ -10,10 +10,18 @@ readme = "README.md"
 keywords = ["tui", "claude", "agent", "git", "worktree"]
 categories = ["command-line-interface", "development-tools"]
 
+[lib]
+name = "grove"
+path = "src/lib.rs"
+
+[[bin]]
+name = "grove"
+path = "src/main.rs"
+
 [dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
+crossterm = { version = "0.28", features = ["event-stream", "bracketed-paste"] }
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls",

@@ -1,8 +1,7 @@
 [workspace]
 publish = true
 publish_timeout = "10m"
-git_release_enable = false
-release_always = false
+git_release_enable = true
 git_tag_enable = true
 
 [changelog]
