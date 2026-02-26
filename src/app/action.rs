@@ -316,6 +316,8 @@ pub enum Action {
     ProjectSetupConfirmPmDropdown,
     ProjectSetupSkip,
     ProjectSetupComplete,
+    ProjectSetupOpenSymlinks,
+    ProjectSetupCloseFileBrowser,
 
     // PM Setup Wizard
     OpenPmSetup,
