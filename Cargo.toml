@@ -19,7 +19,7 @@ name = "grove"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }

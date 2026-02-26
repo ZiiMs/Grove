@@ -186,7 +186,7 @@ mod tests {
 |-------|---------|
 | `ratatui` | Terminal UI rendering |
 | `crossterm` | Terminal events |
-| `tokio` | Async runtime |
+| `tokio` | Async runtime (rt-multi-thread, macros, sync, time) |
 | `anyhow` | Error handling |
 | `serde` | Serialization |
 | `git2` | Git operations |
