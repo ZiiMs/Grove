@@ -31,11 +31,11 @@ checksum:
 
 brews:
   - name: grove
-    homepage: https://github.com/ziim/grove
+    homepage: https://github.com/ZiiMs/grove
     description: A TUI for managing multiple Claude Code agents with git worktree isolation
     license: MIT
     repository:
-      owner: ziim
+      owner: ZiiMs
       name: homebrew-grove
       branch: main
     commit_author:
