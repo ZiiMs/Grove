@@ -17,9 +17,7 @@ jobs:
           fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Install zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: '0.13.0'
+        uses: mlugg/setup-zig@v2
       - uses: goreleaser/goreleaser-action@v6
         with:
           args: release --config .goreleaser-linux.yaml --clean
@@ -28,16 +26,15 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
-    needs: build-linux
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: x86_64-apple-darwin aarch64-apple-darwin
+          target: x86_64-apple-darwin aarch64-apple-darwin
       - name: Install zig
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
       - uses: goreleaser/goreleaser-action@v6
         with:
           args: release --config .goreleaser-macos.yaml --skip=publish --clean
