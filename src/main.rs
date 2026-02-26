@@ -2052,6 +2052,8 @@ async fn process_action(
                         state.log_info(format!("Linked task '{}' to agent", task_item.name));
                     }
 
+                    let agent_id = agent.id;
+                    let has_task = task.is_some();
                     state.add_agent(agent);
                     state.select_last();
                     state.toast = None;
@@ -2065,6 +2067,14 @@ async fn process_action(
                             .collect(),
                     );
                     let _ = selected_watch_tx.send(state.selected_agent_id());
+
+                    // Trigger automation if a task was assigned
+                    if has_task {
+                        let _ = action_tx.send(Action::ExecuteAutomation {
+                            agent_id,
+                            action_type: grove::app::config::AutomationActionType::TaskAssign,
+                        });
+                    }
                 }
                 Err(e) => {
                     state.log_error(format!("Failed to create agent: {}", e));
@@ -4482,20 +4492,6 @@ async fn process_action(
                     match provider {
                         ProjectMgmtProvider::Asana => {
                             let client = Arc::clone(asana_client);
-                            let in_progress_gid = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .asana
-                                .in_progress_section_gid
-                                .clone();
-                            let done_gid = state
-                                .settings
-                                .repo_config
-                                .project_mgmt
-                                .asana
-                                .done_section_gid
-                                .clone();
                             let gid_clone = gid.clone();
 
                             tokio::spawn(async move {
@@ -4504,8 +4500,6 @@ async fn process_action(
                                     &automation_config,
                                     grove::app::config::AutomationActionType::Delete,
                                     &gid_clone,
-                                    in_progress_gid.as_deref(),
-                                    done_gid.as_deref(),
                                 )
                                 .await;
                             });
@@ -5435,6 +5429,7 @@ async fn process_action(
                         agent.pm_task_status = pm_status;
                         state.log_info(format!("Linked task '{}' to agent", task.name));
 
+                        let agent_id = agent.id;
                         state.add_agent(agent);
                         state.select_last();
                         state.toast = None;
@@ -5449,6 +5444,11 @@ async fn process_action(
                                 .collect(),
                         );
                         let _ = selected_watch_tx.send(state.selected_agent_id());
+
+                        let _ = action_tx.send(Action::ExecuteAutomation {
+                            agent_id,
+                            action_type: grove::app::config::AutomationActionType::TaskAssign,
+                        });
                     }
                     Err(e) => {
                         state.log_error(format!("Failed to create agent: {}", e));
@@ -6075,6 +6075,8 @@ async fn process_action(
                 state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
                 state.settings.pending_automation = state.config.automation.clone();
+
+                let _ = action_tx.send(Action::LoadAutomationStatusOptions);
             }
         }
 
@@ -6147,6 +6149,15 @@ async fn process_action(
                     }
                     grove::app::SettingsField::ProjectMgmtProvider => {
                         grove::app::ProjectMgmtProvider::all().len()
+                    }
+                    grove::app::SettingsField::AutomationOnTaskAssign
+                    | grove::app::SettingsField::AutomationOnPush
+                    | grove::app::SettingsField::AutomationOnDelete => {
+                        state.settings.automation_status_options.len() + 1
+                    }
+                    grove::app::SettingsField::AutomationOnTaskAssignSubtask
+                    | grove::app::SettingsField::AutomationOnDeleteSubtask => {
+                        3 // None, Complete, Incomplete
                     }
                     _ => 0,
                 };
@@ -6686,6 +6697,30 @@ async fn process_action(
                         selected_index: idx,
                     };
                 }
+                grove::app::SettingsField::AutomationOnTaskAssignSubtask => {
+                    let current = &state.settings.pending_automation.on_task_assign_subtask;
+                    let idx = match current.as_deref() {
+                        None => 0,
+                        Some("Complete") => 1,
+                        Some("Incomplete") => 2,
+                        _ => 0,
+                    };
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
+                grove::app::SettingsField::AutomationOnDeleteSubtask => {
+                    let current = &state.settings.pending_automation.on_delete_subtask;
+                    let idx = match current.as_deref() {
+                        None => 0,
+                        Some("Complete") => 1,
+                        Some("Incomplete") => 2,
+                        _ => 0,
+                    };
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: idx,
+                    };
+                }
                 _ => {
                     // Keybind fields are handled by SettingsStartKeybindCapture
                 }
@@ -7140,6 +7175,7 @@ async fn process_action(
                             grove::app::ProjectMgmtProvider::all().get(selected_index)
                         {
                             state.settings.repo_config.project_mgmt.provider = *provider;
+                            let _ = action_tx.send(Action::LoadAutomationStatusOptions);
                         }
                     }
                     grove::app::SettingsField::AutomationOnTaskAssign => {
@@ -7175,6 +7211,23 @@ async fn process_action(
                         {
                             state.settings.pending_automation.on_delete = Some(opt.name.clone());
                         }
+                    }
+                    grove::app::SettingsField::AutomationOnTaskAssignSubtask => {
+                        state.settings.pending_automation.on_task_assign_subtask =
+                            match selected_index {
+                                0 => None,
+                                1 => Some("Complete".to_string()),
+                                2 => Some("Incomplete".to_string()),
+                                _ => None,
+                            };
+                    }
+                    grove::app::SettingsField::AutomationOnDeleteSubtask => {
+                        state.settings.pending_automation.on_delete_subtask = match selected_index {
+                            0 => None,
+                            1 => Some("Complete".to_string()),
+                            2 => Some("Incomplete".to_string()),
+                            _ => None,
+                        };
                     }
                     _ => {}
                 }
@@ -8859,10 +8912,6 @@ async fn process_action(
                                         id: s.gid,
                                         name: s.name,
                                     })
-                                    .chain(std::iter::once(StatusOption {
-                                        id: "completed".to_string(),
-                                        name: "Completed".to_string(),
-                                    }))
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
                             }
@@ -8871,22 +8920,136 @@ async fn process_action(
                                     "Failed to load Asana sections for automation: {}",
                                     e
                                 );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded {
-                                    options: vec![StatusOption {
-                                        id: "completed".to_string(),
-                                        name: "Completed".to_string(),
-                                    }],
+                                    options: vec![],
                                 });
                             }
                         }
                     });
                 }
-                _ => {
-                    let _ = action_tx.send(Action::AutomationStatusOptionsLoaded {
-                        options: vec![StatusOption {
-                            id: "completed".to_string(),
-                            name: "Completed".to_string(),
-                        }],
+                grove::app::config::ProjectMgmtProvider::Notion => {
+                    let client = notion_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_status_options().await {
+                            Ok(opts) => {
+                                let options: Vec<StatusOption> = opts
+                                    .all_options
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.id,
+                                        name: o.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Notion status options for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Clickup => {
+                    let client = clickup_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_statuses().await {
+                            Ok(statuses) => {
+                                let options: Vec<StatusOption> = statuses
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.status.clone(),
+                                        name: s.status,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load ClickUp statuses for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Airtable => {
+                    let client = airtable_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_status_options().await {
+                            Ok(opts) => {
+                                let options: Vec<StatusOption> = opts
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.name.clone(),
+                                        name: o.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Airtable status options for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Linear => {
+                    let client = linear_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_workflow_states().await {
+                            Ok(states) => {
+                                let options: Vec<StatusOption> = states
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.id,
+                                        name: s.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Linear workflow states for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
                     });
                 }
             }
@@ -8900,37 +9063,467 @@ async fn process_action(
             agent_id,
             action_type,
         } => {
-            if let Some(agent) = state.agents.get(&agent_id) {
-                if let Some(task_id) = agent.pm_task_status.id() {
+            let automation_data = state.agents.get(&agent_id).and_then(|agent| {
+                agent.pm_task_status.id().map(|task_id| {
                     let config = state.config.automation.clone();
-                    let in_progress_gid = state
-                        .settings
-                        .repo_config
-                        .project_mgmt
-                        .asana
-                        .in_progress_section_gid
-                        .clone();
-                    let done_gid = state
-                        .settings
-                        .repo_config
-                        .project_mgmt
-                        .asana
-                        .done_section_gid
-                        .clone();
-                    let client = asana_client.clone();
-                    let task_id = task_id.to_string();
+                    let provider = state.settings.repo_config.project_mgmt.provider;
+                    let is_subtask = match &agent.pm_task_status {
+                        ProjectMgmtTaskStatus::Asana(status) => status.is_subtask(),
+                        _ => false,
+                    };
+                    (task_id.to_string(), config, provider, is_subtask)
+                })
+            });
 
-                    tokio::spawn(async move {
-                        let _ = grove::automation::execute_automation(
-                            &client,
-                            &config,
-                            action_type,
-                            &task_id,
-                            in_progress_gid.as_deref(),
-                            done_gid.as_deref(),
-                        )
-                        .await;
-                    });
+            if let Some((task_id, config, provider, is_subtask)) = automation_data {
+                let status_name = match action_type {
+                    grove::app::config::AutomationActionType::TaskAssign => {
+                        if is_subtask {
+                            config.on_task_assign_subtask.clone()
+                        } else {
+                            config.on_task_assign.clone()
+                        }
+                    }
+                    grove::app::config::AutomationActionType::Push => config.on_push.clone(),
+                    grove::app::config::AutomationActionType::Delete => {
+                        if is_subtask {
+                            config.on_delete_subtask.clone()
+                        } else {
+                            config.on_delete.clone()
+                        }
+                    }
+                };
+
+                let status = match status_name {
+                    Some(s) if !s.is_empty() && s.to_lowercase() != "none" => s,
+                    _ => {
+                        tracing::debug!("No automation configured for {:?}", action_type);
+                        return Ok(false);
+                    }
+                };
+
+                state.log_info(format!("Automation: Moving task to '{}'...", status));
+
+                match provider {
+                    grove::app::config::ProjectMgmtProvider::Asana => {
+                        let client = asana_client.clone();
+                        let task_id = task_id.to_string();
+                        let status = status.clone();
+                        let status_lower = status.to_lowercase();
+                        let tx = action_tx.clone();
+
+                        tokio::spawn(async move {
+                            if is_subtask {
+                                if status_lower == "complete" {
+                                    match client.complete_task(&task_id).await {
+                                        Ok(_) => {
+                                            let _ = tx.send(Action::ShowToast {
+                                                message: "Automation: Marked task as complete"
+                                                    .to_string(),
+                                                level: grove::app::ToastLevel::Success,
+                                            });
+                                            if let Ok(task) = client.get_task(&task_id).await {
+                                                let new_status = ProjectMgmtTaskStatus::Asana(
+                                                    AsanaTaskStatus::Completed {
+                                                        gid: task.gid,
+                                                        name: task.name,
+                                                        is_subtask: task.parent.is_some(),
+                                                        status_name: "Complete".to_string(),
+                                                    },
+                                                );
+                                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                                    id: agent_id,
+                                                    status: new_status,
+                                                });
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Automation failed: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                } else if status_lower == "incomplete" {
+                                    match client.incomplete_task(&task_id).await {
+                                        Ok(_) => {
+                                            let _ = tx.send(Action::ShowToast {
+                                                message: "Automation: Marked task as incomplete"
+                                                    .to_string(),
+                                                level: grove::app::ToastLevel::Success,
+                                            });
+                                            if let Ok(task) = client.get_task(&task_id).await {
+                                                let url = task.permalink_url.unwrap_or_else(|| {
+                                                    format!(
+                                                        "https://app.asana.com/0/0/{}/f",
+                                                        task.gid
+                                                    )
+                                                });
+                                                let new_status = ProjectMgmtTaskStatus::Asana(
+                                                    AsanaTaskStatus::InProgress {
+                                                        gid: task.gid,
+                                                        name: task.name,
+                                                        url,
+                                                        is_subtask: task.parent.is_some(),
+                                                        status_name: "Incomplete".to_string(),
+                                                    },
+                                                );
+                                                let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                                    id: agent_id,
+                                                    status: new_status,
+                                                });
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Automation failed: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                }
+                            } else {
+                                match client.get_sections().await {
+                                    Ok(sections) => {
+                                        let mut found = false;
+                                        for section in &sections {
+                                            if section.name.eq_ignore_ascii_case(&status) {
+                                                match client
+                                                    .move_task_to_section(&task_id, &section.gid)
+                                                    .await
+                                                {
+                                                    Ok(_) => {
+                                                        let _ = tx.send(Action::ShowToast {
+                                                            message: format!(
+                                                                "Automation: Moved task to '{}'",
+                                                                section.name
+                                                            ),
+                                                            level: grove::app::ToastLevel::Success,
+                                                        });
+                                                        if let Ok(task) =
+                                                            client.get_task(&task_id).await
+                                                        {
+                                                            let url = task.permalink_url
+                                                                .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
+                                                            let new_status =
+                                                                ProjectMgmtTaskStatus::Asana(
+                                                                    AsanaTaskStatus::InProgress {
+                                                                        gid: task.gid,
+                                                                        name: task.name,
+                                                                        url,
+                                                                        is_subtask: false,
+                                                                        status_name: section
+                                                                            .name
+                                                                            .clone(),
+                                                                    },
+                                                                );
+                                                            let _ = tx.send(
+                                                                Action::UpdateProjectTaskStatus {
+                                                                    id: agent_id,
+                                                                    status: new_status,
+                                                                },
+                                                            );
+                                                        }
+                                                        found = true;
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = tx.send(Action::ShowError(
+                                                            format!("Automation failed: {}", e),
+                                                        ));
+                                                    }
+                                                }
+                                                break;
+                                            }
+                                        }
+                                        if !found {
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Automation: No section found matching '{}'",
+                                                status
+                                            )));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Automation failed: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    grove::app::config::ProjectMgmtProvider::Notion => {
+                        let client = notion_client.clone();
+                        let status_prop_name = state
+                            .settings
+                            .repo_config
+                            .project_mgmt
+                            .notion
+                            .status_property_name
+                            .clone();
+                        let task_id = task_id.to_string();
+                        let status = status.clone();
+                        let tx = action_tx.clone();
+
+                        tokio::spawn(async move {
+                            match client.get_status_options().await {
+                                Ok(opts) => {
+                                    let mut found = false;
+                                    for opt in &opts.all_options {
+                                        if opt.name.eq_ignore_ascii_case(&status) {
+                                            let prop_name = status_prop_name
+                                                .unwrap_or_else(|| "Status".to_string());
+                                            match client
+                                                .update_page_status(&task_id, &prop_name, &opt.id)
+                                                .await
+                                            {
+                                                Ok(_) => {
+                                                    let _ = tx.send(Action::ShowToast {
+                                                        message: format!(
+                                                            "Automation: Moved task to '{}'",
+                                                            opt.name
+                                                        ),
+                                                        level: grove::app::ToastLevel::Success,
+                                                    });
+                                                    if let Ok(page) =
+                                                        client.get_page(&task_id).await
+                                                    {
+                                                        let new_status =
+                                                            ProjectMgmtTaskStatus::Notion(
+                                                                NotionTaskStatus::Linked {
+                                                                    page_id: page.id,
+                                                                    name: page.name,
+                                                                    url: page.url,
+                                                                    status_option_id: opt
+                                                                        .id
+                                                                        .clone(),
+                                                                    status_name: opt.name.clone(),
+                                                                },
+                                                            );
+                                                        let _ = tx.send(
+                                                            Action::UpdateProjectTaskStatus {
+                                                                id: agent_id,
+                                                                status: new_status,
+                                                            },
+                                                        );
+                                                    }
+                                                    found = true;
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx.send(Action::ShowError(format!(
+                                                        "Automation failed: {}",
+                                                        e
+                                                    )));
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    if !found {
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Automation: No status found matching '{}'",
+                                            status
+                                        )));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Automation failed: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                    grove::app::config::ProjectMgmtProvider::Clickup => {
+                        let client = clickup_client.clone();
+                        let task_id = task_id.to_string();
+                        let status = status.clone();
+                        let tx = action_tx.clone();
+
+                        tokio::spawn(async move {
+                            match client.update_task_status(&task_id, &status).await {
+                                Ok(_) => {
+                                    let _ = tx.send(Action::ShowToast {
+                                        message: format!("Automation: Moved task to '{}'", status),
+                                        level: grove::app::ToastLevel::Success,
+                                    });
+                                    if let Ok(task) = client.get_task(&task_id).await {
+                                        let url = task.url.clone().unwrap_or_default();
+                                        let is_subtask = task.parent.is_some();
+                                        let new_status = if task.status.status_type == "closed" {
+                                            ProjectMgmtTaskStatus::ClickUp(
+                                                ClickUpTaskStatus::Completed {
+                                                    id: task.id,
+                                                    name: task.name,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        } else {
+                                            ProjectMgmtTaskStatus::ClickUp(
+                                                ClickUpTaskStatus::InProgress {
+                                                    id: task.id,
+                                                    name: task.name,
+                                                    url,
+                                                    status: task.status.status,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        };
+                                        let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                            id: agent_id,
+                                            status: new_status,
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Automation failed: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                    grove::app::config::ProjectMgmtProvider::Airtable => {
+                        let client = airtable_client.clone();
+                        let task_id = task_id.to_string();
+                        let status = status.clone();
+                        let tx = action_tx.clone();
+
+                        tokio::spawn(async move {
+                            match client.update_record_status(&task_id, &status).await {
+                                Ok(_) => {
+                                    let _ = tx.send(Action::ShowToast {
+                                        message: format!("Automation: Moved task to '{}'", status),
+                                        level: grove::app::ToastLevel::Success,
+                                    });
+                                    if let Ok(record) = client.get_record(&task_id).await {
+                                        let status_name = record.status.clone().unwrap_or_default();
+                                        let is_subtask = record.parent_id.is_some();
+                                        let is_completed =
+                                            status_name.to_lowercase().contains("done")
+                                                || status_name.to_lowercase().contains("complete");
+                                        let new_status = if is_completed {
+                                            ProjectMgmtTaskStatus::Airtable(
+                                                AirtableTaskStatus::Completed {
+                                                    id: record.id,
+                                                    name: record.name,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        } else if status_name.to_lowercase().contains("progress") {
+                                            ProjectMgmtTaskStatus::Airtable(
+                                                AirtableTaskStatus::InProgress {
+                                                    id: record.id,
+                                                    name: record.name,
+                                                    url: record.url,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        } else {
+                                            ProjectMgmtTaskStatus::Airtable(
+                                                AirtableTaskStatus::NotStarted {
+                                                    id: record.id,
+                                                    name: record.name,
+                                                    url: record.url,
+                                                    is_subtask,
+                                                },
+                                            )
+                                        };
+                                        let _ = tx.send(Action::UpdateProjectTaskStatus {
+                                            id: agent_id,
+                                            status: new_status,
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Automation failed: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
+                    grove::app::config::ProjectMgmtProvider::Linear => {
+                        let client = linear_client.clone();
+                        let task_id = task_id.to_string();
+                        let status = status.clone();
+                        let tx = action_tx.clone();
+
+                        tokio::spawn(async move {
+                            match client.get_workflow_states().await {
+                                Ok(states) => {
+                                    let mut found = false;
+                                    for workflow_state in states {
+                                        if workflow_state.name.eq_ignore_ascii_case(&status) {
+                                            match client
+                                                .update_issue_status(&task_id, &workflow_state.id)
+                                                .await
+                                            {
+                                                Ok(_) => {
+                                                    let _ = tx.send(Action::ShowToast {
+                                                        message: format!(
+                                                            "Automation: Moved task to '{}'",
+                                                            workflow_state.name
+                                                        ),
+                                                        level: grove::app::ToastLevel::Success,
+                                                    });
+                                                    if let Ok(issue) =
+                                                        client.get_issue(&task_id).await
+                                                    {
+                                                        let identifier = issue.identifier.clone();
+                                                        let new_status =
+                                                            ProjectMgmtTaskStatus::Linear(
+                                                                LinearTaskStatus::InProgress {
+                                                                    id: issue.id,
+                                                                    identifier,
+                                                                    name: issue.title,
+                                                                    status_name: workflow_state
+                                                                        .name
+                                                                        .clone(),
+                                                                    url: issue.url,
+                                                                    is_subtask: issue
+                                                                        .parent_id
+                                                                        .is_some(),
+                                                                },
+                                                            );
+                                                        let _ = tx.send(
+                                                            Action::UpdateProjectTaskStatus {
+                                                                id: agent_id,
+                                                                status: new_status,
+                                                            },
+                                                        );
+                                                    }
+                                                    found = true;
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx.send(Action::ShowError(format!(
+                                                        "Automation failed: {}",
+                                                        e
+                                                    )));
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    if !found {
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Automation: No status found matching '{}'",
+                                            status
+                                        )));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Automation failed: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        });
+                    }
                 }
             }
         }

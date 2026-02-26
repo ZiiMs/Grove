@@ -287,6 +287,37 @@ impl AsanaClient {
         Ok(())
     }
 
+    /// Mark a task as incomplete (not completed).
+    pub async fn incomplete_task(&self, gid: &str) -> Result<()> {
+        let url = format!("https://app.asana.com/api/1.0/tasks/{}", gid);
+
+        let body = serde_json::json!({
+            "data": {
+                "completed": false
+            }
+        });
+
+        let response = self
+            .client
+            .put(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to mark Asana task as incomplete")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Asana API error marking task incomplete: {} - {}",
+                status,
+                body
+            );
+        }
+
+        Ok(())
+    }
+
     /// Move a task to a specific section.
     pub async fn move_task_to_section(&self, task_gid: &str, section_gid: &str) -> Result<()> {
         let url = format!(
@@ -624,6 +655,21 @@ impl OptionalAsanaClient {
         if result.is_ok() {
             self.cached_tasks.invalidate().await;
             tracing::debug!("Asana cache invalidated after completing task");
+        }
+
+        result
+    }
+
+    pub async fn incomplete_task(&self, gid: &str) -> Result<()> {
+        let guard = self.client.read().await;
+        let result = match &*guard {
+            Some(c) => c.incomplete_task(gid).await,
+            None => anyhow::bail!("Asana not configured"),
+        };
+
+        if result.is_ok() {
+            self.cached_tasks.invalidate().await;
+            tracing::debug!("Asana cache invalidated after marking task incomplete");
         }
 
         result
