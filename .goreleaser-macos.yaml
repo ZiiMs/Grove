@@ -26,6 +26,9 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
 
+checksum:
+  split: true
+
 homebrew_casks:
   - name: grove
     homepage: https://github.com/ziim/grove
