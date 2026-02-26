@@ -173,10 +173,7 @@ pub enum AgentStatus {
     Idle,
     /// Agent encountered an error (✗ red)
     Error(String),
-    /// Agent is stopped/not started (○ gray)
     Stopped,
-    /// Agent is paused for checkout (⏸ blue)
-    Paused,
 }
 
 impl AgentStatus {
@@ -188,7 +185,6 @@ impl AgentStatus {
             AgentStatus::Idle => "○",
             AgentStatus::Error(_) => "✗",
             AgentStatus::Stopped => "○",
-            AgentStatus::Paused => "⏸",
         }
     }
 
@@ -200,7 +196,6 @@ impl AgentStatus {
             AgentStatus::Idle => "Idle",
             AgentStatus::Error(_) => "Error",
             AgentStatus::Stopped => "Stopped",
-            AgentStatus::Paused => "PAUSED",
         }
     }
 }

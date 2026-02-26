@@ -158,8 +158,7 @@ pub enum SettingsField {
     KbAttach,
     KbSetNote,
     KbYank,
-    KbPause,
-    KbResume,
+    KbCopyPath,
     KbToggleContinue,
     KbMerge,
     KbPush,
@@ -402,8 +401,7 @@ impl SettingsField {
             | SettingsField::KbAttach
             | SettingsField::KbSetNote
             | SettingsField::KbYank
-            | SettingsField::KbPause
-            | SettingsField::KbResume
+            | SettingsField::KbCopyPath
             | SettingsField::KbToggleContinue
             | SettingsField::KbMerge
             | SettingsField::KbPush
@@ -444,8 +442,8 @@ impl SettingsField {
                 | SettingsField::KbAttach
                 | SettingsField::KbSetNote
                 | SettingsField::KbYank
-                | SettingsField::KbPause
-                | SettingsField::KbResume
+                | SettingsField::KbCopyPath
+                | SettingsField::KbToggleContinue
                 | SettingsField::KbMerge
                 | SettingsField::KbPush
                 | SettingsField::KbFetch
@@ -477,8 +475,7 @@ impl SettingsField {
             SettingsField::KbAttach => Some("Attach to Agent"),
             SettingsField::KbSetNote => Some("Set Note"),
             SettingsField::KbYank => Some("Copy Name"),
-            SettingsField::KbPause => Some("Pause Agent"),
-            SettingsField::KbResume => Some("Resume/Refresh"),
+            SettingsField::KbCopyPath => Some("Copy Cd Command"),
             SettingsField::KbToggleContinue => Some("Toggle Continue"),
             SettingsField::KbMerge => Some("Merge Main"),
             SettingsField::KbPush => Some("Push Changes"),
@@ -660,8 +657,7 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::KbSetNote),
                 SettingsItem::Field(SettingsField::KbYank),
                 SettingsItem::Category(SettingsCategory::KeybindGit),
-                SettingsItem::Field(SettingsField::KbPause),
-                SettingsItem::Field(SettingsField::KbResume),
+                SettingsItem::Field(SettingsField::KbCopyPath),
                 SettingsItem::Field(SettingsField::KbToggleContinue),
                 SettingsItem::Field(SettingsField::KbMerge),
                 SettingsItem::Field(SettingsField::KbPush),
@@ -846,8 +842,7 @@ impl SettingsState {
             SettingsField::KbAttach => Some(&self.pending_keybinds.attach),
             SettingsField::KbSetNote => Some(&self.pending_keybinds.set_note),
             SettingsField::KbYank => Some(&self.pending_keybinds.yank),
-            SettingsField::KbPause => Some(&self.pending_keybinds.pause),
-            SettingsField::KbResume => Some(&self.pending_keybinds.resume),
+            SettingsField::KbCopyPath => Some(&self.pending_keybinds.copy_path),
             SettingsField::KbToggleContinue => Some(&self.pending_keybinds.toggle_continue),
             SettingsField::KbMerge => Some(&self.pending_keybinds.merge),
             SettingsField::KbPush => Some(&self.pending_keybinds.push),
@@ -881,8 +876,7 @@ impl SettingsState {
             SettingsField::KbAttach => self.pending_keybinds.attach = keybind,
             SettingsField::KbSetNote => self.pending_keybinds.set_note = keybind,
             SettingsField::KbYank => self.pending_keybinds.yank = keybind,
-            SettingsField::KbPause => self.pending_keybinds.pause = keybind,
-            SettingsField::KbResume => self.pending_keybinds.resume = keybind,
+            SettingsField::KbCopyPath => self.pending_keybinds.copy_path = keybind,
             SettingsField::KbToggleContinue => self.pending_keybinds.toggle_continue = keybind,
             SettingsField::KbMerge => self.pending_keybinds.merge = keybind,
             SettingsField::KbPush => self.pending_keybinds.push = keybind,
@@ -1025,6 +1019,7 @@ pub struct AppState {
     pub devserver_scroll: usize,
     pub gitdiff_content: Option<String>,
     pub gitdiff_scroll: usize,
+    pub gitdiff_line_count: usize,
     pub devserver_warning: Option<DevServerWarning>,
     pub task_reassignment_warning: Option<TaskReassignmentWarning>,
     pub task_list: Vec<TaskListItem>,
@@ -1188,6 +1183,7 @@ impl AppState {
             devserver_scroll: 0,
             gitdiff_content: None,
             gitdiff_scroll: 0,
+            gitdiff_line_count: 0,
             devserver_warning: None,
             task_reassignment_warning: None,
             task_list: Vec::new(),

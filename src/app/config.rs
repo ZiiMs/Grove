@@ -550,10 +550,8 @@ pub struct Keybinds {
     pub set_note: Keybind,
     #[serde(default = "default_yank")]
     pub yank: Keybind,
-    #[serde(default = "default_pause")]
-    pub pause: Keybind,
-    #[serde(default = "default_resume")]
-    pub resume: Keybind,
+    #[serde(default = "default_copy_path")]
+    pub copy_path: Keybind,
     #[serde(default = "default_toggle_continue")]
     pub toggle_continue: Keybind,
     #[serde(default = "default_merge")]
@@ -619,11 +617,8 @@ fn default_set_note() -> Keybind {
 fn default_yank() -> Keybind {
     Keybind::new("y")
 }
-fn default_pause() -> Keybind {
+fn default_copy_path() -> Keybind {
     Keybind::new("c")
-}
-fn default_resume() -> Keybind {
-    Keybind::new("r")
 }
 fn default_toggle_continue() -> Keybind {
     Keybind::with_modifiers("c", vec!["Shift".to_string()])
@@ -692,8 +687,7 @@ impl Default for Keybinds {
             attach: default_attach(),
             set_note: default_set_note(),
             yank: default_yank(),
-            pause: default_pause(),
-            resume: default_resume(),
+            copy_path: default_copy_path(),
             toggle_continue: default_toggle_continue(),
             merge: default_merge(),
             push: default_push(),
@@ -728,8 +722,8 @@ impl Keybinds {
             ("attach", &self.attach),
             ("set_note", &self.set_note),
             ("yank", &self.yank),
-            ("pause", &self.pause),
-            ("resume", &self.resume),
+            ("copy_path", &self.copy_path),
+            ("toggle_continue", &self.toggle_continue),
             ("merge", &self.merge),
             ("push", &self.push),
             ("fetch", &self.fetch),

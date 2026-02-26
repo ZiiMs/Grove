@@ -1167,12 +1167,6 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         }
     }
 
-    // Check if selected agent is paused
-    let is_paused = state
-        .selected_agent()
-        .map(|a| matches!(a.status, grove::agent::AgentStatus::Paused))
-        .unwrap_or(false);
-
     let kb = &state.config.keybinds;
 
     // Quit (Ctrl+C always works)
@@ -1197,15 +1191,8 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return Some(Action::SelectLast);
     }
 
-    // Resume (only when paused)
-    if is_paused && matches_keybind(key, &kb.resume) {
-        return state
-            .selected_agent_id()
-            .map(|id| Action::ResumeAgent { id });
-    }
-
-    // Refresh selected agent status (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.resume) && state.selected_agent_id().is_some() {
+    // Refresh selected agent status
+    if matches_keybind(key, &kb.refresh_task_list) && state.selected_agent_id().is_some() {
         return Some(Action::RefreshSelected);
     }
 
@@ -1259,35 +1246,32 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         };
     }
 
-    // Pause (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.pause) {
+    // Copy worktree path to clipboard
+    if matches_keybind(key, &kb.copy_path) {
         return state
             .selected_agent_id()
-            .map(|id| Action::PauseAgent { id });
+            .map(|id| Action::CopyWorktreePath { id });
     }
 
-    // Merge (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.merge) && state.selected_agent_id().is_some() {
+    // Merge
+    if matches_keybind(key, &kb.merge) && state.selected_agent_id().is_some() {
         return Some(Action::EnterInputMode(InputMode::ConfirmMerge));
     }
 
-    // Push (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.push) && state.selected_agent_id().is_some() {
+    // Push
+    if matches_keybind(key, &kb.push) && state.selected_agent_id().is_some() {
         return Some(Action::EnterInputMode(InputMode::ConfirmPush));
     }
 
-    // Fetch (only when not paused)
-    if !is_paused && matches_keybind(key, &kb.fetch) {
+    // Fetch
+    if matches_keybind(key, &kb.fetch) {
         return state
             .selected_agent_id()
             .map(|id| Action::FetchRemote { id });
     }
 
-    // Summary (only when not paused)
-    if !is_paused
-        && matches_keybind(key, &kb.summary)
-        && !key.modifiers.contains(KeyModifiers::CONTROL)
-    {
+    // Summary
+    if matches_keybind(key, &kb.summary) && !key.modifiers.contains(KeyModifiers::CONTROL) {
         return state
             .selected_agent_id()
             .map(|id| Action::RequestSummary { id });
@@ -1325,7 +1309,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     }
 
     // Open in editor
-    if !is_paused && matches_keybind(key, &kb.open_editor) {
+    if matches_keybind(key, &kb.open_editor) {
         return state
             .selected_agent_id()
             .map(|id| Action::OpenInEditor { id });
@@ -2201,10 +2185,6 @@ async fn process_action(
             status_reason,
         } => {
             if let Some(agent) = state.agents.get_mut(&id) {
-                if matches!(agent.status, grove::agent::AgentStatus::Paused) {
-                    return Ok(false);
-                }
-
                 let old_label = agent.status.label();
                 let new_label = status.label();
                 let name = agent.name.clone();
@@ -2232,176 +2212,25 @@ async fn process_action(
             }
         }
 
-        // Git operations
-        Action::CheckoutBranch { id: _ } => {
-            // Deprecated - use PauseAgent instead
-        }
+        Action::CopyWorktreePath { id } => {
+            if let Some(agent) = state.agents.get(&id) {
+                let worktree_path = agent.worktree_path.clone();
+                let cd_cmd = format!("cd {}", worktree_path);
 
-        Action::PauseAgent { id } => {
-            // Get agent info before spawning background task
-            let agent_info = state.agents.get(&id).map(|a| {
-                (
-                    a.name.clone(),
-                    a.branch.clone(),
-                    a.worktree_path.clone(),
-                    a.tmux_session.clone(),
-                )
-            });
+                // Copy to clipboard
+                let clipboard_result = Clipboard::new().and_then(|mut c| c.set_text(&cd_cmd));
 
-            if let Some((name, branch, worktree_path, _tmux_session)) = agent_info {
-                state.log_info(format!("Pausing agent '{}'...", name));
-                state.loading_message = Some(format!("Pausing '{}'...", name));
+                // Print to stdout (visible when app exits)
+                println!("{}", cd_cmd);
 
-                // Spawn background task
-                let tx = action_tx.clone();
-                let name_clone = name.clone();
-                let branch_clone = branch.clone();
-                tokio::spawn(async move {
-                    // 1. Commit any uncommitted changes
-                    let commit_result = std::process::Command::new("git")
-                        .args(["-C", &worktree_path, "add", "-A"])
-                        .output();
-                    if commit_result.is_ok() {
-                        let _ = std::process::Command::new("git")
-                            .args([
-                                "-C",
-                                &worktree_path,
-                                "commit",
-                                "-m",
-                                &format!("[GROVE] {}", name_clone),
-                            ])
-                            .output();
-                    }
+                let message = if clipboard_result.is_ok() {
+                    format!("Copied: {}", cd_cmd)
+                } else {
+                    format!("cd command: {}", cd_cmd)
+                };
 
-                    // 2. DON'T kill tmux session - just leave it running (preserves Claude context)
-                    // The tmux session stays alive but detached
-
-                    // 3. DON'T remove worktree - keep it so agent stays functional
-                    // The worktree stays intact so the agent can continue working
-
-                    // 4. Get HEAD commit SHA for checkout command
-                    let head_sha = std::process::Command::new("git")
-                        .args(["-C", &worktree_path, "rev-parse", "HEAD"])
-                        .output()
-                        .ok()
-                        .and_then(|output| {
-                            if output.status.success() {
-                                String::from_utf8(output.stdout).ok()
-                            } else {
-                                None
-                            }
-                        })
-                        .map(|s| s.trim().to_string())
-                        .unwrap_or_else(|| branch_clone.clone());
-
-                    // 5. Copy detach checkout command to clipboard
-                    let checkout_cmd = format!("git checkout --detach {}", head_sha);
-                    let clipboard_result =
-                        Clipboard::new().and_then(|mut c| c.set_text(&checkout_cmd));
-                    let message = if clipboard_result.is_ok() {
-                        "Checkout command copied. Press 'r' to resume.".to_string()
-                    } else {
-                        format!("Paused '{}'. Press 'r' to resume.", name_clone)
-                    };
-
-                    // Send completion
-                    let _ = tx.send(Action::PauseAgentComplete {
-                        id,
-                        success: true,
-                        message,
-                    });
-                });
-            }
-        }
-
-        Action::ResumeAgent { id } => {
-            let agent_info = state.agents.get(&id).map(|a| {
-                (
-                    a.name.clone(),
-                    a.branch.clone(),
-                    a.worktree_path.clone(),
-                    a.tmux_session.clone(),
-                )
-            });
-
-            if let Some((name, branch, worktree_path, tmux_session)) = agent_info {
-                state.log_info(format!("Resuming agent '{}'...", name));
-                state.loading_message = Some(format!("Resuming '{}'...", name));
-
-                let tx = action_tx.clone();
-                let name_clone = name.clone();
-                let ai_agent = state.config.global.ai_agent.clone();
-                let repo_path = state.repo_path.clone();
-                let worktree_symlinks = state
-                    .settings
-                    .repo_config
-                    .dev_server
-                    .worktree_symlinks
-                    .clone();
-                let worktree_base = state.worktree_base.clone();
-                tokio::spawn(async move {
-                    // Check if worktree already exists
-                    let worktree_exists = std::path::Path::new(&worktree_path).exists();
-
-                    if !worktree_exists {
-                        // Recreate worktree
-                        let worktree_result = std::process::Command::new("git")
-                            .args(["worktree", "add", &worktree_path, &branch])
-                            .output();
-
-                        if let Err(e) = worktree_result {
-                            let _ = tx.send(Action::ResumeAgentComplete {
-                                id,
-                                success: false,
-                                message: format!("Failed to recreate worktree: {}", e),
-                            });
-                            return;
-                        }
-
-                        let worktree_output = worktree_result.unwrap();
-                        if !worktree_output.status.success() {
-                            let stderr = String::from_utf8_lossy(&worktree_output.stderr);
-                            let message = if stderr.contains("already checked out") {
-                                "Cannot resume: branch is checked out elsewhere. Switch branches first.".to_string()
-                            } else {
-                                format!("Failed to resume: {}", stderr)
-                            };
-                            let _ = tx.send(Action::ResumeAgentComplete {
-                                id,
-                                success: false,
-                                message,
-                            });
-                            return;
-                        }
-
-                        // Create symlinks for newly created worktree
-                        let worktree = grove::git::Worktree::new(&repo_path, worktree_base);
-                        if let Err(e) = worktree.create_symlinks(&worktree_path, &worktree_symlinks)
-                        {
-                            // Log but don't fail - symlinks are optional
-                            eprintln!("Warning: Failed to create symlinks: {}", e);
-                        }
-                    }
-
-                    let session = grove::tmux::TmuxSession::new(&tmux_session);
-                    if !session.exists() {
-                        if let Err(e) = session.create(&worktree_path, ai_agent.command()) {
-                            let _ = tx.send(Action::ResumeAgentComplete {
-                                id,
-                                success: false,
-                                message: format!("Failed to create tmux session: {}", e),
-                            });
-                            return;
-                        }
-                    }
-                    // If session exists, Claude context is preserved!
-
-                    let _ = tx.send(Action::ResumeAgentComplete {
-                        id,
-                        success: true,
-                        message: format!("Resumed '{}'", name_clone),
-                    });
-                });
+                state.log_info(&message);
+                state.show_success(message);
             }
         }
 
@@ -6195,7 +6024,13 @@ async fn process_action(
         }
 
         Action::UpdateGitDiffContent(content) => {
-            state.gitdiff_content = content;
+            state.gitdiff_content = content.clone();
+            if let Some(diff) = content {
+                let line_count = diff.lines().count();
+                state.gitdiff_line_count = line_count;
+            } else {
+                state.gitdiff_line_count = 0;
+            }
         }
 
         Action::DeleteAgentComplete {
@@ -6220,42 +6055,6 @@ async fn process_action(
                 state.log_error(&message);
             }
             state.show_info(message);
-        }
-
-        Action::PauseAgentComplete {
-            id,
-            success,
-            message,
-        } => {
-            state.loading_message = None;
-            if success {
-                if let Some(agent) = state.agents.get_mut(&id) {
-                    agent.status = grove::agent::AgentStatus::Paused;
-                }
-                state.log_info(&message);
-                state.show_success(message);
-            } else {
-                state.log_error(&message);
-                state.show_error(message);
-            }
-        }
-
-        Action::ResumeAgentComplete {
-            id,
-            success,
-            message,
-        } => {
-            state.loading_message = None;
-            if success {
-                if let Some(agent) = state.agents.get_mut(&id) {
-                    agent.status = grove::agent::AgentStatus::Running;
-                }
-                state.log_info(&message);
-                state.show_success(message);
-            } else {
-                state.log_error(&message);
-                state.show_error(message);
-            }
         }
 
         // Settings actions
@@ -9853,7 +9652,8 @@ async fn process_action(
                 state.output_scroll = state.output_scroll.saturating_sub(10);
             }
             PreviewTab::GitDiff => {
-                state.gitdiff_scroll = state.gitdiff_scroll.saturating_add(10);
+                let max_scroll = state.gitdiff_line_count.saturating_sub(1);
+                state.gitdiff_scroll = state.gitdiff_scroll.saturating_add(10).min(max_scroll);
             }
             PreviewTab::DevServer => {}
         },
