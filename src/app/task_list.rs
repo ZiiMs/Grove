@@ -15,6 +15,14 @@ impl TaskItemStatus {
             TaskItemStatus::Completed => "Completed",
         }
     }
+
+    pub fn all() -> &'static [TaskItemStatus] {
+        &[
+            TaskItemStatus::NotStarted,
+            TaskItemStatus::InProgress,
+            TaskItemStatus::Completed,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

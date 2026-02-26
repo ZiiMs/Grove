@@ -253,6 +253,24 @@ pub enum AutomationActionType {
     Delete,
 }
 
+fn default_hidden_status_names() -> Vec<String> {
+    vec![]
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskListConfig {
+    #[serde(default = "default_hidden_status_names")]
+    pub hidden_status_names: Vec<String>,
+}
+
+impl Default for TaskListConfig {
+    fn default() -> Self {
+        Self {
+            hidden_status_names: default_hidden_status_names(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
@@ -277,6 +295,8 @@ pub struct Config {
     pub keybinds: Keybinds,
     #[serde(default)]
     pub automation: AutomationConfig,
+    #[serde(default)]
+    pub task_list: TaskListConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -588,6 +608,8 @@ pub struct Keybinds {
     pub refresh_task_list: Keybind,
     #[serde(default = "default_debug_status")]
     pub debug_status: Keybind,
+    #[serde(default = "default_toggle_task_filter")]
+    pub toggle_task_filter: Keybind,
 }
 
 fn default_nav_down() -> Keybind {
@@ -674,6 +696,9 @@ fn default_refresh_task_list() -> Keybind {
 fn default_debug_status() -> Keybind {
     Keybind::new("i")
 }
+fn default_toggle_task_filter() -> Keybind {
+    Keybind::new("f")
+}
 
 impl Default for Keybinds {
     fn default() -> Self {
@@ -706,6 +731,7 @@ impl Default for Keybinds {
             show_tasks: default_show_tasks(),
             refresh_task_list: default_refresh_task_list(),
             debug_status: default_debug_status(),
+            toggle_task_filter: default_toggle_task_filter(),
         }
     }
 }
@@ -741,6 +767,7 @@ impl Keybinds {
             ("show_tasks", &self.show_tasks),
             ("refresh_task_list", &self.refresh_task_list),
             ("debug_status", &self.debug_status),
+            ("toggle_task_filter", &self.toggle_task_filter),
         ]
     }
 
