@@ -1,10 +1,9 @@
 version: 2
 
-force_token: github
-
 before:
   hooks:
     - rustup default stable
+    - cargo install --locked cargo-zigbuild
     - cargo fetch --locked
 
 builds:
