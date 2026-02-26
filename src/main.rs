@@ -9056,7 +9056,7 @@ async fn process_action(
             let provider = state.settings.repo_config.project_mgmt.provider;
             let tx = action_tx.clone();
 
-            let default_options = vec![
+            let fallback_options = vec![
                 StatusOption {
                     id: "in_progress".to_string(),
                     name: "In Progress".to_string(),
@@ -9074,6 +9074,7 @@ async fn process_action(
             match provider {
                 grove::app::config::ProjectMgmtProvider::Asana => {
                     let client = asana_client.clone();
+                    let fallback = fallback_options.clone();
                     tokio::spawn(async move {
                         match client.get_sections().await {
                             Ok(sections) => {
@@ -9083,12 +9084,6 @@ async fn process_action(
                                         id: s.gid,
                                         name: s.name,
                                     })
-                                    .chain(default_options.into_iter().filter(|opt| {
-                                        !matches!(
-                                            opt.name.as_str(),
-                                            "In Progress" | "Done" | "Completed"
-                                        )
-                                    }))
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
                             }
@@ -9098,28 +9093,119 @@ async fn process_action(
                                     e
                                 );
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded {
-                                    options: vec![
-                                        StatusOption {
-                                            id: "in_progress".to_string(),
-                                            name: "In Progress".to_string(),
-                                        },
-                                        StatusOption {
-                                            id: "done".to_string(),
-                                            name: "Done".to_string(),
-                                        },
-                                        StatusOption {
-                                            id: "completed".to_string(),
-                                            name: "Completed".to_string(),
-                                        },
-                                    ],
+                                    options: fallback,
                                 });
                             }
                         }
                     });
                 }
-                _ => {
-                    let _ = action_tx.send(Action::AutomationStatusOptionsLoaded {
-                        options: default_options,
+                grove::app::config::ProjectMgmtProvider::Notion => {
+                    let client = notion_client.clone();
+                    let fallback = fallback_options.clone();
+                    tokio::spawn(async move {
+                        match client.get_status_options().await {
+                            Ok(opts) => {
+                                let options: Vec<StatusOption> = opts
+                                    .all_options
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.id,
+                                        name: o.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Notion status options for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: fallback,
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Clickup => {
+                    let client = clickup_client.clone();
+                    let fallback = fallback_options.clone();
+                    tokio::spawn(async move {
+                        match client.get_statuses().await {
+                            Ok(statuses) => {
+                                let options: Vec<StatusOption> = statuses
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.status.clone(),
+                                        name: s.status,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load ClickUp statuses for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: fallback,
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Airtable => {
+                    let client = airtable_client.clone();
+                    let fallback = fallback_options.clone();
+                    tokio::spawn(async move {
+                        match client.get_status_options().await {
+                            Ok(opts) => {
+                                let options: Vec<StatusOption> = opts
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.name.clone(),
+                                        name: o.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Airtable status options for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: fallback,
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Linear => {
+                    let client = linear_client.clone();
+                    let fallback = fallback_options.clone();
+                    tokio::spawn(async move {
+                        match client.get_workflow_states().await {
+                            Ok(states) => {
+                                let options: Vec<StatusOption> = states
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.id,
+                                        name: s.name,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Linear workflow states for automation: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::AutomationStatusOptionsLoaded {
+                                    options: fallback,
+                                });
+                            }
+                        }
                     });
                 }
             }
