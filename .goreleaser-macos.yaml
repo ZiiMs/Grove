@@ -29,18 +29,17 @@ archives:
 checksum:
   split: true
 
-homebrew_casks:
+brews:
   - name: grove
-    homepage: https://github.com/ziim/grove
+    homepage: https://github.com/ZiiMs/grove
     description: A TUI for managing multiple Claude Code agents with git worktree isolation
     license: MIT
     repository:
-      owner: ziim
+      owner: ZiiMs
       name: homebrew-grove
       branch: main
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/grove"]
-          end
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    install: |
+      bin.install "grove"
