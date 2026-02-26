@@ -147,6 +147,8 @@ pub enum SettingsField {
     AutomationOnTaskAssign,
     AutomationOnPush,
     AutomationOnDelete,
+    AutomationOnTaskAssignSubtask,
+    AutomationOnDeleteSubtask,
     KbNavDown,
     KbNavUp,
     KbNavFirst,
@@ -197,6 +199,7 @@ pub enum SettingsCategory {
     Prompts,
     DevServer,
     Automation,
+    AsanaSubtasks,
     KeybindNav,
     KeybindAgent,
     KeybindGit,
@@ -314,6 +317,7 @@ impl SettingsCategory {
             SettingsCategory::Prompts => "Prompts",
             SettingsCategory::DevServer => "Dev Server",
             SettingsCategory::Automation => "Automation",
+            SettingsCategory::AsanaSubtasks => "Asana Subtasks",
             SettingsCategory::KeybindNav => "Navigation",
             SettingsCategory::KeybindAgent => "Agent Management",
             SettingsCategory::KeybindGit => "Git Operations",
@@ -386,7 +390,9 @@ impl SettingsField {
             | SettingsField::WorktreeSymlinks => SettingsTab::DevServer,
             SettingsField::AutomationOnTaskAssign
             | SettingsField::AutomationOnPush
-            | SettingsField::AutomationOnDelete => SettingsTab::Automation,
+            | SettingsField::AutomationOnDelete
+            | SettingsField::AutomationOnTaskAssignSubtask
+            | SettingsField::AutomationOnDeleteSubtask => SettingsTab::Automation,
             SettingsField::KbNavDown
             | SettingsField::KbNavUp
             | SettingsField::KbNavFirst
@@ -505,6 +511,8 @@ impl SettingsField {
             SettingsField::AutomationOnTaskAssign
                 | SettingsField::AutomationOnPush
                 | SettingsField::AutomationOnDelete
+                | SettingsField::AutomationOnTaskAssignSubtask
+                | SettingsField::AutomationOnDeleteSubtask
         )
     }
 }
@@ -620,13 +628,25 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::WorktreeSymlinks),
                 SettingsItem::ActionButton(ActionButtonType::ResetTab),
             ],
-            SettingsTab::Automation => vec![
-                SettingsItem::Category(SettingsCategory::Automation),
-                SettingsItem::Field(SettingsField::AutomationOnTaskAssign),
-                SettingsItem::Field(SettingsField::AutomationOnPush),
-                SettingsItem::Field(SettingsField::AutomationOnDelete),
-                SettingsItem::ActionButton(ActionButtonType::ResetTab),
-            ],
+            SettingsTab::Automation => {
+                let mut items = vec![
+                    SettingsItem::Category(SettingsCategory::Automation),
+                    SettingsItem::Field(SettingsField::AutomationOnTaskAssign),
+                    SettingsItem::Field(SettingsField::AutomationOnPush),
+                    SettingsItem::Field(SettingsField::AutomationOnDelete),
+                ];
+                if pm_provider == ProjectMgmtProvider::Asana {
+                    items.push(SettingsItem::Category(SettingsCategory::AsanaSubtasks));
+                    items.push(SettingsItem::Field(
+                        SettingsField::AutomationOnTaskAssignSubtask,
+                    ));
+                    items.push(SettingsItem::Field(
+                        SettingsField::AutomationOnDeleteSubtask,
+                    ));
+                }
+                items.push(SettingsItem::ActionButton(ActionButtonType::ResetTab));
+                items
+            }
             SettingsTab::Keybinds => vec![
                 SettingsItem::Category(SettingsCategory::KeybindNav),
                 SettingsItem::Field(SettingsField::KbNavDown),

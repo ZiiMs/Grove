@@ -36,12 +36,6 @@ pub async fn execute_automation(
         return Ok(());
     }
 
-    if lower == "completed" || lower == "done" {
-        asana_client.complete_task(task_gid).await?;
-        debug!("Automation: marked task {} as completed", task_gid);
-        return Ok(());
-    }
-
     let sections = match asana_client.get_sections().await {
         Ok(s) => s,
         Err(e) => {
