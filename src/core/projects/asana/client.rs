@@ -770,4 +770,36 @@ impl OptionalAsanaClient {
         self.cached_tasks.invalidate().await;
         tracing::debug!("Asana cache manually invalidated");
     }
+
+    pub async fn fetch_statuses(&self) -> Result<crate::core::projects::ProviderStatuses> {
+        use crate::core::projects::{ProviderStatuses, StatusPayload};
+
+        let sections = self.get_sections().await?;
+        let parent: Vec<StatusPayload> = sections
+            .into_iter()
+            .map(|s| StatusPayload {
+                id: s.gid,
+                name: s.name,
+                status_type: None,
+                color: None,
+            })
+            .collect();
+
+        let children = vec![
+            StatusPayload {
+                id: "completed".to_string(),
+                name: "Completed".to_string(),
+                status_type: Some("done".to_string()),
+                color: None,
+            },
+            StatusPayload {
+                id: "not_completed".to_string(),
+                name: "Not Completed".to_string(),
+                status_type: Some("todo".to_string()),
+                color: None,
+            },
+        ];
+
+        Ok(ProviderStatuses::with_children(parent, children))
+    }
 }

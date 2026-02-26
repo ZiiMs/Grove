@@ -1090,6 +1090,52 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         }
     }
 
+    // Handle PM status debug overlay
+    if state.pm_status_debug.active {
+        use grove::app::state::PmStatusDebugStep;
+        return match key.code {
+            KeyCode::Esc => Some(Action::ClosePmStatusDebug),
+            KeyCode::Char('j') | KeyCode::Down => {
+                if matches!(
+                    state.pm_status_debug.step,
+                    PmStatusDebugStep::SelectProvider
+                ) {
+                    Some(Action::PmStatusDebugSelectNext)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if matches!(
+                    state.pm_status_debug.step,
+                    PmStatusDebugStep::SelectProvider
+                ) {
+                    Some(Action::PmStatusDebugSelectPrev)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Enter => {
+                if matches!(
+                    state.pm_status_debug.step,
+                    PmStatusDebugStep::SelectProvider
+                ) {
+                    Some(Action::PmStatusDebugFetchSelected)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('c') => {
+                if matches!(state.pm_status_debug.step, PmStatusDebugStep::ShowPayload) {
+                    Some(Action::PmStatusDebugCopyPayload)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+    }
+
     // Handle global setup wizard
     if state.show_global_setup {
         if let Some(wizard) = &state.global_setup {
@@ -1395,6 +1441,11 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Status debug
     if matches_keybind(key, &kb.debug_status) {
         return Some(Action::ToggleStatusDebug);
+    }
+
+    // PM status debug (Shift+Q - hardcoded)
+    if key.code == KeyCode::Char('Q') {
+        return Some(Action::OpenPmStatusDebug);
     }
 
     match key.code {
@@ -5596,6 +5647,158 @@ async fn process_action(
                 state.show_status_debug = !state.show_status_debug;
             } else {
                 state.show_info("Debug mode is disabled. Enable it in Settings > General.");
+            }
+        }
+
+        // PM Status Debug
+        Action::OpenPmStatusDebug => {
+            state.pm_status_debug.active = true;
+            state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::SelectProvider;
+            state.pm_status_debug.selected_index = 0;
+            state.pm_status_debug.selected_provider = None;
+            state.pm_status_debug.loading = false;
+            state.pm_status_debug.payload = None;
+            state.pm_status_debug.error = None;
+        }
+
+        Action::ClosePmStatusDebug => {
+            state.pm_status_debug.active = false;
+            state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::SelectProvider;
+            state.pm_status_debug.payload = None;
+            state.pm_status_debug.error = None;
+        }
+
+        Action::PmStatusDebugSelectNext => {
+            let providers = grove::app::config::ProjectMgmtProvider::all();
+            if state.pm_status_debug.selected_index < providers.len() - 1 {
+                state.pm_status_debug.selected_index += 1;
+            }
+        }
+
+        Action::PmStatusDebugSelectPrev => {
+            if state.pm_status_debug.selected_index > 0 {
+                state.pm_status_debug.selected_index -= 1;
+            }
+        }
+
+        Action::PmStatusDebugFetchSelected => {
+            use grove::app::config::ProjectMgmtProvider;
+
+            let providers = ProjectMgmtProvider::all();
+            if let Some(&provider) = providers.get(state.pm_status_debug.selected_index) {
+                state.pm_status_debug.selected_provider = Some(provider);
+                state.pm_status_debug.loading = true;
+                state.pm_status_debug.error = None;
+
+                let is_configured = match provider {
+                    ProjectMgmtProvider::Asana => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .asana
+                        .project_gid
+                        .is_some(),
+                    ProjectMgmtProvider::Notion => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .database_id
+                        .is_some(),
+                    ProjectMgmtProvider::Clickup => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .clickup
+                        .list_id
+                        .is_some(),
+                    ProjectMgmtProvider::Airtable => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .airtable
+                        .base_id
+                        .is_some(),
+                    ProjectMgmtProvider::Linear => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .linear
+                        .team_id
+                        .is_some(),
+                };
+
+                if !is_configured {
+                    state.pm_status_debug.loading = false;
+                    state.pm_status_debug.error =
+                        Some(format!("{} is not configured.", provider.display_name()));
+                    state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::ShowPayload;
+                } else {
+                    let asana_client = Arc::clone(asana_client);
+                    let notion_client = Arc::clone(notion_client);
+                    let clickup_client = Arc::clone(clickup_client);
+                    let airtable_client = Arc::clone(airtable_client);
+                    let linear_client = Arc::clone(linear_client);
+                    let tx = action_tx.clone();
+
+                    tokio::spawn(async move {
+                        let result = match provider {
+                            ProjectMgmtProvider::Asana => asana_client.fetch_statuses().await,
+                            ProjectMgmtProvider::Notion => notion_client.fetch_statuses().await,
+                            ProjectMgmtProvider::Clickup => clickup_client.fetch_statuses().await,
+                            ProjectMgmtProvider::Airtable => airtable_client.fetch_statuses().await,
+                            ProjectMgmtProvider::Linear => linear_client.fetch_statuses().await,
+                        };
+
+                        match result {
+                            Ok(statuses) => {
+                                let payload = serde_json::to_string_pretty(&statuses)
+                                    .unwrap_or_else(|e| format!("Failed to serialize: {}", e));
+                                let _ = tx.send(Action::PmStatusDebugFetched { provider, payload });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Action::PmStatusDebugFetchError {
+                                    provider,
+                                    error: e.to_string(),
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        Action::PmStatusDebugFetched { provider, payload } => {
+            if state.pm_status_debug.selected_provider == Some(provider) {
+                state.pm_status_debug.loading = false;
+                state.pm_status_debug.payload = Some(payload);
+                state.pm_status_debug.error = None;
+                state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::ShowPayload;
+            }
+        }
+
+        Action::PmStatusDebugFetchError { provider, error } => {
+            if state.pm_status_debug.selected_provider == Some(provider) {
+                state.pm_status_debug.loading = false;
+                state.pm_status_debug.error = Some(error);
+                state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::ShowPayload;
+            }
+        }
+
+        Action::PmStatusDebugCopyPayload => {
+            if let Some(ref payload) = state.pm_status_debug.payload {
+                match Clipboard::new() {
+                    Ok(mut clipboard) => {
+                        if let Err(e) = clipboard.set_text(payload) {
+                            state.log_error(format!("Failed to copy to clipboard: {}", e));
+                        } else {
+                            state.show_info("Payload copied to clipboard");
+                        }
+                    }
+                    Err(e) => {
+                        state.log_error(format!("Failed to access clipboard: {}", e));
+                    }
+                }
             }
         }
 

@@ -1031,6 +1031,7 @@ pub struct AppState {
     pub subtask_status_dropdown: Option<SubtaskStatusDropdownState>,
     pub agent_list_scroll: usize,
     pub show_status_debug: bool,
+    pub pm_status_debug: PmStatusDebugState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1116,6 +1117,24 @@ pub struct SubtaskStatusDropdownState {
     pub task_name: String,
     pub current_completed: bool,
     pub selected_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PmStatusDebugStep {
+    #[default]
+    SelectProvider,
+    ShowPayload,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PmStatusDebugState {
+    pub active: bool,
+    pub step: PmStatusDebugStep,
+    pub selected_index: usize,
+    pub selected_provider: Option<crate::app::config::ProjectMgmtProvider>,
+    pub loading: bool,
+    pub payload: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1237,6 +1256,7 @@ impl AppState {
             subtask_status_dropdown: None,
             agent_list_scroll: 0,
             show_status_debug: false,
+            pm_status_debug: PmStatusDebugState::default(),
         }
     }
 

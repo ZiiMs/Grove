@@ -429,6 +429,23 @@ impl OptionalClickUpClient {
         self.cached_tasks.invalidate().await;
         tracing::debug!("ClickUp cache manually invalidated");
     }
+
+    pub async fn fetch_statuses(&self) -> Result<crate::core::projects::ProviderStatuses> {
+        use crate::core::projects::{ProviderStatuses, StatusPayload};
+
+        let statuses = self.get_statuses().await?;
+        let parent: Vec<StatusPayload> = statuses
+            .into_iter()
+            .map(|s| StatusPayload {
+                id: s.status.clone(),
+                name: s.status,
+                status_type: Some(s.status_type),
+                color: s.color,
+            })
+            .collect();
+
+        Ok(ProviderStatuses::new(parent))
+    }
 }
 
 pub async fn fetch_teams(token: &str) -> Result<Vec<(String, String, String)>> {

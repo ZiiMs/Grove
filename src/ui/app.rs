@@ -17,9 +17,9 @@ use super::components::{
     render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
     DevServerWarningModal, DiffViewWidget, EmptyDevServerWidget, EmptyDiffWidget,
     EmptyOutputWidget, GitSetupModal, GlobalSetupWizard, HelpOverlay, LoadingOverlay,
-    OutputViewWidget, PmSetupModal, ProjectSetupWizard, SettingsModal, StatusBarWidget,
-    StatusDebugOverlay, StatusDropdown, SubtaskStatusDropdown, SystemMetricsWidget, TaskListModal,
-    TaskReassignmentWarningModal, ToastWidget,
+    OutputViewWidget, PmSetupModal, PmStatusDebugOverlay, ProjectSetupWizard, SettingsModal,
+    StatusBarWidget, StatusDebugOverlay, StatusDropdown, SubtaskStatusDropdown,
+    SystemMetricsWidget, TaskListModal, TaskReassignmentWarningModal, ToastWidget,
 };
 
 #[derive(Clone)]
@@ -187,9 +187,79 @@ impl<'a> AppWidget<'a> {
             }
         }
 
+        if self.state.pm_status_debug.active {
+            let configured_providers = self.get_configured_pm_providers();
+            PmStatusDebugOverlay::new(&self.state.pm_status_debug, &configured_providers)
+                .render(frame, size);
+        }
+
         if let Some(toast) = &self.state.toast {
             ToastWidget::new(toast).render(frame);
         }
+    }
+
+    fn get_configured_pm_providers(&self) -> Vec<crate::app::config::ProjectMgmtProvider> {
+        use crate::app::config::ProjectMgmtProvider;
+
+        let mut configured = Vec::new();
+
+        if self
+            .state
+            .settings
+            .repo_config
+            .project_mgmt
+            .asana
+            .project_gid
+            .is_some()
+        {
+            configured.push(ProjectMgmtProvider::Asana);
+        }
+        if self
+            .state
+            .settings
+            .repo_config
+            .project_mgmt
+            .notion
+            .database_id
+            .is_some()
+        {
+            configured.push(ProjectMgmtProvider::Notion);
+        }
+        if self
+            .state
+            .settings
+            .repo_config
+            .project_mgmt
+            .clickup
+            .list_id
+            .is_some()
+        {
+            configured.push(ProjectMgmtProvider::Clickup);
+        }
+        if self
+            .state
+            .settings
+            .repo_config
+            .project_mgmt
+            .airtable
+            .base_id
+            .is_some()
+        {
+            configured.push(ProjectMgmtProvider::Airtable);
+        }
+        if self
+            .state
+            .settings
+            .repo_config
+            .project_mgmt
+            .linear
+            .team_id
+            .is_some()
+        {
+            configured.push(ProjectMgmtProvider::Linear);
+        }
+
+        configured
     }
 
     fn render_modal(&self, frame: &mut Frame, mode: &InputMode, _area: Rect) {

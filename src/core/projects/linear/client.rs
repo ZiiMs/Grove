@@ -825,4 +825,21 @@ impl OptionalLinearClient {
         self.cached_issues.invalidate().await;
         tracing::debug!("Linear cache manually invalidated");
     }
+
+    pub async fn fetch_statuses(&self) -> Result<crate::core::projects::ProviderStatuses> {
+        use crate::core::projects::{ProviderStatuses, StatusPayload};
+
+        let states = self.get_workflow_states().await?;
+        let parent: Vec<StatusPayload> = states
+            .into_iter()
+            .map(|s| StatusPayload {
+                id: s.id,
+                name: s.name,
+                status_type: Some(s.state_type),
+                color: s.color,
+            })
+            .collect();
+
+        Ok(ProviderStatuses::new(parent))
+    }
 }

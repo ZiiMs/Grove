@@ -388,6 +388,22 @@ pub enum Action {
         agent_id: Uuid,
         action_type: AutomationActionType,
     },
+
+    // PM Status Debug
+    OpenPmStatusDebug,
+    ClosePmStatusDebug,
+    PmStatusDebugSelectNext,
+    PmStatusDebugSelectPrev,
+    PmStatusDebugFetchSelected,
+    PmStatusDebugFetched {
+        provider: crate::app::config::ProjectMgmtProvider,
+        payload: String,
+    },
+    PmStatusDebugFetchError {
+        provider: crate::app::config::ProjectMgmtProvider,
+        error: String,
+    },
+    PmStatusDebugCopyPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
