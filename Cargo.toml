@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "A TUI for managing multiple Claude Code agents with git worktree isolation"
 license = "MIT"
+repository = "https://github.com/ziim/grove"
+homepage = "https://github.com/ziim/grove"
+readme = "README.md"
+keywords = ["tui", "claude", "agent", "git", "worktree"]
+categories = ["command-line-interface", "development-tools"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

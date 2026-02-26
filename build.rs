@@ -13,15 +13,22 @@ fn main() {
         println!("cargo:rerun-if-changed=.git/refs/heads/");
     }
 
-    let version = git_hash().unwrap_or_else(|_| "unknown".to_string());
+    let version = build_version();
 
     fs::write(&dest_path, &version).unwrap();
     println!("cargo:rustc-env=BUILD_VERSION={}", version);
 }
 
-fn git_hash() -> Result<String, Box<dyn std::error::Error>> {
+fn build_version() -> String {
+    if let Ok(v) = env::var("VERSION") {
+        return v;
+    }
+    git_describe().unwrap_or_else(|_| "dev".to_string())
+}
+
+fn git_describe() -> Result<String, Box<dyn std::error::Error>> {
     let output = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
+        .args(["describe", "--tags", "--always", "--dirty"])
         .output()?;
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
