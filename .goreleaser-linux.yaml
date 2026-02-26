@@ -1,7 +1,5 @@
 version: 2
 
-force_token: github
-
 before:
   hooks:
     - rustup default stable
