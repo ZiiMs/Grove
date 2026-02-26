@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          args: release --config .goreleaser-linux.yaml --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    runs-on: macos-latest
+    needs: build-linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          targets: x86_64-apple-darwin aarch64-apple-darwin
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          args: release --config .goreleaser-macos.yaml --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+  publish-macos:
+    runs-on: ubuntu-latest
+    needs: build-macos
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          args: release --config .goreleaser-macos.yaml --skip=build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

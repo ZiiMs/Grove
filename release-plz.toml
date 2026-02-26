@@ -1,0 +1,30 @@
+[workspace]
+publish = true
+publish_timeout = "10m"
+git_release_enable = false
+release_always = false
+git_tag_enable = true
+
+[changelog]
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+"""
+protect_breaking_commits = true
+sort_commits = "newest"
+
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^doc", group = "Documentation" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^test", group = "Testing" },
+  { message = "^ci", group = "CI" },
+  { message = "^chore", group = "Miscellaneous" },
+  { message = "^.*", group = "Other" },
+]
