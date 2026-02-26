@@ -18,8 +18,6 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Install zig
         uses: mlugg/setup-zig@v2
-        with:
-          version: '0.13.0'
       - uses: goreleaser/goreleaser-action@v6
         with:
           args: release --config .goreleaser-linux.yaml --clean
