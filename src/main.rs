@@ -9,7 +9,10 @@ use sysinfo::System;
 use anyhow::Result;
 
 use crossterm::{
-    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, poll, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+        EnableMouseCapture, Event, KeyCode, KeyModifiers,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -282,7 +285,12 @@ async fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -757,7 +765,12 @@ async fn main() -> Result<()> {
 
                 // Leave TUI mode
                 disable_raw_mode()?;
-                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    LeaveAlternateScreen,
+                    DisableMouseCapture,
+                    DisableBracketedPaste
+                )?;
 
                 // Attach to tmux (blocks until detach)
                 let tmux_session = grove::tmux::TmuxSession::new(&session_name);
@@ -765,7 +778,12 @@ async fn main() -> Result<()> {
 
                 // Restore TUI mode
                 enable_raw_mode()?;
-                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    EnterAlternateScreen,
+                    EnableMouseCapture,
+                    EnableBracketedPaste
+                )?;
                 terminal.clear()?;
 
                 // Drain any stale input events
@@ -795,7 +813,12 @@ async fn main() -> Result<()> {
 
                 // Leave TUI mode
                 disable_raw_mode()?;
-                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    LeaveAlternateScreen,
+                    DisableMouseCapture,
+                    DisableBracketedPaste
+                )?;
 
                 // Attach to tmux (blocks until detach)
                 let ai_agent = state.config.global.ai_agent.clone();
@@ -803,7 +826,12 @@ async fn main() -> Result<()> {
 
                 // Restore TUI mode
                 enable_raw_mode()?;
-                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    EnterAlternateScreen,
+                    EnableMouseCapture,
+                    EnableBracketedPaste
+                )?;
                 terminal.clear()?;
 
                 // Drain any stale input events
@@ -834,7 +862,12 @@ async fn main() -> Result<()> {
 
                 // Leave TUI mode
                 disable_raw_mode()?;
-                execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    LeaveAlternateScreen,
+                    DisableMouseCapture,
+                    DisableBracketedPaste
+                )?;
 
                 // Run editor (blocks until exit)
                 let editor_result = std::process::Command::new("sh")
@@ -844,7 +877,12 @@ async fn main() -> Result<()> {
 
                 // Restore TUI mode
                 enable_raw_mode()?;
-                execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+                execute!(
+                    io::stdout(),
+                    EnterAlternateScreen,
+                    EnableMouseCapture,
+                    EnableBracketedPaste
+                )?;
                 terminal.clear()?;
 
                 // Drain any stale input events
@@ -985,7 +1023,8 @@ async fn main() -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
