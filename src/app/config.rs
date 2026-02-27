@@ -297,6 +297,8 @@ pub struct Config {
     pub automation: AutomationConfig,
     #[serde(default)]
     pub task_list: TaskListConfig,
+    #[serde(default)]
+    pub tutorial_completed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

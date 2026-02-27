@@ -178,14 +178,15 @@ async fn main() -> Result<()> {
         state.global_setup = Some(grove::app::GlobalSetupState::default());
         state.log_info("First launch - showing global setup wizard".to_string());
     } else if project_needs_setup {
-        // Show project setup wizard if project not configured
-        state.show_project_setup = true;
         let wizard = grove::app::ProjectSetupState {
             config: state.settings.repo_config.clone(),
             ..Default::default()
         };
         state.project_setup = Some(wizard);
         state.log_info("Project not configured - showing project setup wizard".to_string());
+    } else if !state.config.tutorial_completed {
+        state.show_tutorial = true;
+        state.tutorial = Some(grove::app::TutorialState::default());
     }
 
     let agent_manager = Arc::new(AgentManager::new(&repo_path, state.worktree_base.clone()));
@@ -1136,7 +1137,6 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         };
     }
 
-    // Handle global setup wizard
     if state.show_global_setup {
         if let Some(wizard) = &state.global_setup {
             return match key.code {
@@ -1146,7 +1146,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                     } else if matches!(wizard.step, grove::app::GlobalSetupStep::AgentSettings) {
                         Some(Action::GlobalSetupPrevStep)
                     } else {
-                        None // Can't go back from first step
+                        None
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -1190,7 +1190,24 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         }
     }
 
-    // Handle project setup wizard
+    if state.show_tutorial {
+        if let Some(tutorial) = &state.tutorial {
+            let is_last_step = matches!(tutorial.step, grove::app::TutorialStep::GettingHelp);
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => Some(Action::TutorialSkip),
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                    if is_last_step {
+                        Some(Action::TutorialComplete)
+                    } else {
+                        Some(Action::TutorialNextStep)
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => Some(Action::TutorialPrevStep),
+                _ => None,
+            };
+        }
+    }
+
     if state.show_project_setup {
         if let Some(wizard) = &state.project_setup {
             if wizard.file_browser.active {
@@ -1744,6 +1761,7 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
                     }),
                     ActionButtonType::SetupPm => Some(Action::SettingsSelectField),
                     ActionButtonType::SetupGit => Some(Action::OpenGitSetup),
+                    ActionButtonType::ResetTutorial => Some(Action::ResetTutorial),
                 }
             } else {
                 let field = state.settings.current_field();
@@ -5696,6 +5714,52 @@ async fn process_action(
             }
         }
 
+        Action::TutorialNextStep => {
+            if let Some(ref mut tutorial) = state.tutorial {
+                tutorial.step = tutorial.step.next();
+                if tutorial.step == grove::app::TutorialStep::default() {
+                    state.config.tutorial_completed = true;
+                    if let Err(e) = state.config.save() {
+                        state.log_error(format!("Failed to save config: {}", e));
+                    }
+                    state.show_tutorial = false;
+                    state.tutorial = None;
+                    state.show_success("Tutorial completed!");
+                }
+            }
+        }
+        Action::TutorialPrevStep => {
+            if let Some(ref mut tutorial) = state.tutorial {
+                tutorial.step = tutorial.step.prev();
+            }
+        }
+        Action::TutorialSkip => {
+            state.config.tutorial_completed = true;
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+            state.show_tutorial = false;
+            state.tutorial = None;
+        }
+        Action::TutorialComplete => {
+            state.config.tutorial_completed = true;
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+            state.show_tutorial = false;
+            state.tutorial = None;
+            state.show_success("Tutorial completed!");
+        }
+        Action::ResetTutorial => {
+            state.config.tutorial_completed = false;
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+            state.settings.active = false;
+            state.show_tutorial = true;
+            state.tutorial = Some(grove::app::TutorialState::default());
+        }
+
         Action::ShowError(msg) => {
             state.toast = Some(Toast::new(msg, ToastLevel::Error));
         }
@@ -7880,6 +7944,9 @@ async fn process_action(
                         ..Default::default()
                     };
                     state.project_setup = Some(wizard);
+                } else if !state.config.tutorial_completed {
+                    state.show_tutorial = true;
+                    state.tutorial = Some(grove::app::TutorialState::default());
                 }
             }
         }
@@ -7982,11 +8049,19 @@ async fn process_action(
                             }
                         }
                         state.show_project_setup = false;
+                        if !state.config.tutorial_completed {
+                            state.show_tutorial = true;
+                            state.tutorial = Some(grove::app::TutorialState::default());
+                        }
                     }
                     7 => {
                         state.show_project_setup = false;
                         state.project_setup = None;
                         state.log_info("Project setup closed".to_string());
+                        if !state.config.tutorial_completed {
+                            state.show_tutorial = true;
+                            state.tutorial = Some(grove::app::TutorialState::default());
+                        }
                     }
                     _ => {}
                 }
@@ -8054,7 +8129,11 @@ async fn process_action(
         Action::ProjectSetupSkip => {
             state.show_project_setup = false;
             state.project_setup = None;
-            state.log_info("Project setup closed".to_string());
+            state.log_info("Project setup skipped".to_string());
+            if !state.config.tutorial_completed {
+                state.show_tutorial = true;
+                state.tutorial = Some(grove::app::TutorialState::default());
+            }
         }
         Action::ProjectSetupComplete => {
             if let Some(wizard) = state.project_setup.take() {
@@ -8066,6 +8145,10 @@ async fn process_action(
                 }
             }
             state.show_project_setup = false;
+            if !state.config.tutorial_completed {
+                state.show_tutorial = true;
+                state.tutorial = Some(grove::app::TutorialState::default());
+            }
         }
         Action::ProjectSetupOpenSymlinks => {
             if let Some(wizard) = &mut state.project_setup {
