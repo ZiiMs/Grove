@@ -39,7 +39,7 @@ impl AsanaClient {
             .get(&url)
             .query(&[(
                 "opt_fields",
-                "gid,name,completed,permalink_url,parent,num_subtasks",
+                "gid,name,completed,permalink_url,parent,num_subtasks,memberships.project.gid,memberships.section.gid,memberships.section.name",
             )])
             .send()
             .await
@@ -160,7 +160,7 @@ impl AsanaClient {
             .get(&url)
             .query(&[(
                 "opt_fields",
-                "gid,name,completed,permalink_url,parent,num_subtasks,memberships.project.section",
+                "gid,name,completed,permalink_url,parent,num_subtasks,memberships.project.gid,memberships.section.gid,memberships.section.name",
             )])
             .send()
             .await
@@ -231,7 +231,7 @@ impl AsanaClient {
             .get(&url)
             .query(&[(
                 "opt_fields",
-                "gid,name,completed,permalink_url,parent,num_subtasks,memberships.project.section",
+                "gid,name,completed,permalink_url,parent,num_subtasks,memberships.project.gid,memberships.section.gid,memberships.section.name",
             )])
             .send()
             .await
@@ -253,6 +253,16 @@ impl AsanaClient {
 
         let task_list: AsanaTaskListResponse = serde_json::from_str(&response_text)
             .context("Failed to parse Asana task list response")?;
+
+        for (i, task) in task_list.data.iter().take(3).enumerate() {
+            tracing::debug!(
+                "Asana task {}: gid={}, name={}, memberships={:?}",
+                i,
+                task.gid,
+                task.name,
+                task.memberships
+            );
+        }
 
         Ok(task_list
             .data
@@ -321,6 +331,7 @@ impl AsanaClient {
 
     /// Move a task to a specific section.
     pub async fn move_task_to_section(&self, task_gid: &str, section_gid: &str) -> Result<()> {
+        tracing::debug!("Moving Asana task {} to section {}", task_gid, section_gid);
         let url = format!(
             "https://app.asana.com/api/1.0/sections/{}/addTask",
             section_gid
@@ -343,9 +354,15 @@ impl AsanaClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            tracing::error!("Asana API error moving task: {} - {}", status, body);
             anyhow::bail!("Asana API error moving task: {} - {}", status, body);
         }
 
+        tracing::debug!(
+            "Successfully moved Asana task {} to section {}",
+            task_gid,
+            section_gid
+        );
         Ok(())
     }
 
@@ -789,13 +806,13 @@ impl OptionalAsanaClient {
         let children = vec![
             StatusPayload {
                 id: "completed".to_string(),
-                name: "Completed".to_string(),
+                name: "Complete".to_string(),
                 status_type: Some("done".to_string()),
                 color: None,
             },
             StatusPayload {
                 id: "not_completed".to_string(),
-                name: "Not Completed".to_string(),
+                name: "Not Complete".to_string(),
                 status_type: Some("todo".to_string()),
                 color: None,
             },

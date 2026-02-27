@@ -1137,6 +1137,7 @@ pub struct PmStatusDebugState {
 pub struct StatusOption {
     pub id: String,
     pub name: String,
+    pub is_child: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -114,6 +114,7 @@ async fn fetch_notion_status_options(
         .map(|o| StatusOption {
             id: o.id,
             name: o.name,
+            is_child: false,
         })
         .collect();
 
@@ -156,6 +157,7 @@ async fn fetch_asana_status_options(
             .map(|s| StatusOption {
                 id: s.id,
                 name: s.name,
+                is_child: true,
             })
             .collect();
 
@@ -174,6 +176,7 @@ async fn fetch_asana_status_options(
             .map(|s| StatusOption {
                 id: s.gid,
                 name: s.name,
+                is_child: false,
             })
             .collect();
 
@@ -212,6 +215,7 @@ async fn fetch_clickup_status_options(
         .map(|s| StatusOption {
             id: s.status.clone(),
             name: s.status,
+            is_child: false,
         })
         .collect();
 
@@ -249,6 +253,7 @@ async fn fetch_airtable_status_options(
         .map(|o| StatusOption {
             id: o.name.clone(),
             name: o.name,
+            is_child: false,
         })
         .collect();
 
@@ -286,6 +291,7 @@ async fn fetch_linear_status_options(
         .map(|s| StatusOption {
             id: s.id,
             name: s.name,
+            is_child: false,
         })
         .collect();
 

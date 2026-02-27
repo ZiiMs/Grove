@@ -2725,11 +2725,19 @@ async fn process_action(
             let gid = parse_asana_task_gid(&url_or_gid);
             let client = Arc::clone(asana_client);
             let tx = action_tx.clone();
+            let project_gid = state
+                .settings
+                .repo_config
+                .project_mgmt
+                .asana
+                .project_gid
+                .clone();
             tokio::spawn(async move {
                 match client.get_task(&gid).await {
                     Ok(task) => {
                         let url = task
                             .permalink_url
+                            .clone()
                             .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
                         let is_subtask = task.parent.is_some();
                         let status = if task.completed {
@@ -2740,12 +2748,15 @@ async fn process_action(
                                 status_name: "Complete".to_string(),
                             }
                         } else {
+                            let section_name = task
+                                .get_section_name_for_project(project_gid.as_deref())
+                                .unwrap_or_else(|| "Not Started".to_string());
                             AsanaTaskStatus::NotStarted {
                                 gid: task.gid,
                                 name: task.name,
                                 url,
                                 is_subtask,
-                                status_name: "Not Started".to_string(),
+                                status_name: section_name,
                             }
                         };
                         let _ = tx.send(Action::UpdateAsanaTaskStatus { id, status });
@@ -2819,10 +2830,17 @@ async fn process_action(
                     let gid = parse_asana_task_gid(&url_or_id);
                     let client = Arc::clone(asana_client);
                     let tx = action_tx.clone();
+                    let project_gid = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .asana
+                        .project_gid
+                        .clone();
                     tokio::spawn(async move {
                         match client.get_task(&gid).await {
                             Ok(task) => {
-                                let url = task.permalink_url.unwrap_or_else(|| {
+                                let url = task.permalink_url.clone().unwrap_or_else(|| {
                                     format!("https://app.asana.com/0/0/{}/f", task.gid)
                                 });
                                 let is_subtask = task.parent.is_some();
@@ -2834,12 +2852,15 @@ async fn process_action(
                                         status_name: "Complete".to_string(),
                                     }
                                 } else {
+                                    let section_name = task
+                                        .get_section_name_for_project(project_gid.as_deref())
+                                        .unwrap_or_else(|| "Not Started".to_string());
                                     AsanaTaskStatus::NotStarted {
                                         gid: task.gid,
                                         name: task.name,
                                         url,
                                         is_subtask,
-                                        status_name: "Not Started".to_string(),
+                                        status_name: section_name,
                                     }
                                 };
                                 let _ = tx.send(Action::UpdateProjectTaskStatus {
@@ -3901,12 +3922,6 @@ async fn process_action(
                                     let _ = tx.send(Action::RefreshTaskList);
                                 }
                             });
-
-                            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id)
-                            {
-                                task.status_name = status_name.clone();
-                            }
-                            state.show_success(format!("Task → {}", status_name));
                         } else if matches!(provider, ProjectMgmtProvider::Linear) {
                             let client = Arc::clone(linear_client);
                             let tx = action_tx.clone();
@@ -3944,44 +3959,82 @@ async fn process_action(
                             }
                             state.show_success(format!("Task → {}", status_name));
                         } else if matches!(provider, ProjectMgmtProvider::Asana) {
-                            // Asana subtask: use complete/uncomplete based on option_id
                             let client = Arc::clone(asana_client);
                             let tx = action_tx.clone();
-                            state.loading_message = Some("Updating subtask status...".to_string());
 
                             let task_id_for_spawn = task_id.clone();
                             let status_name_for_spawn = status_name.clone();
-                            let completed = option_id == "completed";
-                            tokio::spawn(async move {
-                                let result = if completed {
-                                    client.complete_task(&task_id_for_spawn).await
-                                } else {
-                                    client.uncomplete_task(&task_id_for_spawn).await
-                                };
-                                match result {
-                                    Ok(()) => {
-                                        let _ = tx.send(Action::SetLoading(None));
-                                        let _ = tx.send(Action::ShowToast {
-                                            message: format!("Task → {}", status_name_for_spawn),
-                                            level: ToastLevel::Success,
-                                        });
-                                        let _ = tx.send(Action::RefreshTaskList);
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(Action::SetLoading(None));
-                                        let _ = tx.send(Action::ShowError(format!(
-                                            "Failed to update task: {}",
-                                            e
-                                        )));
-                                    }
-                                }
-                            });
+                            let option_id_for_spawn = option_id.clone();
 
-                            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id)
-                            {
-                                task.status_name = status_name.clone();
+                            // Check if this is a section GID (parent task) or complete/uncomplete (subtask)
+                            let is_section_move =
+                                !matches!(option_id.as_str(), "completed" | "not_completed");
+
+                            if is_section_move {
+                                // Parent task: move to section
+                                state.loading_message =
+                                    Some("Moving task to section...".to_string());
+                                tokio::spawn(async move {
+                                    match client
+                                        .move_task_to_section(
+                                            &task_id_for_spawn,
+                                            &option_id_for_spawn,
+                                        )
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowToast {
+                                                message: format!(
+                                                    "Task → {}",
+                                                    status_name_for_spawn
+                                                ),
+                                                level: ToastLevel::Success,
+                                            });
+                                            let _ = tx.send(Action::RefreshTaskList);
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Failed to move task: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                });
+                            } else {
+                                // Subtask: complete/uncomplete
+                                state.loading_message =
+                                    Some("Updating subtask status...".to_string());
+                                let completed = option_id == "completed";
+                                tokio::spawn(async move {
+                                    let result = if completed {
+                                        client.complete_task(&task_id_for_spawn).await
+                                    } else {
+                                        client.uncomplete_task(&task_id_for_spawn).await
+                                    };
+                                    match result {
+                                        Ok(()) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowToast {
+                                                message: format!(
+                                                    "Task → {}",
+                                                    status_name_for_spawn
+                                                ),
+                                                level: ToastLevel::Success,
+                                            });
+                                            let _ = tx.send(Action::RefreshTaskList);
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Failed to update task: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                });
                             }
-                            state.show_success(format!("Task → {}", status_name));
                         } else {
                             // ClickUp
                             let client = Arc::clone(clickup_client);
@@ -4012,12 +4065,6 @@ async fn process_action(
                                     }
                                 }
                             });
-
-                            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id)
-                            {
-                                task.status_name = status_name.clone();
-                            }
-                            state.show_success(format!("Task → {}", status_name));
                         }
                         return Ok(false);
                     }
@@ -4576,14 +4623,17 @@ async fn process_action(
                                 let mut items: Vec<TaskListItem> = tasks
                                     .into_iter()
                                     .map(|t| {
-                                        let status_name =
-                                            t.section_name.clone().unwrap_or_else(|| {
-                                                if t.completed {
-                                                    "Complete".to_string()
-                                                } else {
-                                                    "Not Complete".to_string()
-                                                }
-                                            });
+                                        let status_name = if t.parent_gid.is_some() {
+                                            if t.completed {
+                                                "Complete".to_string()
+                                            } else {
+                                                "Not Complete".to_string()
+                                            }
+                                        } else {
+                                            t.section_name
+                                                .clone()
+                                                .unwrap_or_else(|| "No Section".to_string())
+                                        };
                                         TaskListItem {
                                             id: t.gid,
                                             identifier: None,
@@ -4766,6 +4816,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.id,
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect()),
                                 Err(e) => Err(e.to_string()),
@@ -4782,6 +4833,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.id,
                                         name: s.name,
+                                        is_child: false,
                                     })
                                     .collect()),
                                 Err(e) => Err(e.to_string()),
@@ -4798,6 +4850,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.status.clone(),
                                         name: s.status,
+                                        is_child: false,
                                     })
                                     .collect()),
                                 Err(e) => Err(e.to_string()),
@@ -4814,6 +4867,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.name.clone(),
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect()),
                                 Err(e) => Err(e.to_string()),
@@ -4824,14 +4878,28 @@ async fn process_action(
                         if !asana_client_status.is_configured().await {
                             Err("Asana not configured".to_string())
                         } else {
-                            match asana_client_status.get_sections().await {
-                                Ok(sections) => Ok(sections
-                                    .into_iter()
-                                    .map(|s| StatusOption {
-                                        id: s.gid,
-                                        name: s.name,
-                                    })
-                                    .collect()),
+                            match asana_client_status.fetch_statuses().await {
+                                Ok(statuses) => {
+                                    let mut options: Vec<StatusOption> = statuses
+                                        .parent
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.id,
+                                            name: s.name,
+                                            is_child: false,
+                                        })
+                                        .collect();
+                                    if let Some(children) = statuses.children {
+                                        options.extend(children.into_iter().map(|s| {
+                                            StatusOption {
+                                                id: s.id,
+                                                name: s.name,
+                                                is_child: true,
+                                            }
+                                        }));
+                                    }
+                                    Ok(options)
+                                }
                                 Err(e) => Err(e.to_string()),
                             }
                         }
@@ -4981,6 +5049,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.id,
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5020,6 +5089,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.id,
                                         name: s.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5061,6 +5131,7 @@ async fn process_action(
                                         .map(|s| StatusOption {
                                             id: s.status.clone(),
                                             name: s.status,
+                                            is_child: false,
                                         })
                                         .collect();
                                     let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5104,6 +5175,7 @@ async fn process_action(
                                         .map(|s| StatusOption {
                                             id: s.id,
                                             name: s.name,
+                                            is_child: true,
                                         })
                                         .collect();
                                     let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5143,6 +5215,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.status.clone(),
                                         name: s.status,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5156,6 +5229,46 @@ async fn process_action(
                                 let _ = tx.send(Action::SetLoading(None));
                                 let _ = tx.send(Action::ShowError(format!(
                                     "Failed to load statuses: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    });
+                } else if matches!(provider, ProjectMgmtProvider::Asana) {
+                    // Asana parent tasks: use sections as status options
+                    if !asana_client.is_configured().await {
+                        state.show_error("Asana not configured. Set ASANA_TOKEN and project_gid.");
+                        return Ok(false);
+                    }
+
+                    let task_id_for_dropdown = task.id.clone();
+                    let task_name_for_dropdown = task.name.clone();
+                    let client = Arc::clone(asana_client);
+                    let tx = action_tx.clone();
+                    state.loading_message = Some("Loading sections...".to_string());
+
+                    tokio::spawn(async move {
+                        match client.get_sections().await {
+                            Ok(sections) => {
+                                let options: Vec<StatusOption> = sections
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.gid,
+                                        name: s.name,
+                                        is_child: false,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                    task_id: task_id_for_dropdown,
+                                    task_name: task_name_for_dropdown,
+                                    options,
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to load Asana sections: {}", e);
+                                let _ = tx.send(Action::SetLoading(None));
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load sections: {}",
                                     e
                                 )));
                             }
@@ -5841,18 +5954,39 @@ async fn process_action(
                     }
                 });
 
+                let asana_project_gid = state
+                    .settings
+                    .repo_config
+                    .project_mgmt
+                    .asana
+                    .project_gid
+                    .clone();
+
                 match &agent.pm_task_status {
                     ProjectMgmtTaskStatus::Asana(asana_status) => {
                         if let Some(task_gid) = asana_status.gid() {
                             let asana_client_clone = Arc::clone(asana_client);
                             let tx_clone = action_tx.clone();
                             let gid = task_gid.to_string();
+                            let project_gid = asana_project_gid.clone();
                             tokio::spawn(async move {
                                 if let Ok(task) = asana_client_clone.get_task(&gid).await {
-                                    let url = task.permalink_url.unwrap_or_else(|| {
+                                    let url = task.permalink_url.clone().unwrap_or_else(|| {
                                         format!("https://app.asana.com/0/0/{}/f", task.gid)
                                     });
                                     let is_subtask = task.parent.is_some();
+
+                                    let section_name = if is_subtask {
+                                        if task.completed {
+                                            "Complete".to_string()
+                                        } else {
+                                            "Not Complete".to_string()
+                                        }
+                                    } else {
+                                        task.get_section_name_for_project(project_gid.as_deref())
+                                            .unwrap_or_else(|| "No Section".to_string())
+                                    };
+
                                     let status = if task.completed {
                                         grove::core::projects::asana::AsanaTaskStatus::Completed {
                                             gid: task.gid,
@@ -5866,7 +6000,7 @@ async fn process_action(
                                             name: task.name,
                                             url,
                                             is_subtask,
-                                            status_name: "In Progress".to_string(),
+                                            status_name: section_name,
                                         }
                                     };
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
@@ -9016,6 +9150,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.gid,
                                         name: s.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9047,6 +9182,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.id,
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9077,6 +9213,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.status.clone(),
                                         name: s.status,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9107,6 +9244,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.name.clone(),
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9137,6 +9275,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.id,
                                         name: s.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -10160,7 +10299,11 @@ fn compute_visible_task_indices(
         tasks: &[TaskListItem],
     ) -> bool {
         let mut current_id = task.id.as_str();
+        let mut visited = HashSet::new();
         loop {
+            if !visited.insert(current_id) {
+                return true;
+            }
             match child_to_parent.get(current_id) {
                 None => return true,
                 Some(&parent_id) => {

@@ -102,21 +102,36 @@ impl<'a> TaskListModal<'a> {
             .filter_map(|t| t.parent_id.as_ref().map(|p| (t.id.as_str(), p.as_str())))
             .collect();
 
-        fn get_depth_by_id(id: &str, child_to_parent: &HashMap<&str, &str>) -> usize {
+        fn get_depth_by_id<'a>(
+            id: &'a str,
+            child_to_parent: &HashMap<&'a str, &'a str>,
+            visited: &mut HashSet<&'a str>,
+        ) -> usize {
+            if visited.contains(id) {
+                return 0;
+            }
+            visited.insert(id);
             match child_to_parent.get(id) {
                 None => 0,
-                Some(&parent_id) => get_depth_by_id(parent_id, child_to_parent) + 1,
+                Some(&parent_id) => get_depth_by_id(parent_id, child_to_parent, visited) + 1,
             }
         }
 
-        fn get_depth(task: &TaskListItem, child_to_parent: &HashMap<&str, &str>) -> usize {
+        fn get_depth<'a>(
+            task: &'a TaskListItem,
+            child_to_parent: &HashMap<&'a str, &'a str>,
+        ) -> usize {
             match &task.parent_id {
                 None => 0,
                 Some(_) => {
                     let parent = child_to_parent.get(task.id.as_str());
                     match parent {
                         None => 1,
-                        Some(&pid) => get_depth_by_id(pid, child_to_parent) + 1,
+                        Some(&pid) => {
+                            let mut visited = HashSet::new();
+                            visited.insert(task.id.as_str());
+                            get_depth_by_id(pid, child_to_parent, &mut visited) + 1
+                        }
                     }
                 }
             }
@@ -146,7 +161,11 @@ impl<'a> TaskListModal<'a> {
         child_to_parent: &HashMap<&str, &str>,
     ) -> bool {
         let mut current_id = task.id.as_str();
+        let mut visited = HashSet::new();
         loop {
+            if !visited.insert(current_id) {
+                return true;
+            }
             match child_to_parent.get(current_id) {
                 None => return true,
                 Some(&parent_id) => {
@@ -216,7 +235,10 @@ impl<'a> TaskListModal<'a> {
             .constraints([Constraint::Min(3), Constraint::Length(1)])
             .split(inner_area);
 
-        let items: Vec<ListItem> = self
+        let parent_count = self.status_options.iter().filter(|o| !o.is_child).count();
+        let has_children = self.status_options.iter().any(|o| o.is_child);
+
+        let mut items: Vec<ListItem> = self
             .status_options
             .iter()
             .enumerate()
@@ -248,6 +270,14 @@ impl<'a> TaskListModal<'a> {
                 ListItem::new(Line::from(Span::styled(text, style)))
             })
             .collect();
+
+        if has_children && parent_count > 0 && parent_count < items.len() {
+            let separator = ListItem::new(Line::from(Span::styled(
+                "  ── Subtasks ──",
+                Style::default().fg(Color::DarkGray),
+            )));
+            items.insert(parent_count, separator);
+        }
 
         let list = List::new(items);
         frame.render_widget(list, chunks[0]);
@@ -413,7 +443,7 @@ impl<'a> TaskListModal<'a> {
 
         let available_width = area.width as usize;
         let min_width = 30;
-        let max_allowed = (available_width.saturating_sub(25)).min(60);
+        let max_allowed = (available_width.saturating_sub(25)).min(60).max(min_width);
         let max_name_width = content_based_width.clamp(min_width, max_allowed);
 
         let mut items: Vec<ListItem> = Vec::new();
