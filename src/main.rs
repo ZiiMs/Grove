@@ -373,6 +373,26 @@ async fn main() -> Result<()> {
                                 session_id.as_deref(),
                             )
                         }
+                        grove::app::config::AiAgent::Codex => {
+                            let session_id = ai_session_id
+                                .as_deref()
+                                .and_then(|cached| {
+                                    if cached.is_empty() {
+                                        None
+                                    } else {
+                                        Some(cached.to_string())
+                                    }
+                                })
+                                .or_else(|| {
+                                    grove::codex::find_session_by_directory(&worktree_path)
+                                        .ok()
+                                        .flatten()
+                                });
+                            grove::codex::build_resume_command(
+                                ai_agent.command(),
+                                session_id.as_deref(),
+                            )
+                        }
                         _ => ai_agent.command().to_string(),
                     };
 

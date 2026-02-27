@@ -4,6 +4,7 @@ pub mod automation;
 pub mod cache;
 pub mod ci;
 pub mod claude_code;
+pub mod codex;
 pub mod core;
 pub mod devserver;
 pub mod git;
