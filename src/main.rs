@@ -314,7 +314,7 @@ async fn main() -> Result<()> {
                 let tmux_session = agent.tmux_session.clone();
                 let branch = agent.branch.clone();
                 let name = agent.name.clone();
-                let opencode_session_id = agent.opencode_session_id.clone();
+                let ai_session_id = agent.ai_session_id.clone();
 
                 let worktree = grove::git::Worktree::new(&repo_path, worktree_base.clone());
                 if !std::path::Path::new(&worktree_path).exists() {
@@ -332,27 +332,48 @@ async fn main() -> Result<()> {
 
                 let session = grove::tmux::TmuxSession::new(&tmux_session);
                 if !session.exists() {
-                    let command = if matches!(ai_agent, grove::app::config::AiAgent::Opencode) {
-                        let session_id = opencode_session_id
-                            .as_deref()
-                            .and_then(|cached| {
-                                if cached.is_empty() {
-                                    None
-                                } else {
-                                    Some(cached.to_string())
-                                }
-                            })
-                            .or_else(|| {
-                                grove::opencode::find_session_by_directory(&worktree_path)
-                                    .ok()
-                                    .flatten()
-                            });
-                        grove::opencode::build_command_with_session(
-                            ai_agent.command(),
-                            session_id.as_deref(),
-                        )
-                    } else {
-                        ai_agent.command().to_string()
+                    let command = match &ai_agent {
+                        grove::app::config::AiAgent::Opencode => {
+                            let session_id = ai_session_id
+                                .as_deref()
+                                .and_then(|cached| {
+                                    if cached.is_empty() {
+                                        None
+                                    } else {
+                                        Some(cached.to_string())
+                                    }
+                                })
+                                .or_else(|| {
+                                    grove::opencode::find_session_by_directory(&worktree_path)
+                                        .ok()
+                                        .flatten()
+                                });
+                            grove::opencode::build_command_with_session(
+                                ai_agent.command(),
+                                session_id.as_deref(),
+                            )
+                        }
+                        grove::app::config::AiAgent::ClaudeCode => {
+                            let session_id = ai_session_id
+                                .as_deref()
+                                .and_then(|cached| {
+                                    if cached.is_empty() {
+                                        None
+                                    } else {
+                                        Some(cached.to_string())
+                                    }
+                                })
+                                .or_else(|| {
+                                    grove::claude_code::find_session_by_directory(&worktree_path)
+                                        .ok()
+                                        .flatten()
+                                });
+                            grove::claude_code::build_resume_command(
+                                ai_agent.command(),
+                                session_id.as_deref(),
+                            )
+                        }
+                        _ => ai_agent.command().to_string(),
                     };
 
                     if let Err(e) = session.create(&worktree_path, &command) {

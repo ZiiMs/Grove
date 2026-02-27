@@ -252,8 +252,11 @@ pub struct Agent {
     /// Whether to auto-continue this session on app restart
     #[serde(default)]
     pub continue_session: bool,
-    /// OpenCode session ID for resuming conversations (per-agent, AI-specific)
+    /// AI session ID for resuming conversations (per-agent, AI-specific)
     #[serde(default)]
+    pub ai_session_id: Option<String>,
+    /// Legacy field for backward compatibility (migrated to ai_session_id)
+    #[serde(default, skip_serializing)]
     pub opencode_session_id: Option<String>,
     #[serde(skip)]
     pub status_reason: Option<StatusReason>,
@@ -286,6 +289,7 @@ impl Agent {
             pm_task_status: ProjectMgmtTaskStatus::None,
             summary_requested: false,
             continue_session: true,
+            ai_session_id: None,
             opencode_session_id: None,
             status_reason: None,
         }
@@ -296,6 +300,9 @@ impl Agent {
             && matches!(self.pm_task_status, ProjectMgmtTaskStatus::None)
         {
             self.pm_task_status = ProjectMgmtTaskStatus::Asana(self.asana_task_status.clone());
+        }
+        if self.ai_session_id.is_none() && self.opencode_session_id.is_some() {
+            self.ai_session_id = self.opencode_session_id.take();
         }
     }
 
