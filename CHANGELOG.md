@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/ZiiMs/Grove/compare/v0.1.3...v0.2.0) - 2026-02-27
+
+### Added
+
+- add column visibility toggle in agents screen
+- add Gemini session continuation support
+- add Codex session continuation support
+- add Claude Code session continuation support
+- make auto-continue always enabled by default
+- include child statuses in Asana task filter modal
+- add status fetcher helper and PM status debug (Shift+Q)
+
+### Changed
+
+- move appearance settings from global to project config
+- remove TaskItemStatus enum and unify status handling
+
+### Fixed
+
+- show tutorial after global and project setup wizards complete
+- prevent pasted text from triggering keybinds
+
+### Other
+
+- Merge pull request #50 from ZiiMs/ziim/gre-19-toggle-column
+- remove unused toggle_continue keybind conflicting with toggle_columns
+- merge main into feature branch
+- merge main into feature branch
+- remove orphaned Continue column constraint from agent list layout
+- Merge remote-tracking branch 'origin/main' into ziim/gre-58-auto-start-enabled-by-default
+- merge main into ziim/gre-53-create-status-fetcher-and-use-that
+
 ## [0.1.3](https://github.com/ZiiMs/Grove/compare/v0.1.2...v0.1.3) - 2026-02-26
 
 ### Other
