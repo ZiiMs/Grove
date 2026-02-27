@@ -4465,7 +4465,7 @@ async fn process_action(
                 let pm_status = agent.pm_task_status.clone();
 
                 if let Some(gid) = task_id {
-                    let automation_config = state.config.automation.clone();
+                    let automation_config = state.settings.repo_config.automation.clone();
                     let provider = state.settings.repo_config.project_mgmt.provider;
 
                     match provider {
@@ -6296,7 +6296,7 @@ async fn process_action(
                 state.settings.pending_worktree_location = state.config.global.worktree_location;
                 state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
-                state.settings.pending_automation = state.config.automation.clone();
+                state.settings.pending_automation = state.settings.repo_config.automation.clone();
 
                 let _ = action_tx.send(Action::LoadAutomationStatusOptions);
             }
@@ -7528,7 +7528,7 @@ async fn process_action(
             state.config.global.debug_mode = state.settings.pending_debug_mode;
             state.config.ui = state.settings.pending_ui.clone();
             state.config.keybinds = state.settings.pending_keybinds.clone();
-            state.config.automation = state.settings.pending_automation.clone();
+            state.settings.repo_config.automation = state.settings.pending_automation.clone();
 
             if let Err(e) = state.config.save() {
                 state.log_error(format!("Failed to save config: {}", e));
@@ -9385,7 +9385,7 @@ async fn process_action(
         } => {
             let automation_data = state.agents.get(&agent_id).and_then(|agent| {
                 agent.pm_task_status.id().map(|task_id| {
-                    let config = state.config.automation.clone();
+                    let config = state.settings.repo_config.automation.clone();
                     let provider = state.settings.repo_config.project_mgmt.provider;
                     let is_subtask = match &agent.pm_task_status {
                         ProjectMgmtTaskStatus::Asana(status) => status.is_subtask(),
