@@ -143,11 +143,11 @@ impl<'a> TutorialWizard<'a> {
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                "  │ S C Name        Status   Tasks   MR   Server   │",
+                "  │ S Name        Status   Tasks   MR   Server   │",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                "  │ ▶ ↻ GRE-47...   ○ Idle   2/2     None  ○ Stop  │",
+                "  │ ▶  GRE-47...   ○ Idle   2/2     None  ○ Stop  │",
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
@@ -206,7 +206,6 @@ impl<'a> TutorialWizard<'a> {
             Line::from(""),
             key_value_line("S", "Selection indicator (▶)"),
             key_value_line("S", "Summary requested (✓)"),
-            key_value_line("C", "Auto-continue enabled (↻)"),
             key_value_line("Name", "Branch name for this agent"),
             key_value_line("Status", "Running/Idle/Completed/Error"),
             key_value_line("Active", "Time since last activity"),
@@ -276,7 +275,6 @@ impl<'a> TutorialWizard<'a> {
             key_value_line("c", "Copy cd command to worktree"),
             key_value_line("y", "Copy agent name to clipboard"),
             key_value_line("N (Shift+n)", "Set a custom note"),
-            key_value_line("C (Shift+c)", "Toggle auto-continue on startup"),
             key_value_line("e", "Open worktree in editor"),
         ]
     }

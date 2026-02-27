@@ -197,9 +197,8 @@ async fn main() -> Result<()> {
         let count = session.agents.len();
         for mut agent in session.agents {
             agent.migrate_legacy();
-            if agent.continue_session {
-                agents_to_continue.push(agent.clone());
-            }
+            agent.continue_session = true;
+            agents_to_continue.push(agent.clone());
             state.add_agent(agent);
         }
         state.selected_index = session
@@ -1307,13 +1306,6 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Refresh selected agent status
     if matches_keybind(key, &kb.refresh_task_list) && state.selected_agent_id().is_some() {
         return Some(Action::RefreshSelected);
-    }
-
-    // Toggle continue session
-    if matches_keybind(key, &kb.toggle_continue) {
-        return state
-            .selected_agent_id()
-            .map(|id| Action::ToggleContinueSession { id });
     }
 
     // Yank (copy) agent name to clipboard
