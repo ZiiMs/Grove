@@ -7,6 +7,7 @@ pub mod claude_code;
 pub mod codex;
 pub mod core;
 pub mod devserver;
+pub mod gemini;
 pub mod git;
 pub mod opencode;
 pub mod storage;
