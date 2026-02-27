@@ -174,7 +174,6 @@ impl<'a> AgentListWidget<'a> {
                 let separator = Row::new(vec![
                     Cell::from("──"),
                     Cell::from("──"),
-                    Cell::from("──"),
                     Cell::from("──────────────────"),
                     Cell::from("──────────────────"),
                     Cell::from("────────"),
@@ -210,7 +209,6 @@ impl<'a> AgentListWidget<'a> {
             [
                 Constraint::Length(2),  // Selector
                 Constraint::Length(2),  // Summary
-                Constraint::Length(2),  // Continue
                 Constraint::Length(26), // Name
                 Constraint::Length(18), // Status
                 Constraint::Length(8),  // Activity time
