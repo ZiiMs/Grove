@@ -258,6 +258,13 @@ pub enum Action {
     FileBrowserEnterDir,
     FileBrowserGoParent,
 
+    // Column Selector
+    ToggleColumnSelector,
+    ColumnSelectorClose,
+    ColumnSelectorToggle,
+    ColumnSelectorSelectNext,
+    ColumnSelectorSelectPrev,
+
     // Settings Reset
     SettingsRequestReset {
         reset_type: crate::app::state::ResetType,

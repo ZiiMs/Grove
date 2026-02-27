@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::agent::{Agent, AgentStatus};
-use crate::app::config::{AppearanceConfig, GitProvider, ProjectMgmtProvider};
+use crate::app::config::{AppearanceConfig, ColumnVisibility, GitProvider, ProjectMgmtProvider};
 use crate::core::git_providers::codeberg::PullRequestStatus as CodebergPullRequestStatus;
 use crate::core::git_providers::github::{
     CheckStatus, PullRequestStatus as GitHubPullRequestStatus,
@@ -33,6 +33,7 @@ pub struct AgentListWidget<'a> {
     devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
     appearance_config: &'a AppearanceConfig,
     pm_provider: ProjectMgmtProvider,
+    column_visibility: &'a ColumnVisibility,
 }
 
 impl<'a> AgentListWidget<'a> {
@@ -46,6 +47,7 @@ impl<'a> AgentListWidget<'a> {
         devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
         appearance_config: &'a AppearanceConfig,
         pm_provider: ProjectMgmtProvider,
+        column_visibility: &'a ColumnVisibility,
     ) -> Self {
         Self {
             agents,
@@ -57,6 +59,7 @@ impl<'a> AgentListWidget<'a> {
             devserver_statuses,
             appearance_config,
             pm_provider,
+            column_visibility,
         }
     }
 
@@ -66,41 +69,80 @@ impl<'a> AgentListWidget<'a> {
     }
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
-        let header_cells = [
-            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Server",
-            "Task", "Task St", "Note",
-        ]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
+        let v = self.column_visibility;
+
+        let mut header_labels: Vec<&'static str> = Vec::new();
+        let mut constraints: Vec<Constraint> = Vec::new();
+
+        if v.selector {
+            header_labels.push("");
+            constraints.push(Constraint::Length(2));
+        }
+        if v.summary {
+            header_labels.push("S");
+            constraints.push(Constraint::Length(2));
+        }
+        if v.name {
+            header_labels.push("Name");
+            constraints.push(Constraint::Length(26));
+        }
+        if v.status {
+            header_labels.push("Status");
+            constraints.push(Constraint::Length(18));
+        }
+        if v.active {
+            header_labels.push("Active");
+            constraints.push(Constraint::Length(8));
+        }
+        if v.rate {
+            header_labels.push("Rate");
+            constraints.push(Constraint::Length(12));
+        }
+        if v.tasks {
+            header_labels.push("Tasks");
+            constraints.push(Constraint::Length(8));
+        }
+        if v.mr {
+            header_labels.push("MR");
+            constraints.push(Constraint::Length(10));
+        }
+        if v.pipeline {
+            header_labels.push("Pipeline");
+            constraints.push(Constraint::Length(10));
+        }
+        if v.server {
+            header_labels.push("Server");
+            constraints.push(Constraint::Length(10));
+        }
+        if v.task {
+            header_labels.push("Task");
+            constraints.push(Constraint::Length(16));
+        }
+        if v.task_status {
+            header_labels.push("Task St");
+            constraints.push(Constraint::Length(10));
+        }
+        if v.note {
+            header_labels.push("Note");
+            constraints.push(Constraint::Min(10));
+        }
+
+        let header_cells = header_labels
+            .iter()
+            .map(|h| Cell::from(*h).style(Style::default().fg(Color::DarkGray)));
         let header = Row::new(header_cells).height(1);
 
         let total_agents = self.agents.len();
         if total_agents == 0 {
-            let table = Table::new(
-                vec![Row::new(vec![Cell::from("")])],
-                [
-                    Constraint::Length(2),
-                    Constraint::Length(2),
-                    Constraint::Length(28),
-                    Constraint::Length(18),
-                    Constraint::Length(8),
-                    Constraint::Length(12),
-                    Constraint::Length(8),
-                    Constraint::Length(10),
-                    Constraint::Length(10),
-                    Constraint::Length(10),
-                    Constraint::Length(16),
-                    Constraint::Length(10),
-                    Constraint::Min(10),
-                ],
-            )
-            .header(header)
-            .block(
-                Block::default()
-                    .title(format!(" AGENTS ({}) ", self.count))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::White)),
-            );
+            let empty_cells: Vec<Cell> = (0..constraints.len()).map(|_| Cell::from("")).collect();
+            let table = Table::new(vec![Row::new(empty_cells)], constraints.clone())
+                .header(header)
+                .block(
+                    Block::default()
+                        .title(format!(" AGENTS ({}) ", self.count))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::White)),
+                );
             frame.render_widget(table, area);
             return;
         }
@@ -206,26 +248,7 @@ impl<'a> AgentListWidget<'a> {
             }
         }
 
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Length(2),  // Selector
-                Constraint::Length(2),  // Summary
-                Constraint::Length(26), // Name
-                Constraint::Length(18), // Status
-                Constraint::Length(8),  // Activity time
-                Constraint::Length(12), // Sparkline
-                Constraint::Length(8),  // Tasks (checklist progress)
-                Constraint::Length(10), // MR
-                Constraint::Length(10), // Pipeline
-                Constraint::Length(10), // Server
-                Constraint::Length(16), // PM Task
-                Constraint::Length(10), // PM Status
-                Constraint::Min(10),    // Note (fills remaining)
-            ],
-        )
-        .header(header)
-        .block(
+        let table = Table::new(rows, constraints.clone()).header(header).block(
             Block::default()
                 .title(format!(" AGENTS ({}) ", self.count))
                 .borders(Borders::ALL)
@@ -236,102 +259,119 @@ impl<'a> AgentListWidget<'a> {
     }
 
     fn render_agent_row(&self, agent: &Agent, selected: bool) -> Row<'a> {
+        let v = self.column_visibility;
+        let mut cells: Vec<Cell> = Vec::new();
+
         // Selector column
-        let selector = if selected { "▶" } else { "" };
-        let selector_cell = Cell::from(selector).style(Style::default().fg(Color::Cyan));
+        if v.selector {
+            let selector = if selected { "▶" } else { "" };
+            cells.push(Cell::from(selector).style(Style::default().fg(Color::Cyan)));
+        }
 
         // Summary column
-        let summary_cell = if agent.summary_requested {
-            Cell::from("✓").style(Style::default().fg(Color::Green))
-        } else {
-            Cell::from("")
-        };
+        if v.summary {
+            let summary_cell = if agent.summary_requested {
+                Cell::from("✓").style(Style::default().fg(Color::Green))
+            } else {
+                Cell::from("")
+            };
+            cells.push(summary_cell);
+        }
 
         // Name column
-        let name_style = if selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        let name = truncate_string(&agent.name, 26);
-        let name_cell = Cell::from(name).style(name_style);
+        if v.name {
+            let name_style = if selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let name = truncate_string(&agent.name, 26);
+            cells.push(Cell::from(name).style(name_style));
+        }
 
-        // Status column (with animated spinner for Running)
-        let (status_text, status_style) = self.format_status(&agent.status);
-        let status_cell = Cell::from(status_text).style(status_style);
+        // Status column
+        if v.status {
+            let (status_text, status_style) = self.format_status(&agent.status);
+            cells.push(Cell::from(status_text).style(status_style));
+        }
 
         // Activity time column
-        let activity_time = agent.time_since_activity();
-        let activity_style = Style::default().fg(Color::DarkGray);
-        let activity_cell = Cell::from(activity_time).style(activity_style);
+        if v.active {
+            let activity_time = agent.time_since_activity();
+            let activity_style = Style::default().fg(Color::DarkGray);
+            cells.push(Cell::from(activity_time).style(activity_style));
+        }
 
-        // Sparkline column (rendered as Unicode bars)
-        let sparkline = self.render_sparkline(agent);
-        let sparkline_cell = Cell::from(sparkline).style(Style::default().fg(Color::Green));
+        // Sparkline column
+        if v.rate {
+            let sparkline = self.render_sparkline(agent);
+            cells.push(Cell::from(sparkline).style(Style::default().fg(Color::Green)));
+        }
 
-        // Tasks column (checklist progress)
-        let (tasks_text, tasks_style) = match agent.checklist_progress {
-            Some((completed, total)) => {
-                let style = if completed == total {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::Yellow)
-                };
-                (format!("{}/{}", completed, total), style)
-            }
-            None => ("—".to_string(), Style::default().fg(Color::DarkGray)),
-        };
-        let tasks_cell = Cell::from(tasks_text).style(tasks_style);
+        // Tasks column
+        if v.tasks {
+            let (tasks_text, tasks_style) = match agent.checklist_progress {
+                Some((completed, total)) => {
+                    let style = if completed == total {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::Yellow)
+                    };
+                    (format!("{}/{}", completed, total), style)
+                }
+                None => ("—".to_string(), Style::default().fg(Color::DarkGray)),
+            };
+            cells.push(Cell::from(tasks_text).style(tasks_style));
+        }
 
         // MR column
-        let (mr_text, mr_style) = self.format_mr_status(agent);
-        let mr_cell = Cell::from(mr_text).style(mr_style);
+        if v.mr {
+            let (mr_text, mr_style) = self.format_mr_status(agent);
+            cells.push(Cell::from(mr_text).style(mr_style));
+        }
 
         // Pipeline column
-        let (pipeline_text, pipeline_style) = self.format_pipeline_status(agent);
-        let pipeline_cell = Cell::from(pipeline_text).style(pipeline_style);
+        if v.pipeline {
+            let (pipeline_text, pipeline_style) = self.format_pipeline_status(agent);
+            cells.push(Cell::from(pipeline_text).style(pipeline_style));
+        }
 
         // Server column
-        let (server_text, server_style) = self.format_devserver_status(agent);
-        let server_cell = Cell::from(server_text).style(server_style);
+        if v.server {
+            let (server_text, server_style) = self.format_devserver_status(agent);
+            cells.push(Cell::from(server_text).style(server_style));
+        }
 
-        // PM Task column (task name)
-        let (pm_text, pm_style) = self.format_pm_task_name(agent);
-        let pm_cell = Cell::from(pm_text).style(pm_style);
+        // PM Task column
+        if v.task {
+            let (pm_text, pm_style) = self.format_pm_task_name(agent);
+            cells.push(Cell::from(pm_text).style(pm_style));
+        }
 
-        // PM Status column (status name)
-        let (pm_status_text, pm_status_style) = self.format_pm_status_name(agent);
-        let pm_status_cell = Cell::from(pm_status_text).style(pm_status_style);
+        // PM Status column
+        if v.task_status {
+            let (pm_status_text, pm_status_style) = self.format_pm_status_name(agent);
+            cells.push(Cell::from(pm_status_text).style(pm_status_style));
+        }
 
         // Note column
-        let note = agent.custom_note.as_deref().unwrap_or("");
-        let note = truncate_string(note, 30);
-        let note_style = Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::ITALIC);
-        let note_cell = Cell::from(note).style(if agent.custom_note.is_some() {
-            note_style
-        } else {
-            Style::default().fg(Color::DarkGray)
-        });
+        if v.note {
+            let note = agent.custom_note.as_deref().unwrap_or("");
+            let note = truncate_string(note, 30);
+            let note_style = Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::ITALIC);
+            let note_cell = Cell::from(note).style(if agent.custom_note.is_some() {
+                note_style
+            } else {
+                Style::default().fg(Color::DarkGray)
+            });
+            cells.push(note_cell);
+        }
 
-        Row::new(vec![
-            selector_cell,
-            summary_cell,
-            name_cell,
-            status_cell,
-            activity_cell,
-            sparkline_cell,
-            tasks_cell,
-            mr_cell,
-            pipeline_cell,
-            server_cell,
-            pm_cell,
-            pm_status_cell,
-            note_cell,
-        ])
+        Row::new(cells)
     }
 
     fn format_status(&self, status: &AgentStatus) -> (String, Style) {

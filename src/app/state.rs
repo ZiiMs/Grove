@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use super::action::InputMode;
 use super::config::{
-    AiAgent, AutomationConfig, Config, GitProvider, Keybind, Keybinds, LogLevel as ConfigLogLevel,
-    ProjectMgmtProvider, RepoConfig, UiConfig, WorktreeLocation,
+    AiAgent, AutomationConfig, ColumnVisibility, Config, GitProvider, Keybind, Keybinds,
+    LogLevel as ConfigLogLevel, ProjectMgmtProvider, RepoConfig, UiConfig, WorktreeLocation,
 };
 use super::task_list::TaskListItem;
 use crate::agent::Agent;
@@ -760,6 +760,192 @@ impl Default for FileBrowserState {
 }
 
 #[derive(Debug, Clone)]
+pub struct ColumnOption {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub visible: bool,
+    pub default_visible: bool,
+}
+
+impl ColumnOption {
+    pub fn all() -> Vec<Self> {
+        vec![
+            ColumnOption {
+                key: "selector",
+                label: "Selector",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "summary",
+                label: "Summary (S)",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "name",
+                label: "Name",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "status",
+                label: "Status",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "active",
+                label: "Active",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "rate",
+                label: "Rate",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "tasks",
+                label: "Tasks",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "mr",
+                label: "MR",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "pipeline",
+                label: "Pipeline",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "server",
+                label: "Server",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "task",
+                label: "Task",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "task_status",
+                label: "Task Status",
+                visible: true,
+                default_visible: true,
+            },
+            ColumnOption {
+                key: "note",
+                label: "Note",
+                visible: true,
+                default_visible: true,
+            },
+        ]
+    }
+
+    pub fn from_visibility(visibility: &ColumnVisibility) -> Vec<Self> {
+        let mut options = Self::all();
+        if !visibility.selector {
+            options[0].visible = false;
+        }
+        if !visibility.summary {
+            options[1].visible = false;
+        }
+        if !visibility.name {
+            options[2].visible = false;
+        }
+        if !visibility.status {
+            options[3].visible = false;
+        }
+        if !visibility.active {
+            options[4].visible = false;
+        }
+        if !visibility.rate {
+            options[5].visible = false;
+        }
+        if !visibility.tasks {
+            options[6].visible = false;
+        }
+        if !visibility.mr {
+            options[7].visible = false;
+        }
+        if !visibility.pipeline {
+            options[8].visible = false;
+        }
+        if !visibility.server {
+            options[9].visible = false;
+        }
+        if !visibility.task {
+            options[10].visible = false;
+        }
+        if !visibility.task_status {
+            options[11].visible = false;
+        }
+        if !visibility.note {
+            options[12].visible = false;
+        }
+        options
+    }
+
+    pub fn to_visibility(&self) -> ColumnVisibility {
+        ColumnVisibility::default()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ColumnSelectorState {
+    pub active: bool,
+    pub columns: Vec<ColumnOption>,
+    pub selected_index: usize,
+}
+
+impl Default for ColumnSelectorState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            columns: ColumnOption::all(),
+            selected_index: 0,
+        }
+    }
+}
+
+impl ColumnSelectorState {
+    pub fn from_config(visibility: &ColumnVisibility) -> Self {
+        Self {
+            active: false,
+            columns: ColumnOption::from_visibility(visibility),
+            selected_index: 0,
+        }
+    }
+
+    pub fn to_visibility(&self) -> ColumnVisibility {
+        ColumnVisibility {
+            selector: self.columns[0].visible,
+            summary: self.columns[1].visible,
+            name: self.columns[2].visible,
+            status: self.columns[3].visible,
+            active: self.columns[4].visible,
+            rate: self.columns[5].visible,
+            tasks: self.columns[6].visible,
+            mr: self.columns[7].visible,
+            pipeline: self.columns[8].visible,
+            server: self.columns[9].visible,
+            task: self.columns[10].visible,
+            task_status: self.columns[11].visible,
+            note: self.columns[12].visible,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SettingsState {
     pub active: bool,
     pub tab: SettingsTab,
@@ -1105,6 +1291,7 @@ pub struct AppState {
     pub clipboard: ClipboardHolder,
     pub show_tutorial: bool,
     pub tutorial: Option<TutorialState>,
+    pub column_selector: ColumnSelectorState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1364,6 +1551,7 @@ impl AppState {
         let repo_config = RepoConfig::load(&repo_path).unwrap_or_default();
         let show_logs = config.ui.show_logs;
         let pending_keybinds = config.keybinds.clone();
+        let column_visibility = config.ui.column_visibility.clone();
 
         let worktree_base = config.worktree_base_path(&repo_path);
 
@@ -1426,6 +1614,7 @@ impl AppState {
             clipboard: ClipboardHolder(None),
             show_tutorial: false,
             tutorial: None,
+            column_selector: ColumnSelectorState::from_config(&column_visibility),
         }
     }
 

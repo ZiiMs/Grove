@@ -1195,6 +1195,17 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         };
     }
 
+    // Handle column selector
+    if state.column_selector.active {
+        return match key.code {
+            KeyCode::Esc => Some(Action::ColumnSelectorClose),
+            KeyCode::Char(' ') | KeyCode::Enter => Some(Action::ColumnSelectorToggle),
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::ColumnSelectorSelectNext),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::ColumnSelectorSelectPrev),
+            _ => None,
+        };
+    }
+
     if state.show_global_setup {
         if let Some(wizard) = &state.global_setup {
             return match key.code {
@@ -1509,6 +1520,11 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Status debug
     if matches_keybind(key, &kb.debug_status) {
         return Some(Action::ToggleStatusDebug);
+    }
+
+    // Toggle columns
+    if matches_keybind(key, &kb.toggle_columns) {
+        return Some(Action::ToggleColumnSelector);
     }
 
     // PM status debug (Shift+Q - hardcoded)
@@ -7946,6 +7962,46 @@ async fn process_action(
                     );
                 }
             }
+        }
+
+        // Column Selector Actions
+        Action::ToggleColumnSelector => {
+            if state.column_selector.active {
+                state.column_selector.active = false;
+            } else {
+                state.column_selector = grove::app::state::ColumnSelectorState::from_config(
+                    &state.config.ui.column_visibility,
+                );
+                state.column_selector.active = true;
+            }
+        }
+
+        Action::ColumnSelectorClose => {
+            state.column_selector.active = false;
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+        }
+
+        Action::ColumnSelectorToggle => {
+            let cols = &mut state.column_selector.columns;
+            if let Some(col) = cols.get_mut(state.column_selector.selected_index) {
+                col.visible = !col.visible;
+            }
+            state.config.ui.column_visibility = state.column_selector.to_visibility();
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+        }
+
+        Action::ColumnSelectorSelectNext => {
+            state.column_selector.selected_index = (state.column_selector.selected_index + 1)
+                .min(state.column_selector.columns.len().saturating_sub(1));
+        }
+
+        Action::ColumnSelectorSelectPrev => {
+            state.column_selector.selected_index =
+                state.column_selector.selected_index.saturating_sub(1);
         }
 
         // Global Setup Wizard Actions

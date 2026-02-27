@@ -566,6 +566,8 @@ pub struct UiConfig {
     pub show_logs: bool,
     #[serde(default = "default_true")]
     pub show_banner: bool,
+    #[serde(default)]
+    pub column_visibility: ColumnVisibility,
 }
 
 fn default_true() -> bool {
@@ -584,6 +586,102 @@ fn default_output_buffer() -> usize {
     5000
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnVisibility {
+    #[serde(default = "default_true")]
+    pub selector: bool,
+    #[serde(default = "default_true")]
+    pub summary: bool,
+    #[serde(default = "default_true")]
+    pub name: bool,
+    #[serde(default = "default_true")]
+    pub status: bool,
+    #[serde(default = "default_true")]
+    pub active: bool,
+    #[serde(default = "default_true")]
+    pub rate: bool,
+    #[serde(default = "default_true")]
+    pub tasks: bool,
+    #[serde(default = "default_true")]
+    pub mr: bool,
+    #[serde(default = "default_true")]
+    pub pipeline: bool,
+    #[serde(default = "default_true")]
+    pub server: bool,
+    #[serde(default = "default_true")]
+    pub task: bool,
+    #[serde(default = "default_true")]
+    pub task_status: bool,
+    #[serde(default = "default_true")]
+    pub note: bool,
+}
+
+impl Default for ColumnVisibility {
+    fn default() -> Self {
+        Self {
+            selector: true,
+            summary: true,
+            name: true,
+            status: true,
+            active: true,
+            rate: true,
+            tasks: true,
+            mr: true,
+            pipeline: true,
+            server: true,
+            task: true,
+            task_status: true,
+            note: true,
+        }
+    }
+}
+
+impl ColumnVisibility {
+    pub fn visible_count(&self) -> usize {
+        let mut count = 0;
+        if self.selector {
+            count += 1;
+        }
+        if self.summary {
+            count += 1;
+        }
+        if self.name {
+            count += 1;
+        }
+        if self.status {
+            count += 1;
+        }
+        if self.active {
+            count += 1;
+        }
+        if self.rate {
+            count += 1;
+        }
+        if self.tasks {
+            count += 1;
+        }
+        if self.mr {
+            count += 1;
+        }
+        if self.pipeline {
+            count += 1;
+        }
+        if self.server {
+            count += 1;
+        }
+        if self.task {
+            count += 1;
+        }
+        if self.task_status {
+            count += 1;
+        }
+        if self.note {
+            count += 1;
+        }
+        count
+    }
+}
+
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
@@ -594,6 +692,7 @@ impl Default for UiConfig {
             show_metrics: default_true(),
             show_logs: default_true(),
             show_banner: default_true(),
+            column_visibility: ColumnVisibility::default(),
         }
     }
 }
@@ -718,6 +817,8 @@ pub struct Keybinds {
     pub debug_status: Keybind,
     #[serde(default = "default_toggle_task_filter")]
     pub toggle_task_filter: Keybind,
+    #[serde(default = "default_toggle_columns")]
+    pub toggle_columns: Keybind,
 }
 
 fn default_nav_down() -> Keybind {
@@ -807,6 +908,9 @@ fn default_debug_status() -> Keybind {
 fn default_toggle_task_filter() -> Keybind {
     Keybind::new("f")
 }
+fn default_toggle_columns() -> Keybind {
+    Keybind::with_modifiers("c", vec!["Shift".to_string()])
+}
 
 impl Default for Keybinds {
     fn default() -> Self {
@@ -840,6 +944,7 @@ impl Default for Keybinds {
             refresh_task_list: default_refresh_task_list(),
             debug_status: default_debug_status(),
             toggle_task_filter: default_toggle_task_filter(),
+            toggle_columns: default_toggle_columns(),
         }
     }
 }
@@ -876,6 +981,7 @@ impl Keybinds {
             ("refresh_task_list", &self.refresh_task_list),
             ("debug_status", &self.debug_status),
             ("toggle_task_filter", &self.toggle_task_filter),
+            ("toggle_columns", &self.toggle_columns),
         ]
     }
 
