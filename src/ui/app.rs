@@ -18,8 +18,8 @@ use super::components::{
     DevServerWarningModal, DiffViewWidget, EmptyDevServerWidget, EmptyDiffWidget,
     EmptyOutputWidget, GitSetupModal, GlobalSetupWizard, HelpOverlay, LoadingOverlay,
     OutputViewWidget, PmSetupModal, PmStatusDebugOverlay, ProjectSetupWizard, SettingsModal,
-    StatusBarWidget, StatusDebugOverlay, StatusDropdown, SubtaskStatusDropdown,
-    SystemMetricsWidget, TaskListModal, TaskReassignmentWarningModal, ToastWidget,
+    StatusBarWidget, StatusDebugOverlay, StatusDropdown, SystemMetricsWidget, TaskListModal,
+    TaskReassignmentWarningModal, ToastWidget,
 };
 
 #[derive(Clone)]
@@ -411,11 +411,6 @@ impl<'a> AppWidget<'a> {
             InputMode::SelectTaskStatus => {
                 if let Some(dropdown) = &self.state.task_status_dropdown {
                     StatusDropdown::new(dropdown).render(frame);
-                }
-            }
-            InputMode::SelectSubtaskStatus => {
-                if let Some(dropdown) = &self.state.subtask_status_dropdown {
-                    SubtaskStatusDropdown::new(dropdown).render(frame);
                 }
             }
         }

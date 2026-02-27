@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{TaskItemStatus, TaskListItem};
+use crate::app::TaskListItem;
 use crate::ui::helpers::centered_rect;
 
 pub struct TaskListModal<'a> {
@@ -223,12 +223,6 @@ impl<'a> TaskListModal<'a> {
             let visible_pos = scroll_offset + i;
             let is_selected = visible_pos == selected_visible_pos;
 
-            let (status_icon, status_color) = match &task.status {
-                TaskItemStatus::NotStarted => ("○", Color::Gray),
-                TaskItemStatus::InProgress => ("◐", Color::Yellow),
-                TaskItemStatus::Completed => ("✓", Color::Green),
-            };
-
             let style = if is_selected {
                 Style::default()
                     .fg(Color::Black)
@@ -236,12 +230,6 @@ impl<'a> TaskListModal<'a> {
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
-            };
-
-            let status_style = if is_selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else {
-                Style::default().fg(status_color)
             };
 
             let status_name_style = if is_selected {
@@ -283,7 +271,6 @@ impl<'a> TaskListModal<'a> {
             };
 
             let mut spans = vec![
-                Span::styled(format!("{} ", status_icon), status_style),
                 Span::styled(truncated_name, style),
                 Span::styled("  ", Style::default()),
                 Span::styled(format!("[{}]", task.status_name), status_name_style),

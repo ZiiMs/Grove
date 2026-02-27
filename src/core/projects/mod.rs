@@ -1,4 +1,5 @@
 mod helpers;
+mod statuses;
 
 pub use helpers::{
     create_authenticated_client, extract_id_from_url, find_done_status, find_in_progress_status,
@@ -6,6 +7,7 @@ pub use helpers::{
     http_post_response, http_put, http_put as http_patch, parse_service_id, truncate_with_ellipsis,
     AuthType, OptionalClient, ProviderStatuses, StatusPayload,
 };
+pub use statuses::{fetch_status_options, FetchStatusError, ProjectClients};
 
 pub mod airtable;
 pub mod asana;

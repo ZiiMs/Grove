@@ -1028,7 +1028,6 @@ pub struct AppState {
     pub task_list_scroll: usize,
     pub task_list_expanded_ids: HashSet<String>,
     pub task_status_dropdown: Option<TaskStatusDropdownState>,
-    pub subtask_status_dropdown: Option<SubtaskStatusDropdownState>,
     pub agent_list_scroll: usize,
     pub show_status_debug: bool,
     pub pm_status_debug: PmStatusDebugState,
@@ -1107,15 +1106,9 @@ impl ProjectSetupState {
 #[derive(Debug, Clone)]
 pub struct TaskStatusDropdownState {
     pub agent_id: Uuid,
+    pub task_id: Option<String>,
+    pub task_name: Option<String>,
     pub status_options: Vec<StatusOption>,
-    pub selected_index: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct SubtaskStatusDropdownState {
-    pub task_id: String,
-    pub task_name: String,
-    pub current_completed: bool,
     pub selected_index: usize,
 }
 
@@ -1253,7 +1246,6 @@ impl AppState {
             task_list_scroll: 0,
             task_list_expanded_ids: HashSet::new(),
             task_status_dropdown: None,
-            subtask_status_dropdown: None,
             agent_list_scroll: 0,
             show_status_debug: false,
             pm_status_debug: PmStatusDebugState::default(),
@@ -1382,7 +1374,6 @@ impl AppState {
         self.input_mode = None;
         self.input_buffer.clear();
         self.task_status_dropdown = None;
-        self.subtask_status_dropdown = None;
     }
 
     pub fn show_error(&mut self, msg: impl Into<String>) {

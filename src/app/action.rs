@@ -151,23 +151,10 @@ pub enum Action {
     ToggleTaskExpand,
     ToggleSubtaskStatus,
 
-    SubtaskStatusDropdownNext,
-    SubtaskStatusDropdownPrev,
-    SubtaskStatusDropdownSelect {
-        completed: bool,
-    },
-    SubtaskStatusUpdated {
-        task_id: String,
-        completed: bool,
-    },
     SubtaskStatusOptionsLoaded {
         task_id: String,
         task_name: String,
         options: Vec<crate::app::StatusOption>,
-    },
-    SubtaskStatusOptionSelected {
-        task_id: String,
-        status_name: String,
     },
 
     ConfirmTaskReassignment,
@@ -419,5 +406,4 @@ pub enum InputMode {
     ConfirmDeleteAsana,
     BrowseTasks,
     SelectTaskStatus,
-    SelectSubtaskStatus,
 }
