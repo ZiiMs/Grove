@@ -1,4 +1,5 @@
 pub mod agent_list;
+pub mod column_selector;
 pub mod devserver_view;
 pub mod devserver_warning;
 pub mod diff_view;
@@ -23,6 +24,7 @@ pub mod toast;
 pub mod tutorial_wizard;
 
 pub use agent_list::AgentListWidget;
+pub use column_selector::ColumnSelectorWidget;
 pub use devserver_view::{DevServerViewWidget, EmptyDevServerWidget};
 pub use devserver_warning::DevServerWarningModal;
 pub use diff_view::{DiffViewWidget, EmptyDiffWidget};

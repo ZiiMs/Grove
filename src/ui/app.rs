@@ -14,12 +14,12 @@ use crate::app::{AppState, InputMode, LogLevel, PreviewTab};
 use crate::devserver::DevServerStatus;
 
 use super::components::{
-    render_confirm_modal, render_input_modal, AgentListWidget, DevServerViewWidget,
-    DevServerWarningModal, DiffViewWidget, EmptyDevServerWidget, EmptyDiffWidget,
-    EmptyOutputWidget, GitSetupModal, GlobalSetupWizard, HelpOverlay, LoadingOverlay,
-    OutputViewWidget, PmSetupModal, PmStatusDebugOverlay, ProjectSetupWizard, SettingsModal,
-    StatusBarWidget, StatusDebugOverlay, StatusDropdown, SystemMetricsWidget, TaskListModal,
-    TaskReassignmentWarningModal, ToastWidget, TutorialWizard,
+    render_confirm_modal, render_input_modal, AgentListWidget, ColumnSelectorWidget,
+    DevServerViewWidget, DevServerWarningModal, DiffViewWidget, EmptyDevServerWidget,
+    EmptyDiffWidget, EmptyOutputWidget, GitSetupModal, GlobalSetupWizard, HelpOverlay,
+    LoadingOverlay, OutputViewWidget, PmSetupModal, PmStatusDebugOverlay, ProjectSetupWizard,
+    SettingsModal, StatusBarWidget, StatusDebugOverlay, StatusDropdown, SystemMetricsWidget,
+    TaskListModal, TaskReassignmentWarningModal, ToastWidget, TutorialWizard,
 };
 
 #[derive(Clone)]
@@ -127,6 +127,14 @@ impl<'a> AppWidget<'a> {
 
         if self.state.show_help {
             HelpOverlay::new(&self.state.config.keybinds).render(frame, size);
+        }
+
+        if self.state.column_selector.active {
+            ColumnSelectorWidget::new(
+                &self.state.column_selector.columns,
+                self.state.column_selector.selected_index,
+            )
+            .render(frame);
         }
 
         if self.state.settings.active {
@@ -477,6 +485,7 @@ impl<'a> AppWidget<'a> {
                 &self.devserver_statuses,
                 &self.state.settings.repo_config.appearance,
                 self.state.settings.repo_config.project_mgmt.provider,
+                &self.state.config.ui.column_visibility,
             )
             .with_count(self.state.agents.len())
             .render(frame, area);
