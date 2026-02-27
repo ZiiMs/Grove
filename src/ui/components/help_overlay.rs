@@ -155,6 +155,10 @@ impl<'a> HelpOverlay<'a> {
                 kb.show_tasks.display_short()
             )),
             Line::from("  T        Change linked task status"),
+            Line::from(format!(
+                "  {:8} Filter tasks (in task list)",
+                kb.toggle_task_filter.display_short()
+            )),
             Line::from(""),
             Line::from(Span::styled(
                 "Dev Server (DevServer tab)",

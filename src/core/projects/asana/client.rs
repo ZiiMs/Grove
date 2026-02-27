@@ -147,6 +147,7 @@ impl AsanaClient {
 
     /// Fetch subtasks of a parent task.
     pub async fn get_subtasks(&self, parent_gid: &str) -> Result<Vec<AsanaTaskSummary>> {
+        let project_gid = self.project_gid.as_deref();
         let url = format!(
             "https://app.asana.com/api/1.0/tasks/{}/subtasks",
             parent_gid
@@ -159,7 +160,7 @@ impl AsanaClient {
             .get(&url)
             .query(&[(
                 "opt_fields",
-                "gid,name,completed,permalink_url,parent,num_subtasks",
+                "gid,name,completed,permalink_url,parent,num_subtasks,memberships.project.section",
             )])
             .send()
             .await
@@ -185,7 +186,7 @@ impl AsanaClient {
         Ok(task_list
             .data
             .into_iter()
-            .map(AsanaTaskSummary::from)
+            .map(|t| AsanaTaskSummary::from_with_project(t, project_gid))
             .collect())
     }
 
@@ -230,7 +231,7 @@ impl AsanaClient {
             .get(&url)
             .query(&[(
                 "opt_fields",
-                "gid,name,completed,permalink_url,parent,num_subtasks",
+                "gid,name,completed,permalink_url,parent,num_subtasks,memberships.project.section",
             )])
             .send()
             .await
@@ -256,7 +257,7 @@ impl AsanaClient {
         Ok(task_list
             .data
             .into_iter()
-            .map(AsanaTaskSummary::from)
+            .map(|t| AsanaTaskSummary::from_with_project(t, Some(project_gid)))
             .collect())
     }
 
