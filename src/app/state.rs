@@ -172,7 +172,6 @@ pub enum SettingsField {
     KbSetNote,
     KbYank,
     KbCopyPath,
-    KbToggleContinue,
     KbMerge,
     KbPush,
     KbFetch,
@@ -417,7 +416,6 @@ impl SettingsField {
             | SettingsField::KbSetNote
             | SettingsField::KbYank
             | SettingsField::KbCopyPath
-            | SettingsField::KbToggleContinue
             | SettingsField::KbMerge
             | SettingsField::KbPush
             | SettingsField::KbFetch
@@ -458,7 +456,6 @@ impl SettingsField {
                 | SettingsField::KbSetNote
                 | SettingsField::KbYank
                 | SettingsField::KbCopyPath
-                | SettingsField::KbToggleContinue
                 | SettingsField::KbMerge
                 | SettingsField::KbPush
                 | SettingsField::KbFetch
@@ -491,7 +488,6 @@ impl SettingsField {
             SettingsField::KbSetNote => Some("Set Note"),
             SettingsField::KbYank => Some("Copy Name"),
             SettingsField::KbCopyPath => Some("Copy Cd Command"),
-            SettingsField::KbToggleContinue => Some("Toggle Continue"),
             SettingsField::KbMerge => Some("Merge Main"),
             SettingsField::KbPush => Some("Push Changes"),
             SettingsField::KbFetch => Some("Fetch Remote"),
@@ -674,7 +670,6 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::KbYank),
                 SettingsItem::Category(SettingsCategory::KeybindGit),
                 SettingsItem::Field(SettingsField::KbCopyPath),
-                SettingsItem::Field(SettingsField::KbToggleContinue),
                 SettingsItem::Field(SettingsField::KbMerge),
                 SettingsItem::Field(SettingsField::KbPush),
                 SettingsItem::Field(SettingsField::KbFetch),
@@ -859,7 +854,6 @@ impl SettingsState {
             SettingsField::KbSetNote => Some(&self.pending_keybinds.set_note),
             SettingsField::KbYank => Some(&self.pending_keybinds.yank),
             SettingsField::KbCopyPath => Some(&self.pending_keybinds.copy_path),
-            SettingsField::KbToggleContinue => Some(&self.pending_keybinds.toggle_continue),
             SettingsField::KbMerge => Some(&self.pending_keybinds.merge),
             SettingsField::KbPush => Some(&self.pending_keybinds.push),
             SettingsField::KbFetch => Some(&self.pending_keybinds.fetch),
@@ -893,7 +887,6 @@ impl SettingsState {
             SettingsField::KbSetNote => self.pending_keybinds.set_note = keybind,
             SettingsField::KbYank => self.pending_keybinds.yank = keybind,
             SettingsField::KbCopyPath => self.pending_keybinds.copy_path = keybind,
-            SettingsField::KbToggleContinue => self.pending_keybinds.toggle_continue = keybind,
             SettingsField::KbMerge => self.pending_keybinds.merge = keybind,
             SettingsField::KbPush => self.pending_keybinds.push = keybind,
             SettingsField::KbFetch => self.pending_keybinds.fetch = keybind,
