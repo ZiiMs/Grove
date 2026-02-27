@@ -20,6 +20,7 @@ pub mod system_metrics;
 pub mod task_list_modal;
 pub mod task_reassignment_warning;
 pub mod toast;
+pub mod tutorial_wizard;
 
 pub use agent_list::AgentListWidget;
 pub use devserver_view::{DevServerViewWidget, EmptyDevServerWidget};
@@ -42,3 +43,4 @@ pub use system_metrics::SystemMetricsWidget;
 pub use task_list_modal::TaskListModal;
 pub use task_reassignment_warning::TaskReassignmentWarningModal;
 pub use toast::ToastWidget;
+pub use tutorial_wizard::TutorialWizard;
