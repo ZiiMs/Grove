@@ -3,7 +3,6 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arboard::Clipboard;
 use sysinfo::System;
 
 use anyhow::Result;
@@ -2333,20 +2332,21 @@ async fn process_action(
                 let worktree_path = agent.worktree_path.clone();
                 let cd_cmd = format!("cd {}", worktree_path);
 
-                // Copy to clipboard
-                let clipboard_result = Clipboard::new().and_then(|mut c| c.set_text(&cd_cmd));
-
-                // Print to stdout (visible when app exits)
-                println!("{}", cd_cmd);
-
-                let message = if clipboard_result.is_ok() {
-                    format!("Copied: {}", cd_cmd)
+                if let Some(clipboard) = state.get_clipboard() {
+                    match clipboard.set_text(&cd_cmd) {
+                        Ok(()) => {
+                            state.log_info(format!("Copied: {}", cd_cmd));
+                            state.show_success(format!("Copied: {}", cd_cmd));
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Clipboard error: {}", e));
+                            state.show_error(format!("Copy failed: {}", e));
+                        }
+                    }
                 } else {
-                    format!("cd command: {}", cd_cmd)
-                };
-
-                state.log_info(&message);
-                state.show_success(message);
+                    state.log_error("Failed to access clipboard".to_string());
+                    state.show_error("Clipboard unavailable".to_string());
+                }
             }
         }
 
@@ -5699,17 +5699,18 @@ async fn process_action(
 
         Action::PmStatusDebugCopyPayload => {
             if let Some(ref payload) = state.pm_status_debug.payload {
-                match Clipboard::new() {
-                    Ok(mut clipboard) => {
-                        if let Err(e) = clipboard.set_text(payload) {
+                let payload = payload.clone();
+                if let Some(clipboard) = state.get_clipboard() {
+                    match clipboard.set_text(&payload) {
+                        Ok(()) => state.show_info("Payload copied to clipboard"),
+                        Err(e) => {
                             state.log_error(format!("Failed to copy to clipboard: {}", e));
-                        } else {
-                            state.show_info("Payload copied to clipboard");
+                            state.show_error(format!("Copy failed: {}", e));
                         }
                     }
-                    Err(e) => {
-                        state.log_error(format!("Failed to access clipboard: {}", e));
-                    }
+                } else {
+                    state.log_error("Failed to access clipboard".to_string());
+                    state.show_error("Clipboard unavailable".to_string());
                 }
             }
         }
@@ -5930,13 +5931,13 @@ async fn process_action(
         Action::CopyAgentName { id } => {
             if let Some(agent) = state.agents.get(&id) {
                 let name = agent.name.clone();
-                match Clipboard::new().and_then(|mut c| c.set_text(&name)) {
-                    Ok(()) => {
-                        state.show_success(format!("Copied '{}'", name));
+                if let Some(clipboard) = state.get_clipboard() {
+                    match clipboard.set_text(&name) {
+                        Ok(()) => state.show_success(format!("Copied '{}'", name)),
+                        Err(e) => state.show_error(format!("Copy failed: {}", e)),
                     }
-                    Err(e) => {
-                        state.show_error(format!("Copy failed: {}", e));
-                    }
+                } else {
+                    state.show_error("Clipboard unavailable".to_string());
                 }
             }
         }
