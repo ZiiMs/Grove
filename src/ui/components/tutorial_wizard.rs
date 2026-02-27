@@ -254,8 +254,8 @@ impl<'a> TutorialWizard<'a> {
             key_value_line("↑/↓  or j/k", "Move between agents"),
             key_value_line("g", "Go to first agent"),
             key_value_line("G (Shift+g)", "Go to last agent"),
-            key_value_line("Enter", "Attach to agent's tmux session"),
-            key_value_line("Ctrl+b+d", "Detatch from a agent's tmux session"),
+            key_value_line("Enter", "Attach to agent's zellij session"),
+            key_value_line("Ctrl+o+d", "Detach from agent's zellij session"),
             key_value_line("?", "Show all keybinds"),
         ]
     }

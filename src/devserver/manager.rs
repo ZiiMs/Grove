@@ -91,10 +91,10 @@ impl DevServerManager {
             .unwrap_or(false)
     }
 
-    pub fn get_tmux_session(&self, agent_id: Uuid) -> Option<String> {
+    pub fn get_session(&self, agent_id: Uuid) -> Option<String> {
         self.servers
             .get(&agent_id)
-            .and_then(|s| s.tmux_session().map(String::from))
+            .and_then(|s| s.session().map(String::from))
     }
 
     pub fn all_statuses(&self) -> HashMap<Uuid, super::process::DevServerStatus> {

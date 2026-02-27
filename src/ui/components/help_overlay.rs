@@ -65,7 +65,7 @@ impl<'a> HelpOverlay<'a> {
                 kb.delete_agent.display_short()
             )),
             Line::from(format!(
-                "  {:8} Attach to agent's tmux session",
+                "  {:8} Attach to agent's zellij session",
                 kb.attach.display_short()
             )),
             Line::from(format!(

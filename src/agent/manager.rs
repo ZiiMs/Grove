@@ -5,7 +5,7 @@ use uuid::Uuid;
 use super::{Agent, AgentStatus};
 use crate::app::config::AiAgent;
 use crate::git::Worktree;
-use crate::tmux::TmuxSession;
+use crate::zellij::ZellijSession;
 
 /// Manages the lifecycle of agents.
 pub struct AgentManager {
@@ -21,7 +21,7 @@ impl AgentManager {
         }
     }
 
-    /// Create a new agent with worktree and tmux session.
+    /// Create a new agent with worktree and zellij session.
     pub fn create_agent(
         &self,
         name: &str,
@@ -47,20 +47,20 @@ impl AgentManager {
 
         let agent = Agent::new(name.to_string(), branch.to_string(), worktree_path.clone());
 
-        let session = TmuxSession::new(&agent.tmux_session);
+        let session = ZellijSession::new(&agent.session_name);
         session
             .create(&worktree_path, ai_agent.command())
-            .context("Failed to create tmux session")?;
+            .context("Failed to create zellij session")?;
 
         Ok(agent)
     }
 
-    /// Delete an agent, cleaning up worktree and tmux session.
+    /// Delete an agent, cleaning up worktree and zellij session.
     pub fn delete_agent(&self, agent: &Agent) -> Result<()> {
-        // Kill tmux session first
-        let session = TmuxSession::new(&agent.tmux_session);
+        // Kill zellij session first
+        let session = ZellijSession::new(&agent.session_name);
         if session.exists() {
-            session.kill().context("Failed to kill tmux session")?;
+            session.kill().context("Failed to kill zellij session")?;
         }
 
         // Remove worktree
@@ -74,23 +74,23 @@ impl AgentManager {
         Ok(())
     }
 
-    /// Attach to an agent's tmux session.
+    /// Attach to an agent's zellij session.
     /// Auto-recreates the session if it doesn't exist (e.g., after system restart).
     pub fn attach_to_agent(&self, agent: &Agent, ai_agent: &AiAgent) -> Result<()> {
-        let session = TmuxSession::new(&agent.tmux_session);
+        let session = ZellijSession::new(&agent.session_name);
 
         if !session.exists() {
             session
                 .create(&agent.worktree_path, ai_agent.command())
-                .context("Failed to create tmux session")?;
+                .context("Failed to create zellij session")?;
         }
 
         session.attach()
     }
 
-    /// Get the current output from an agent's tmux session.
+    /// Get the current output from an agent's zellij session.
     pub fn capture_output(&self, agent: &Agent, lines: usize) -> Result<String> {
-        let session = TmuxSession::new(&agent.tmux_session);
+        let session = ZellijSession::new(&agent.session_name);
 
         if !session.exists() {
             return Ok(String::new());
@@ -105,33 +105,31 @@ impl AgentManager {
         Ok(super::detector::detect_status(&output).status)
     }
 
-    /// Send input to an agent's tmux session.
+    /// Send input to an agent's zellij session.
     pub fn send_input(&self, agent: &Agent, input: &str) -> Result<()> {
-        let session = TmuxSession::new(&agent.tmux_session);
+        let session = ZellijSession::new(&agent.session_name);
 
         if !session.exists() {
-            anyhow::bail!("Tmux session does not exist");
+            anyhow::bail!("Zellij session does not exist");
         }
 
         session.send_keys(input)
     }
 
-    /// Check if an agent's tmux session is still alive.
+    /// Check if an agent's zellij session is still alive.
     pub fn is_session_alive(&self, agent: &Agent) -> bool {
-        let session = TmuxSession::new(&agent.tmux_session);
+        let session = ZellijSession::new(&agent.session_name);
         session.exists()
     }
 
     /// Restart an agent's AI session.
     pub fn restart_agent(&self, agent: &Agent, ai_agent: &AiAgent) -> Result<()> {
-        let session = TmuxSession::new(&agent.tmux_session);
+        let session = ZellijSession::new(&agent.session_name);
 
         if !session.exists() {
             session.create(&agent.worktree_path, ai_agent.command())?;
         } else {
-            let _ = std::process::Command::new("tmux")
-                .args(["send-keys", "-t", &agent.tmux_session, "C-c"])
-                .output();
+            session.send_keys_raw("\x03")?;
 
             std::thread::sleep(std::time::Duration::from_millis(100));
             session.send_keys(ai_agent.command())?;
@@ -142,7 +140,7 @@ impl AgentManager {
 
     /// Get info about all currently running grove sessions.
     pub fn list_running_sessions() -> Result<Vec<String>> {
-        crate::tmux::list_grove_sessions()
+        crate::zellij::list_grove_sessions()
     }
 
     /// Recover orphaned sessions (sessions without agents).

@@ -45,8 +45,8 @@ use grove::core::projects::{fetch_status_options, ProjectClients};
 use grove::devserver::DevServerManager;
 use grove::git::{GitSync, Worktree};
 use grove::storage::{save_session, SessionStorage};
-use grove::tmux::is_tmux_available;
 use grove::ui::{AppWidget, DevServerRenderInfo};
+use grove::zellij::is_zellij_available;
 
 fn matches_keybind(key: crossterm::event::KeyEvent, keybind: &grove::app::config::Keybind) -> bool {
     let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -131,8 +131,8 @@ async fn main() -> Result<()> {
     tracing::info!("=== Grove starting ===");
 
     // Check prerequisites
-    if !is_tmux_available() {
-        anyhow::bail!("tmux is not installed or not in PATH. Please install tmux first.");
+    if !is_zellij_available() {
+        anyhow::bail!("zellij is not installed or not in PATH. Please install zellij first.");
     }
 
     // Get repository path from args or current directory
@@ -311,7 +311,7 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             for agent in agents_to_continue {
                 let worktree_path = agent.worktree_path.clone();
-                let tmux_session = agent.tmux_session.clone();
+                let session_name = agent.session_name.clone();
                 let branch = agent.branch.clone();
                 let name = agent.name.clone();
                 let opencode_session_id = agent.opencode_session_id.clone();
@@ -330,7 +330,7 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                let session = grove::tmux::TmuxSession::new(&tmux_session);
+                let session = grove::zellij::ZellijSession::new(&session_name);
                 if !session.exists() {
                     let command = if matches!(ai_agent, grove::app::config::AiAgent::Opencode) {
                         let session_id = opencode_session_id
@@ -356,7 +356,7 @@ async fn main() -> Result<()> {
                     };
 
                     if let Err(e) = session.create(&worktree_path, &command) {
-                        eprintln!("Failed to create tmux session for '{}': {}", name, e);
+                        eprintln!("Failed to create zellij session for '{}': {}", name, e);
                         continue;
                     }
                 }
@@ -750,7 +750,7 @@ async fn main() -> Result<()> {
             let session_name = devserver_manager
                 .try_lock()
                 .ok()
-                .and_then(|m| m.get_tmux_session(id));
+                .and_then(|m| m.get_session(id));
 
             if let Some(session_name) = session_name {
                 state.log_info(format!(
@@ -771,9 +771,9 @@ async fn main() -> Result<()> {
                     DisableBracketedPaste
                 )?;
 
-                // Attach to tmux (blocks until detach)
-                let tmux_session = grove::tmux::TmuxSession::new(&session_name);
-                let attach_result = tmux_session.attach();
+                // Attach to zellij (blocks until detach)
+                let zellij_session = grove::zellij::ZellijSession::new(&session_name);
+                let attach_result = zellij_session.attach();
 
                 // Restore TUI mode
                 enable_raw_mode()?;
@@ -819,7 +819,7 @@ async fn main() -> Result<()> {
                     DisableBracketedPaste
                 )?;
 
-                // Attach to tmux (blocks until detach)
+                // Attach to zellij (blocks until detach)
                 let ai_agent = state.config.global.ai_agent.clone();
                 let attach_result = agent_manager.attach_to_agent(&agent, &ai_agent);
 
@@ -838,7 +838,7 @@ async fn main() -> Result<()> {
                     let _ = event::read();
                 }
 
-                state.log_info("Returned from tmux session");
+                state.log_info("Returned from zellij session");
 
                 if let Err(e) = attach_result {
                     state.log_error(format!("Attach error: {}", e));
@@ -2201,12 +2201,12 @@ async fn process_action(
             let agent_info = state.agents.get(&id).map(|a| {
                 (
                     a.name.clone(),
-                    a.tmux_session.clone(),
+                    a.session_name.clone(),
                     a.worktree_path.clone(),
                 )
             });
 
-            if let Some((name, tmux_session, worktree_path)) = agent_info {
+            if let Some((name, session_name, worktree_path)) = agent_info {
                 state.log_info(format!("Deleting agent '{}'...", name));
                 state.loading_message = Some(format!("Deleting '{}'...", name));
 
@@ -2214,8 +2214,8 @@ async fn process_action(
                 let name_clone = name.clone();
                 let repo_path = state.repo_path.clone();
                 tokio::spawn(async move {
-                    // Kill tmux session
-                    let session = grove::tmux::TmuxSession::new(&tmux_session);
+                    // Kill zellij session
+                    let session = grove::zellij::ZellijSession::new(&session_name);
                     if session.exists() {
                         let _ = session.kill();
                     }
@@ -2378,10 +2378,10 @@ async fn process_action(
             let agent_info = state
                 .agents
                 .get(&id)
-                .map(|a| (a.name.clone(), a.tmux_session.clone()));
+                .map(|a| (a.name.clone(), a.session_name.clone()));
 
-            if let Some((name, tmux_session)) = agent_info {
-                let session = grove::tmux::TmuxSession::new(&tmux_session);
+            if let Some((name, session_name)) = agent_info {
+                let session = grove::zellij::ZellijSession::new(&session_name);
                 match session.send_keys(&prompt) {
                     Ok(()) => {
                         if let Some(agent) = state.agents.get_mut(&id) {
@@ -2402,10 +2402,10 @@ async fn process_action(
             let agent_info = state
                 .agents
                 .get(&id)
-                .map(|a| (a.name.clone(), a.tmux_session.clone()));
+                .map(|a| (a.name.clone(), a.session_name.clone()));
 
-            if let Some((name, tmux_session)) = agent_info {
-                let session = grove::tmux::TmuxSession::new(&tmux_session);
+            if let Some((name, session_name)) = agent_info {
+                let session = grove::zellij::ZellijSession::new(&session_name);
                 let agent_type = state.config.global.ai_agent.clone();
                 let push_cmd = agent_type.push_command();
                 let push_prompt = state
@@ -2478,10 +2478,10 @@ async fn process_action(
             let agent_info = state
                 .agents
                 .get(&id)
-                .map(|a| (a.name.clone(), a.tmux_session.clone()));
+                .map(|a| (a.name.clone(), a.session_name.clone()));
 
-            if let Some((name, tmux_session)) = agent_info {
-                let session = grove::tmux::TmuxSession::new(&tmux_session);
+            if let Some((name, session_name)) = agent_info {
+                let session = grove::zellij::ZellijSession::new(&session_name);
                 match session.send_keys(&prompt) {
                     Ok(()) => {
                         if let Some(agent) = state.agents.get_mut(&id) {
@@ -10023,7 +10023,7 @@ async fn process_action(
     Ok(false)
 }
 
-/// Background task to poll agent status from tmux sessions.
+/// Background task to poll agent status from zellij sessions.
 async fn poll_agents(
     mut agent_rx: watch::Receiver<HashSet<Uuid>>,
     mut selected_rx: watch::Receiver<Option<Uuid>>,
@@ -10061,163 +10061,112 @@ async fn poll_agents(
         for id in agent_ids {
             let is_selected = selected_id == Some(id);
             let session_name = format!("grove-{}", id.as_simple());
+            let session = grove::zellij::ZellijSession::new(&session_name);
+
+            // Skip if session doesn't exist
+            if !session.exists() {
+                continue;
+            }
 
             // PRIORITY 1: Capture preview for selected agent FIRST
             // This ensures preview updates even if status detection crashes
             if is_selected {
-                match std::process::Command::new("tmux")
-                    .args([
-                        "capture-pane",
-                        "-t",
-                        &session_name,
-                        "-p",
-                        "-e",
-                        "-J",
-                        "-S",
-                        "-1000",
-                    ])
-                    .output()
-                {
-                    Ok(output) => {
-                        if output.status.success() {
-                            let preview = String::from_utf8_lossy(&output.stdout).to_string();
-                            if let Err(e) = tx.send(Action::UpdatePreviewContent(Some(preview))) {
-                                tracing::error!(
-                                    "poll_agents: FAILED to send UpdatePreviewContent: {}",
-                                    e
-                                );
-                            }
+                match session.capture_pane(1000) {
+                    Ok(preview) => {
+                        if let Err(e) = tx.send(Action::UpdatePreviewContent(Some(preview))) {
+                            tracing::error!(
+                                "poll_agents: FAILED to send UpdatePreviewContent: {}",
+                                e
+                            );
                         }
                     }
                     Err(e) => {
-                        tracing::error!("poll_agents: tmux preview command FAILED: {}", e);
+                        tracing::error!("poll_agents: zellij preview capture FAILED: {}", e);
                     }
                 }
             }
 
             // PRIORITY 2: Status detection (can be slow, may crash)
-            // Always do a plain capture (no ANSI, consistent line count) for status detection
-            // -J joins wrapped lines so URLs and long text aren't split across lines
-            let capture_result = std::process::Command::new("tmux")
-                .args([
-                    "capture-pane",
-                    "-t",
-                    &session_name,
-                    "-p",
-                    "-J",
-                    "-S",
-                    "-100",
-                ])
-                .output();
+            let capture_result = session.capture_pane(100);
 
-            if let Ok(output) = capture_result {
-                if output.status.success() {
-                    let content = String::from_utf8_lossy(&output.stdout).to_string();
+            if let Ok(content) = capture_result {
+                // Track activity by comparing content hash
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                content.hash(&mut hasher);
+                let content_hash = hasher.finish();
 
-                    // Track activity by comparing content hash
-                    use std::hash::{Hash, Hasher};
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    content.hash(&mut hasher);
-                    let content_hash = hasher.finish();
+                let had_activity = previous_content
+                    .get(&id)
+                    .map(|&prev| prev != content_hash)
+                    .unwrap_or(false);
 
-                    let had_activity = previous_content
-                        .get(&id)
-                        .map(|&prev| prev != content_hash)
-                        .unwrap_or(false);
+                previous_content.insert(id, content_hash);
+                let _ = tx.send(Action::RecordActivity { id, had_activity });
 
-                    previous_content.insert(id, content_hash);
-                    let _ = tx.send(Action::RecordActivity { id, had_activity });
+                // Get foreground process using content-based detection
+                let foreground = session
+                    .pane_current_command()
+                    .map(|cmd| ForegroundProcess::from_command_for_agent(&cmd, ai_agent.clone()))
+                    .unwrap_or(ForegroundProcess::Unknown);
 
-                    // Query foreground process for ground-truth status detection
-                    let foreground = {
-                        let cmd_output = std::process::Command::new("tmux")
-                            .args([
-                                "display-message",
-                                "-t",
-                                &session_name,
-                                "-p",
-                                "#{pane_current_command}",
-                            ])
-                            .output();
-                        match cmd_output {
-                            Ok(o) if o.status.success() => {
-                                let cmd = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                                ForegroundProcess::from_command_for_agent(&cmd, ai_agent.clone())
-                            }
-                            _ => ForegroundProcess::Unknown,
-                        }
-                    };
-                    let status = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        detect_status_for_agent(&content, foreground, ai_agent.clone())
-                    }))
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("detect_status_for_agent panicked: {:?}", e);
-                        StatusDetection::new(AgentStatus::Idle)
-                    });
+                let status = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    detect_status_for_agent(&content, foreground, ai_agent.clone())
+                }))
+                .unwrap_or_else(|e| {
+                    tracing::warn!("detect_status_for_agent panicked: {:?}", e);
+                    StatusDetection::new(AgentStatus::Idle)
+                });
 
-                    let status_reason = if debug_mode {
-                        status.to_status_reason()
-                    } else {
-                        None
-                    };
+                let status_reason = if debug_mode {
+                    status.to_status_reason()
+                } else {
+                    None
+                };
 
-                    let _ = tx.send(Action::UpdateAgentStatus {
-                        id,
-                        status: status.status,
-                        status_reason,
-                    });
+                let _ = tx.send(Action::UpdateAgentStatus {
+                    id,
+                    status: status.status,
+                    status_reason,
+                });
 
-                    // Check for MR URLs detection
-                    if !agents_with_mr.contains(&id) {
-                        if let Some(mr_status) = detect_mr_url(&content) {
-                            agents_with_mr.insert(id);
-                            let _ = tx.send(Action::UpdateMrStatus {
-                                id,
-                                status: mr_status,
-                            });
-                        }
+                // Check for MR URLs detection
+                if !agents_with_mr.contains(&id) {
+                    if let Some(mr_status) = detect_mr_url(&content) {
+                        agents_with_mr.insert(id);
+                        let _ = tx.send(Action::UpdateMrStatus {
+                            id,
+                            status: mr_status,
+                        });
                     }
-
-                    // Check for checklist progress (wrap in catch_unwind to prevent crashing the loop)
-                    let progress = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        detect_checklist_progress(&content, ai_agent.clone())
-                    }))
-                    .unwrap_or_else(|e| {
-                        tracing::warn!("detect_checklist_progress panicked, skipping: {:?}", e);
-                        None
-                    });
-                    let _ = tx.send(Action::UpdateChecklistProgress { id, progress });
                 }
-            } else {
+
+                // Check for checklist progress (wrap in catch_unwind to prevent crashing the loop)
+                let progress = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    detect_checklist_progress(&content, ai_agent.clone())
+                }))
+                .unwrap_or_else(|e| {
+                    tracing::warn!("detect_checklist_progress panicked, skipping: {:?}", e);
+                    None
+                });
+                let _ = tx.send(Action::UpdateChecklistProgress { id, progress });
+            } else if let Err(e) = capture_result {
                 tracing::warn!(
-                    "poll_agents: capture-pane command FAILED for session {}",
-                    session_name
+                    "poll_agents: capture command FAILED for session {}: {}",
+                    session_name,
+                    e
                 );
             }
 
             // Deep MR URL scan: capture 500 lines every ~5s for agents without MR detected
             if deep_scan_counter.is_multiple_of(20) && !agents_with_mr.contains(&id) {
-                if let Ok(output) = std::process::Command::new("tmux")
-                    .args([
-                        "capture-pane",
-                        "-t",
-                        &session_name,
-                        "-p",
-                        "-J",
-                        "-S",
-                        "-500",
-                    ])
-                    .output()
-                {
-                    if output.status.success() {
-                        let deep_content = String::from_utf8_lossy(&output.stdout).to_string();
-                        if let Some(mr_status) = detect_mr_url(&deep_content) {
-                            agents_with_mr.insert(id);
-                            let _ = tx.send(Action::UpdateMrStatus {
-                                id,
-                                status: mr_status,
-                            });
-                        }
+                if let Ok(deep_content) = session.capture_pane(500) {
+                    if let Some(mr_status) = detect_mr_url(&deep_content) {
+                        agents_with_mr.insert(id);
+                        let _ = tx.send(Action::UpdateMrStatus {
+                            id,
+                            status: mr_status,
+                        });
                     }
                 }
             }

@@ -4,11 +4,11 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::app::{Action, DevServerConfig};
-use crate::tmux::TmuxSession;
+use crate::zellij::ZellijSession;
 
 const MAX_LOG_LINES: usize = 5000;
 
-pub fn tmux_session_name(agent_id: Uuid) -> String {
+pub fn session_name(agent_id: Uuid) -> String {
     format!("grove-dev-{}", &agent_id.to_string()[..8])
 }
 
@@ -16,7 +16,7 @@ pub fn tmux_session_name(agent_id: Uuid) -> String {
 pub enum DevServerStatus {
     Stopped,
     Starting,
-    Running { pid: u32, port: Option<u16> },
+    Running { port: Option<u16> },
     Stopping,
     Failed(String),
 }
@@ -48,7 +48,7 @@ impl DevServerStatus {
 
     pub fn port(&self) -> Option<u16> {
         match self {
-            DevServerStatus::Running { port, .. } => *port,
+            DevServerStatus::Running { port } => *port,
             _ => None,
         }
     }
@@ -57,7 +57,7 @@ impl DevServerStatus {
 pub struct DevServer {
     status: DevServerStatus,
     logs: VecDeque<String>,
-    tmux_session: Option<String>,
+    session: Option<String>,
     agent_name: String,
 }
 
@@ -66,7 +66,7 @@ impl DevServer {
         Self {
             status: DevServerStatus::Stopped,
             logs: VecDeque::with_capacity(MAX_LOG_LINES),
-            tmux_session: None,
+            session: None,
             agent_name: String::new(),
         }
     }
@@ -102,27 +102,22 @@ impl DevServer {
             self.append_log(format!("$ {}", cmd));
         }
 
-        let session_name = tmux_session_name(agent_id);
-        let session = TmuxSession::new(&session_name);
+        let session_name = session_name(agent_id);
+        let zellij = ZellijSession::new(&session_name);
 
-        if session.exists() {
-            session.kill()?;
+        if zellij.exists() {
+            zellij.kill()?;
         }
 
-        session
+        zellij
             .create(&working_dir.to_string_lossy(), command)
-            .context("Failed to create tmux session for dev server")?;
+            .context("Failed to create zellij session for dev server")?;
 
-        let pid = self.get_tmux_session_pid(&session_name)?;
-
-        self.tmux_session = Some(session_name.clone());
-        self.status = DevServerStatus::Running {
-            pid,
-            port: config.port,
-        };
+        self.session = Some(session_name.clone());
+        self.status = DevServerStatus::Running { port: config.port };
 
         self.append_log(format!("$ {}", command));
-        self.append_log(format!("Dev server started (PID: {})", pid));
+        self.append_log("Dev server started".to_string());
 
         self.spawn_log_poller(agent_id, session_name, action_tx);
 
@@ -137,14 +132,14 @@ impl DevServer {
         self.status = DevServerStatus::Stopping;
         self.append_log("Stopping dev server...".to_string());
 
-        if let Some(session_name) = &self.tmux_session {
-            let session = TmuxSession::new(session_name);
-            if session.exists() {
-                session.kill()?;
+        if let Some(session_name) = &self.session {
+            let zellij = ZellijSession::new(session_name);
+            if zellij.exists() {
+                zellij.kill()?;
             }
         }
 
-        self.tmux_session = None;
+        self.session = None;
         self.status = DevServerStatus::Stopped;
         self.append_log("Dev server stopped".to_string());
 
@@ -208,28 +203,8 @@ impl DevServer {
         Ok(())
     }
 
-    fn get_tmux_session_pid(&self, session_name: &str) -> Result<u32> {
-        let output = std::process::Command::new("tmux")
-            .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])
-            .output()
-            .context("Failed to get tmux pane PID")?;
-
-        if !output.status.success() {
-            anyhow::bail!("Failed to list panes for session {}", session_name);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let pid = stdout
-            .lines()
-            .next()
-            .and_then(|s| s.trim().parse::<u32>().ok())
-            .context("Failed to parse pane PID")?;
-
-        Ok(pid)
-    }
-
-    pub fn tmux_session(&self) -> Option<&str> {
-        self.tmux_session.as_deref()
+    pub fn session(&self) -> Option<&str> {
+        self.session.as_deref()
     }
 
     fn spawn_log_poller(
@@ -250,8 +225,8 @@ impl DevServer {
             loop {
                 sleep(Duration::from_millis(500)).await;
 
-                let tmux = TmuxSession::new(&session);
-                if !tmux.exists() {
+                let zellij = ZellijSession::new(&session);
+                if !zellij.exists() {
                     let _ = tx.send(Action::UpdateDevServerStatus {
                         agent_id: id,
                         status: DevServerStatus::Stopped,
@@ -259,7 +234,7 @@ impl DevServer {
                     break;
                 }
 
-                match tmux.capture_pane(100) {
+                match zellij.capture_pane(100) {
                     Ok(content) => {
                         if content != last_content {
                             let new_lines: Vec<&str> = content

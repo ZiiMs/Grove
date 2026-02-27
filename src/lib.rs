@@ -8,6 +8,6 @@ pub mod devserver;
 pub mod git;
 pub mod opencode;
 pub mod storage;
-pub mod tmux;
 pub mod ui;
 pub mod version;
+pub mod zellij;

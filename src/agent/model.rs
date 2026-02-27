@@ -207,8 +207,7 @@ pub struct Agent {
     pub name: String,
     pub branch: String,
     pub worktree_path: String,
-    pub tmux_session: String,
-    pub tmux_pane: Option<String>,
+    pub session_name: String,
     pub status: AgentStatus,
     pub custom_note: Option<String>,
     pub output_buffer: Vec<String>,
@@ -250,15 +249,14 @@ pub struct Agent {
 impl Agent {
     pub fn new(name: String, branch: String, worktree_path: String) -> Self {
         let id = Uuid::new_v4();
-        let tmux_session = format!("grove-{}", id.as_simple());
+        let session_name = format!("grove-{}", id.as_simple());
 
         Self {
             id,
             name,
             branch,
             worktree_path,
-            tmux_session,
-            tmux_pane: None,
+            session_name,
             status: AgentStatus::Stopped,
             custom_note: None,
             output_buffer: Vec::new(),
