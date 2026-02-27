@@ -45,6 +45,7 @@ pub enum SettingsTab {
     DevServer,
     Automation,
     Keybinds,
+    Appearance,
 }
 
 impl SettingsTab {
@@ -56,6 +57,7 @@ impl SettingsTab {
             SettingsTab::DevServer,
             SettingsTab::Automation,
             SettingsTab::Keybinds,
+            SettingsTab::Appearance,
         ]
     }
 
@@ -67,6 +69,7 @@ impl SettingsTab {
             SettingsTab::DevServer => "Dev Server",
             SettingsTab::Automation => "Automation",
             SettingsTab::Keybinds => "Keybinds",
+            SettingsTab::Appearance => "Appearance",
         }
     }
 
@@ -77,18 +80,20 @@ impl SettingsTab {
             SettingsTab::ProjectMgmt => SettingsTab::DevServer,
             SettingsTab::DevServer => SettingsTab::Automation,
             SettingsTab::Automation => SettingsTab::Keybinds,
-            SettingsTab::Keybinds => SettingsTab::General,
+            SettingsTab::Keybinds => SettingsTab::Appearance,
+            SettingsTab::Appearance => SettingsTab::General,
         }
     }
 
     pub fn prev(&self) -> Self {
         match self {
-            SettingsTab::General => SettingsTab::Keybinds,
+            SettingsTab::General => SettingsTab::Appearance,
             SettingsTab::Git => SettingsTab::General,
             SettingsTab::ProjectMgmt => SettingsTab::Git,
             SettingsTab::DevServer => SettingsTab::ProjectMgmt,
             SettingsTab::Automation => SettingsTab::DevServer,
             SettingsTab::Keybinds => SettingsTab::Automation,
+            SettingsTab::Appearance => SettingsTab::Keybinds,
         }
     }
 }
@@ -204,6 +209,7 @@ pub enum SettingsCategory {
     KeybindGit,
     KeybindExternal,
     KeybindOther,
+    StatusAppearance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -322,8 +328,16 @@ impl SettingsCategory {
             SettingsCategory::KeybindGit => "Git Operations",
             SettingsCategory::KeybindExternal => "External Services",
             SettingsCategory::KeybindOther => "Other",
+            SettingsCategory::StatusAppearance => "Status Appearance",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatusAppearanceColumn {
+    #[default]
+    Icon,
+    Color,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,6 +345,7 @@ pub enum SettingsItem {
     Category(SettingsCategory),
     Field(SettingsField),
     ActionButton(ActionButtonType),
+    StatusAppearanceRow { status_index: usize },
 }
 
 impl SettingsField {
@@ -680,6 +695,10 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::KbQuit),
                 SettingsItem::ActionButton(ActionButtonType::ResetTab),
             ],
+            SettingsTab::Appearance => vec![
+                SettingsItem::Category(SettingsCategory::StatusAppearance),
+                SettingsItem::ActionButton(ActionButtonType::ResetTab),
+            ],
         }
     }
 
@@ -690,6 +709,12 @@ impl SettingsItem {
             .filter_map(|(i, item)| match item {
                 SettingsItem::Field(f) if !f.is_readonly() => Some((i, SettingsItem::Field(*f))),
                 SettingsItem::ActionButton(b) => Some((i, SettingsItem::ActionButton(*b))),
+                SettingsItem::StatusAppearanceRow { status_index } => Some((
+                    i,
+                    SettingsItem::StatusAppearanceRow {
+                        status_index: *status_index,
+                    },
+                )),
                 _ => None,
             })
             .collect()
@@ -748,6 +773,9 @@ pub struct SettingsState {
     pub file_browser: FileBrowserState,
     pub reset_confirmation: Option<ResetType>,
     pub scroll_offset: usize,
+    pub pending_appearance: crate::app::config::AppearanceConfig,
+    pub appearance_status_options: Vec<StatusOption>,
+    pub appearance_column: StatusAppearanceColumn,
 }
 
 impl Default for SettingsState {
@@ -776,17 +804,44 @@ impl Default for SettingsState {
             file_browser: FileBrowserState::default(),
             reset_confirmation: None,
             scroll_offset: 0,
+            pending_appearance: crate::app::config::AppearanceConfig::default(),
+            appearance_status_options: Vec::new(),
+            appearance_column: StatusAppearanceColumn::default(),
         }
     }
 }
 
 impl SettingsState {
     pub fn all_items(&self) -> Vec<SettingsItem> {
-        SettingsItem::all_for_tab(
+        let mut items = SettingsItem::all_for_tab(
             self.tab,
             self.repo_config.git.provider,
             self.repo_config.project_mgmt.provider,
-        )
+        );
+
+        if self.tab == SettingsTab::Appearance && !self.appearance_status_options.is_empty() {
+            let reset_idx = items
+                .iter()
+                .position(|i| matches!(i, SettingsItem::ActionButton(_)));
+            let status_items: Vec<SettingsItem> = self
+                .appearance_status_options
+                .iter()
+                .enumerate()
+                .filter(|(_, status)| !status.name.is_empty())
+                .map(|(idx, _)| SettingsItem::StatusAppearanceRow { status_index: idx })
+                .collect();
+
+            if let Some(pos) = reset_idx {
+                let mut new_items = items[..pos].to_vec();
+                new_items.extend(status_items);
+                new_items.extend(items[pos..].to_vec());
+                items = new_items;
+            } else {
+                items.extend(status_items);
+            }
+        }
+
+        items
     }
 
     pub fn navigable_items(&self) -> Vec<(usize, SettingsItem)> {
@@ -963,6 +1018,10 @@ impl SettingsState {
         self.pending_automation = AutomationConfig::default();
     }
 
+    pub fn reset_appearance_defaults(&mut self) {
+        self.pending_appearance = crate::app::config::AppearanceConfig::default();
+    }
+
     pub fn reset_current_tab(&mut self) {
         match self.tab {
             SettingsTab::General => self.reset_general_defaults(),
@@ -971,6 +1030,7 @@ impl SettingsState {
             SettingsTab::DevServer => self.reset_dev_server_defaults(),
             SettingsTab::Automation => self.reset_automation_defaults(),
             SettingsTab::Keybinds => self.reset_keybinds_defaults(),
+            SettingsTab::Appearance => self.reset_appearance_defaults(),
         }
     }
 
@@ -981,6 +1041,7 @@ impl SettingsState {
         self.reset_dev_server_defaults();
         self.reset_automation_defaults();
         self.reset_keybinds_defaults();
+        self.reset_appearance_defaults();
     }
 }
 

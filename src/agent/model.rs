@@ -59,6 +59,18 @@ impl ProjectMgmtTaskStatus {
         }
     }
 
+    /// Full status name (not truncated) for appearance config lookup.
+    pub fn status_name_full(&self) -> Option<&str> {
+        match self {
+            ProjectMgmtTaskStatus::None => None,
+            ProjectMgmtTaskStatus::Asana(s) => s.status_name_full(),
+            ProjectMgmtTaskStatus::Notion(s) => s.status_name_full(),
+            ProjectMgmtTaskStatus::ClickUp(s) => s.status_name_full(),
+            ProjectMgmtTaskStatus::Airtable(s) => s.status_name_full(),
+            ProjectMgmtTaskStatus::Linear(s) => s.status_name_full(),
+        }
+    }
+
     pub fn is_linked(&self) -> bool {
         !matches!(self, ProjectMgmtTaskStatus::None)
     }

@@ -51,6 +51,16 @@ impl AirtableTaskStatus {
         }
     }
 
+    pub fn status_name_full(&self) -> Option<&str> {
+        match self {
+            AirtableTaskStatus::None => None,
+            AirtableTaskStatus::NotStarted { name, .. }
+            | AirtableTaskStatus::InProgress { name, .. }
+            | AirtableTaskStatus::Completed { name, .. } => Some(name.as_str()),
+            AirtableTaskStatus::Error { .. } => None,
+        }
+    }
+
     pub fn id(&self) -> Option<&str> {
         match self {
             AirtableTaskStatus::None => None,

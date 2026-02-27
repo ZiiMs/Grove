@@ -167,6 +167,7 @@ impl<'a> SettingsModal<'a> {
                     count
                 }
                 SettingsItem::ActionButton(_) => 1,
+                SettingsItem::StatusAppearanceRow { .. } => 1,
             };
             item_line_info.push((item_idx, current_line, line_count));
             current_line += line_count;
@@ -331,6 +332,21 @@ impl<'a> SettingsModal<'a> {
                         line_start,
                         self.render_action_button_line(*btn, is_selected),
                     ));
+                }
+                SettingsItem::StatusAppearanceRow { status_index } => {
+                    let is_selected = item_idx == selected_field_idx;
+                    if let Some(status) = self.state.appearance_status_options.get(*status_index) {
+                        if !status.name.is_empty() {
+                            all_lines.push((
+                                line_start,
+                                self.render_status_appearance_row(
+                                    &status.name,
+                                    *status_index,
+                                    is_selected,
+                                ),
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -1025,6 +1041,68 @@ impl<'a> SettingsModal<'a> {
     }
 
     fn render_dropdown(&self, frame: &mut Frame, selected_index: usize) {
+        // Check if we're on Appearance tab with a status row selected
+        let is_appearance_dropdown = self.state.tab == SettingsTab::Appearance
+            && matches!(
+                self.state.current_item(),
+                SettingsItem::StatusAppearanceRow { .. }
+            );
+
+        if is_appearance_dropdown {
+            use crate::app::state::StatusAppearanceColumn;
+
+            let options: Vec<(String, Option<Color>)> = match self.state.appearance_column {
+                StatusAppearanceColumn::Icon => crate::ui::ICON_PRESETS
+                    .iter()
+                    .map(|(name, icon)| (format!("{}  {}", icon, name), None))
+                    .collect(),
+                StatusAppearanceColumn::Color => crate::ui::COLOR_PALETTE
+                    .iter()
+                    .map(|(name, color)| (name.to_string(), Some(*color)))
+                    .collect(),
+            };
+
+            let option_count = options.len();
+
+            let navigable = self.state.navigable_items();
+            let selected_item_idx = navigable
+                .get(self.state.field_index)
+                .map(|(idx, _)| *idx)
+                .unwrap_or(0);
+
+            let area = get_dropdown_position(frame.area(), selected_item_idx, option_count);
+            frame.render_widget(Clear, area);
+
+            let lines: Vec<Line> = options
+                .iter()
+                .enumerate()
+                .map(|(i, (opt, color))| {
+                    let style = if i == selected_index {
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else if let Some(c) = color {
+                        Style::default().fg(*c)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    Line::from(Span::styled(format!(" {} ", opt), style))
+                })
+                .collect();
+
+            let height = lines.len() as u16 + 2;
+            let dropdown_area = Rect::new(area.x, area.y, area.width, height.min(area.height));
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan));
+
+            let paragraph = Paragraph::new(lines).block(block);
+            frame.render_widget(paragraph, dropdown_area);
+            return;
+        }
+
         let field = self.state.current_field();
         let options: Vec<String> = match field {
             SettingsField::AiAgent => AiAgent::all()
@@ -1080,7 +1158,7 @@ impl<'a> SettingsModal<'a> {
             .map(|(idx, _)| *idx)
             .unwrap_or(0);
 
-        let area = get_dropdown_position(frame.area(), selected_item_idx);
+        let area = get_dropdown_position(frame.area(), selected_item_idx, options.len());
         frame.render_widget(Clear, area);
 
         let lines: Vec<Line> = options
@@ -1277,11 +1355,111 @@ impl<'a> SettingsModal<'a> {
         let paragraph = Paragraph::new(lines).alignment(Alignment::Left);
         frame.render_widget(paragraph, inner);
     }
+
+    fn render_status_appearance_row(
+        &self,
+        status_name: &str,
+        _status_index: usize,
+        is_selected: bool,
+    ) -> Line<'static> {
+        use crate::app::state::StatusAppearanceColumn;
+
+        let pm_provider = self.state.repo_config.project_mgmt.provider;
+        let appearance = self.state.pending_appearance.get_for_provider(pm_provider);
+
+        let current_icon = appearance
+            .statuses
+            .get(status_name)
+            .map(|a| a.icon.as_str())
+            .unwrap_or("○");
+
+        let current_color_name = appearance
+            .statuses
+            .get(status_name)
+            .map(|a| a.color.as_str())
+            .unwrap_or("gray");
+
+        let color = crate::ui::parse_color(current_color_name);
+        let color_display = crate::ui::color_display_name(current_color_name);
+
+        let name_style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        };
+
+        let icon_focused =
+            is_selected && self.state.appearance_column == StatusAppearanceColumn::Icon;
+        let color_focused =
+            is_selected && self.state.appearance_column == StatusAppearanceColumn::Color;
+
+        Line::from(vec![
+            Span::styled("    ", Style::default()),
+            Span::styled(format!("{:16}", status_name), name_style),
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                "Icon:",
+                if icon_focused {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+            Span::styled(" ", Style::default()),
+            Span::styled(
+                format!("[{} ▼]", current_icon),
+                if icon_focused {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                },
+            ),
+            if icon_focused {
+                Span::styled("◀", Style::default().fg(Color::Yellow))
+            } else {
+                Span::styled(" ", Style::default())
+            },
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                "Color:",
+                if color_focused {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                },
+            ),
+            Span::styled(" ", Style::default()),
+            Span::styled(
+                format!("[■ {} ▼]", color_display),
+                if color_focused {
+                    Style::default().fg(color).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(color)
+                },
+            ),
+            if color_focused {
+                Span::styled("◀", Style::default().fg(Color::Yellow))
+            } else {
+                Span::raw("")
+            },
+        ])
+    }
 }
 
-fn get_dropdown_position(frame_area: Rect, item_index: usize) -> Rect {
+fn get_dropdown_position(frame_area: Rect, item_index: usize, option_count: usize) -> Rect {
     let modal_area = centered_rect(70, 80, frame_area);
     let base_y = modal_area.y + 4;
     let row_offset = item_index as u16;
-    Rect::new(modal_area.x + 22, base_y + row_offset, 20, 10)
+    let height = (option_count + 2).min(20) as u16;
+    Rect::new(modal_area.x + 22, base_y + row_offset, 25, height)
 }

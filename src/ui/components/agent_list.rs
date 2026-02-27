@@ -8,18 +8,13 @@ use ratatui::{
     Frame,
 };
 
-use crate::agent::{Agent, AgentStatus, ProjectMgmtTaskStatus};
-use crate::app::config::GitProvider;
+use crate::agent::{Agent, AgentStatus};
+use crate::app::config::{AppearanceConfig, GitProvider, ProjectMgmtProvider};
 use crate::core::git_providers::codeberg::PullRequestStatus as CodebergPullRequestStatus;
 use crate::core::git_providers::github::{
     CheckStatus, PullRequestStatus as GitHubPullRequestStatus,
 };
 use crate::core::git_providers::gitlab::{MergeRequestStatus, PipelineStatus};
-use crate::core::projects::airtable::AirtableTaskStatus;
-use crate::core::projects::asana::AsanaTaskStatus;
-use crate::core::projects::clickup::ClickUpTaskStatus;
-use crate::core::projects::linear::LinearTaskStatus;
-use crate::core::projects::notion::NotionTaskStatus;
 use crate::devserver::DevServerStatus;
 
 /// Braille spinner frames for running status
@@ -36,9 +31,12 @@ pub struct AgentListWidget<'a> {
     count: usize,
     provider: GitProvider,
     devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
+    appearance_config: &'a AppearanceConfig,
+    pm_provider: ProjectMgmtProvider,
 }
 
 impl<'a> AgentListWidget<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agents: &'a [&'a Agent],
         selected: usize,
@@ -46,6 +44,8 @@ impl<'a> AgentListWidget<'a> {
         animation_frame: usize,
         provider: GitProvider,
         devserver_statuses: &'a HashMap<Uuid, DevServerStatus>,
+        appearance_config: &'a AppearanceConfig,
+        pm_provider: ProjectMgmtProvider,
     ) -> Self {
         Self {
             agents,
@@ -55,6 +55,8 @@ impl<'a> AgentListWidget<'a> {
             count: agents.len(),
             provider,
             devserver_statuses,
+            appearance_config,
+            pm_provider,
         }
     }
 
@@ -461,97 +463,63 @@ impl<'a> AgentListWidget<'a> {
     }
 
     fn format_pm_task_name(&self, agent: &Agent) -> (String, Style) {
+        use crate::app::config::StatusAppearance;
+
         let text = agent.pm_task_status.format_short();
-        let style = match &agent.pm_task_status {
-            ProjectMgmtTaskStatus::None => Style::default().fg(Color::DarkGray),
-            ProjectMgmtTaskStatus::Asana(s) => match s {
-                AsanaTaskStatus::None => Style::default().fg(Color::DarkGray),
-                AsanaTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                AsanaTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                AsanaTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-                AsanaTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
-            ProjectMgmtTaskStatus::Notion(s) => match s {
-                NotionTaskStatus::None => Style::default().fg(Color::DarkGray),
-                NotionTaskStatus::Linked { .. } if s.is_completed() => {
-                    Style::default().fg(Color::Green)
-                }
-                NotionTaskStatus::Linked { .. } if s.is_in_progress() => {
-                    Style::default().fg(Color::LightBlue)
-                }
-                NotionTaskStatus::Linked { .. } => Style::default().fg(Color::White),
-                NotionTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
-            ProjectMgmtTaskStatus::ClickUp(s) => match s {
-                ClickUpTaskStatus::None => Style::default().fg(Color::DarkGray),
-                ClickUpTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                ClickUpTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                ClickUpTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-                ClickUpTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
-            ProjectMgmtTaskStatus::Airtable(s) => match s {
-                AirtableTaskStatus::None => Style::default().fg(Color::DarkGray),
-                AirtableTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                AirtableTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                AirtableTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-                AirtableTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
-            ProjectMgmtTaskStatus::Linear(s) => match s {
-                LinearTaskStatus::None => Style::default().fg(Color::DarkGray),
-                LinearTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                LinearTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                LinearTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-                LinearTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
+
+        // Check custom appearance config first using FULL status name
+        if let Some(full_name) = agent.pm_task_status.status_name_full() {
+            let provider_config = self.appearance_config.get_for_provider(self.pm_provider);
+            if let Some(appearance) = provider_config.statuses.get(full_name) {
+                let color = crate::ui::parse_color(&appearance.color);
+                return (text, Style::default().fg(color));
+            }
+        }
+
+        // Fallback: use default_for_status() based on status name
+        let default_appearance = if let Some(full_name) = agent.pm_task_status.status_name_full() {
+            StatusAppearance::default_for_status(full_name)
+        } else {
+            StatusAppearance::default()
         };
-        (text, style)
+        let color = crate::ui::parse_color(&default_appearance.color);
+        (text, Style::default().fg(color))
     }
 
     fn format_pm_status_name(&self, agent: &Agent) -> (String, Style) {
-        let text = agent.pm_task_status.format_status_name();
-        let style = match &agent.pm_task_status {
-            ProjectMgmtTaskStatus::None => Style::default().fg(Color::DarkGray),
-            ProjectMgmtTaskStatus::Asana(s) => match s {
-                AsanaTaskStatus::None => Style::default().fg(Color::DarkGray),
-                AsanaTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                AsanaTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                AsanaTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-                AsanaTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
-            ProjectMgmtTaskStatus::Notion(s) => match s {
-                NotionTaskStatus::None => Style::default().fg(Color::DarkGray),
-                NotionTaskStatus::Linked { .. } if s.is_completed() => {
-                    Style::default().fg(Color::Green)
-                }
-                NotionTaskStatus::Linked { .. } if s.is_in_progress() => {
-                    Style::default().fg(Color::LightBlue)
-                }
-                NotionTaskStatus::Linked { .. } => Style::default().fg(Color::White),
-                NotionTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
-            ProjectMgmtTaskStatus::ClickUp(s) => match s {
-                ClickUpTaskStatus::None => Style::default().fg(Color::DarkGray),
-                ClickUpTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                ClickUpTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                ClickUpTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-                ClickUpTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
-            ProjectMgmtTaskStatus::Airtable(s) => match s {
-                AirtableTaskStatus::None => Style::default().fg(Color::DarkGray),
-                AirtableTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                AirtableTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                AirtableTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-                AirtableTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
-            ProjectMgmtTaskStatus::Linear(s) => match s {
-                LinearTaskStatus::None => Style::default().fg(Color::DarkGray),
-                LinearTaskStatus::NotStarted { .. } => Style::default().fg(Color::White),
-                LinearTaskStatus::InProgress { .. } => Style::default().fg(Color::LightBlue),
-                LinearTaskStatus::Completed { .. } => Style::default().fg(Color::Green),
-                LinearTaskStatus::Error { .. } => Style::default().fg(Color::Red),
-            },
+        use crate::app::config::StatusAppearance;
+
+        let display_name = agent.pm_task_status.format_status_name();
+
+        // Check custom appearance config first using FULL status name
+        if let Some(full_name) = agent.pm_task_status.status_name_full() {
+            let provider_config = self.appearance_config.get_for_provider(self.pm_provider);
+            if let Some(appearance) = provider_config.statuses.get(full_name) {
+                let icon = appearance.icon.clone();
+                let color = crate::ui::parse_color(&appearance.color);
+                let text = if icon.is_empty() {
+                    display_name.clone()
+                } else {
+                    format!("{} {}", icon, display_name)
+                };
+                return (text, Style::default().fg(color));
+            }
+        }
+
+        // Fallback: use default_for_status() based on status name
+        let default_appearance = if let Some(full_name) = agent.pm_task_status.status_name_full() {
+            StatusAppearance::default_for_status(full_name)
+        } else {
+            StatusAppearance::default()
         };
-        (text, style)
+        let icon = default_appearance.icon.clone();
+        let color = crate::ui::parse_color(&default_appearance.color);
+        let text = if icon.is_empty() {
+            display_name
+        } else {
+            format!("{} {}", icon, display_name)
+        };
+        (text, Style::default().fg(color))
     }
 
     fn format_devserver_status(&self, agent: &Agent) -> (String, Style) {

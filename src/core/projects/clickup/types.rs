@@ -53,6 +53,16 @@ impl ClickUpTaskStatus {
         }
     }
 
+    pub fn status_name_full(&self) -> Option<&str> {
+        match self {
+            ClickUpTaskStatus::None => None,
+            ClickUpTaskStatus::NotStarted { status, .. }
+            | ClickUpTaskStatus::InProgress { status, .. } => Some(status.as_str()),
+            ClickUpTaskStatus::Completed { .. } => Some("Done"),
+            ClickUpTaskStatus::Error { .. } => None,
+        }
+    }
+
     pub fn id(&self) -> Option<&str> {
         match self {
             ClickUpTaskStatus::None => None,
