@@ -225,6 +225,7 @@ pub enum ActionButtonType {
     ResetAll,
     SetupPm,
     SetupGit,
+    ResetTutorial,
 }
 
 impl ActionButtonType {
@@ -234,6 +235,7 @@ impl ActionButtonType {
             ActionButtonType::ResetAll => "Reset All Settings",
             ActionButtonType::SetupPm => "Setup Integration",
             ActionButtonType::SetupGit => "Setup Git Provider",
+            ActionButtonType::ResetTutorial => "Reset Tutorial",
         }
     }
 }
@@ -552,6 +554,7 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::ShowMetrics),
                 SettingsItem::Field(SettingsField::ShowLogs),
                 SettingsItem::Field(SettingsField::ShowBanner),
+                SettingsItem::ActionButton(ActionButtonType::ResetTutorial),
                 SettingsItem::ActionButton(ActionButtonType::ResetTab),
                 SettingsItem::ActionButton(ActionButtonType::ResetAll),
             ],
@@ -1048,6 +1051,8 @@ pub struct AppState {
     pub show_status_debug: bool,
     pub pm_status_debug: PmStatusDebugState,
     pub clipboard: ClipboardHolder,
+    pub show_tutorial: bool,
+    pub tutorial: Option<TutorialState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1055,6 +1060,102 @@ pub enum GlobalSetupStep {
     #[default]
     WorktreeLocation,
     AgentSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TutorialStep {
+    #[default]
+    Welcome,
+    UiLayout,
+    AgentColumns,
+    PreviewTabs,
+    Navigation,
+    AgentManagement,
+    TaskManagement,
+    GitOperations,
+    Automation,
+    DevServer,
+    Workflows,
+    GettingHelp,
+}
+
+impl TutorialStep {
+    pub fn next(self) -> Self {
+        match self {
+            TutorialStep::Welcome => TutorialStep::UiLayout,
+            TutorialStep::UiLayout => TutorialStep::AgentColumns,
+            TutorialStep::AgentColumns => TutorialStep::PreviewTabs,
+            TutorialStep::PreviewTabs => TutorialStep::Navigation,
+            TutorialStep::Navigation => TutorialStep::AgentManagement,
+            TutorialStep::AgentManagement => TutorialStep::TaskManagement,
+            TutorialStep::TaskManagement => TutorialStep::GitOperations,
+            TutorialStep::GitOperations => TutorialStep::Automation,
+            TutorialStep::Automation => TutorialStep::DevServer,
+            TutorialStep::DevServer => TutorialStep::Workflows,
+            TutorialStep::Workflows => TutorialStep::GettingHelp,
+            TutorialStep::GettingHelp => TutorialStep::Welcome,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            TutorialStep::Welcome => TutorialStep::GettingHelp,
+            TutorialStep::UiLayout => TutorialStep::Welcome,
+            TutorialStep::AgentColumns => TutorialStep::UiLayout,
+            TutorialStep::PreviewTabs => TutorialStep::AgentColumns,
+            TutorialStep::Navigation => TutorialStep::PreviewTabs,
+            TutorialStep::AgentManagement => TutorialStep::Navigation,
+            TutorialStep::TaskManagement => TutorialStep::AgentManagement,
+            TutorialStep::GitOperations => TutorialStep::TaskManagement,
+            TutorialStep::Automation => TutorialStep::GitOperations,
+            TutorialStep::DevServer => TutorialStep::Automation,
+            TutorialStep::Workflows => TutorialStep::DevServer,
+            TutorialStep::GettingHelp => TutorialStep::Workflows,
+        }
+    }
+
+    pub fn step_number(self) -> usize {
+        match self {
+            TutorialStep::Welcome => 1,
+            TutorialStep::UiLayout => 2,
+            TutorialStep::AgentColumns => 3,
+            TutorialStep::PreviewTabs => 4,
+            TutorialStep::Navigation => 5,
+            TutorialStep::AgentManagement => 6,
+            TutorialStep::TaskManagement => 7,
+            TutorialStep::GitOperations => 8,
+            TutorialStep::Automation => 9,
+            TutorialStep::DevServer => 10,
+            TutorialStep::Workflows => 11,
+            TutorialStep::GettingHelp => 12,
+        }
+    }
+
+    pub fn total_steps() -> usize {
+        12
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            TutorialStep::Welcome => "Welcome to Grove",
+            TutorialStep::UiLayout => "The Interface",
+            TutorialStep::AgentColumns => "Agent List Columns",
+            TutorialStep::PreviewTabs => "Preview Panel",
+            TutorialStep::Navigation => "Navigation",
+            TutorialStep::AgentManagement => "Managing Agents",
+            TutorialStep::TaskManagement => "Working with Tasks",
+            TutorialStep::GitOperations => "Git Operations",
+            TutorialStep::Automation => "Automation Settings",
+            TutorialStep::DevServer => "Dev Server",
+            TutorialStep::Workflows => "Example Workflows",
+            TutorialStep::GettingHelp => "Getting Help",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TutorialState {
+    pub step: TutorialStep,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1271,6 +1372,8 @@ impl AppState {
             show_status_debug: false,
             pm_status_debug: PmStatusDebugState::default(),
             clipboard: ClipboardHolder(None),
+            show_tutorial: false,
+            tutorial: None,
         }
     }
 
