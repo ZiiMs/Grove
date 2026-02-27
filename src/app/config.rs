@@ -294,8 +294,6 @@ pub struct Config {
     #[serde(default)]
     pub keybinds: Keybinds,
     #[serde(default)]
-    pub automation: AutomationConfig,
-    #[serde(default)]
     pub task_list: TaskListConfig,
     #[serde(default)]
     pub tutorial_completed: bool,
@@ -937,6 +935,8 @@ pub struct RepoConfig {
     pub prompts: PromptsConfig,
     #[serde(default)]
     pub dev_server: DevServerConfig,
+    #[serde(default)]
+    pub automation: AutomationConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1199,6 +1199,7 @@ impl RepoConfig {
                     },
                     prompts: legacy.prompts,
                     dev_server: DevServerConfig::default(),
+                    automation: AutomationConfig::default(),
                 });
             }
 
