@@ -2375,18 +2375,50 @@ async fn process_action(
             status,
             status_reason,
         } => {
+            const STATUS_DEBOUNCE_THRESHOLD: u32 = 4;
+
             if let Some(agent) = state.agents.get_mut(&id) {
                 let old_label = agent.status.label();
-                let new_label = status.label();
                 let name = agent.name.clone();
-                let changed = old_label != new_label;
 
-                agent.set_status(status);
-                if let Some(reason) = status_reason {
+                let bypass_debounce =
+                    matches!(status, AgentStatus::Error(_) | AgentStatus::AwaitingInput);
+
+                let should_update = if bypass_debounce {
+                    agent.pending_status = None;
+                    agent.pending_status_count = 0;
+                    true
+                } else if status == agent.status {
+                    agent.pending_status = None;
+                    agent.pending_status_count = 0;
+                    false
+                } else if Some(&status) == agent.pending_status.as_ref() {
+                    agent.pending_status_count += 1;
+                    if agent.pending_status_count >= STATUS_DEBOUNCE_THRESHOLD {
+                        agent.pending_status = None;
+                        agent.pending_status_count = 0;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    agent.pending_status = Some(status.clone());
+                    agent.pending_status_count = 1;
+                    false
+                };
+
+                if should_update {
+                    let new_label = status.label();
+                    agent.set_status(status);
+                    if let Some(reason) = status_reason {
+                        agent.status_reason = Some(reason);
+                    }
+                    if old_label != new_label {
+                        state
+                            .log_debug(format!("Agent '{}': {} -> {}", name, old_label, new_label));
+                    }
+                } else if let Some(reason) = status_reason {
                     agent.status_reason = Some(reason);
-                }
-                if changed {
-                    state.log_debug(format!("Agent '{}': {} -> {}", name, old_label, new_label));
                 }
             }
         }

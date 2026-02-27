@@ -260,6 +260,10 @@ pub struct Agent {
     pub opencode_session_id: Option<String>,
     #[serde(skip)]
     pub status_reason: Option<StatusReason>,
+    #[serde(skip)]
+    pub pending_status: Option<AgentStatus>,
+    #[serde(skip)]
+    pub pending_status_count: u32,
 }
 
 impl Agent {
@@ -292,6 +296,8 @@ impl Agent {
             ai_session_id: None,
             opencode_session_id: None,
             status_reason: None,
+            pending_status: None,
+            pending_status_count: 0,
         }
     }
 
