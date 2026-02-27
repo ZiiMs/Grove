@@ -8,6 +8,7 @@ use ratatui::{
     Frame,
 };
 
+use crate::app::config::{AppearanceConfig, ProjectMgmtProvider};
 use crate::app::{StatusOption, TaskListItem};
 use crate::ui::helpers::centered_rect;
 
@@ -30,12 +31,30 @@ fn status_icon_and_color(status_name: &str) -> (&'static str, Color) {
     }
 }
 
+fn get_status_appearance(
+    status_name: &str,
+    appearance_config: &AppearanceConfig,
+    provider: ProjectMgmtProvider,
+) -> (String, Color) {
+    let provider_config = appearance_config.get_for_provider(provider);
+    if let Some(appearance) = provider_config.statuses.get(status_name) {
+        let icon = appearance.icon.clone();
+        let color = crate::ui::parse_color(&appearance.color);
+        (icon, color)
+    } else {
+        let (icon, color) = status_icon_and_color(status_name);
+        (icon.to_string(), color)
+    }
+}
+
 pub struct TaskListModal<'a> {
     tasks: &'a [TaskListItem],
     selected_actual_idx: usize,
     scroll_offset: usize,
     loading: bool,
     provider_name: &'a str,
+    pm_provider: ProjectMgmtProvider,
+    appearance_config: &'a AppearanceConfig,
     assigned_tasks: &'a HashMap<String, String>,
     expanded_ids: &'a HashSet<String>,
     hidden_status_names: &'a [String],
@@ -52,6 +71,8 @@ impl<'a> TaskListModal<'a> {
         scroll_offset: usize,
         loading: bool,
         provider_name: &'a str,
+        pm_provider: ProjectMgmtProvider,
+        appearance_config: &'a AppearanceConfig,
         assigned_tasks: &'a HashMap<String, String>,
         expanded_ids: &'a HashSet<String>,
         hidden_status_names: &'a [String],
@@ -65,6 +86,8 @@ impl<'a> TaskListModal<'a> {
             scroll_offset,
             loading,
             provider_name,
+            pm_provider,
+            appearance_config,
             assigned_tasks,
             expanded_ids,
             hidden_status_names,
@@ -246,12 +269,8 @@ impl<'a> TaskListModal<'a> {
                 let is_hidden = self.is_status_hidden(&opt.name);
                 let is_selected = i == self.filter_selected;
 
-                let (status_icon, status_color) = self
-                    .tasks
-                    .iter()
-                    .find(|t| t.status_name == opt.name)
-                    .map(|t| status_icon_and_color(&t.status_name))
-                    .unwrap_or(("○", Color::Gray));
+                let (status_icon, status_color) =
+                    get_status_appearance(&opt.name, self.appearance_config, self.pm_provider);
 
                 let check = if is_hidden { "[ ]" } else { "[✓]" };
                 let text = format!("  {} {} {}", check, status_icon, opt.name);
@@ -470,10 +489,13 @@ impl<'a> TaskListModal<'a> {
                 Style::default().fg(Color::White)
             };
 
+            let (status_icon, status_color) =
+                get_status_appearance(&task.status_name, self.appearance_config, self.pm_provider);
+
             let status_name_style = if is_selected {
                 Style::default().fg(Color::Black).bg(Color::Cyan)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(status_color)
             };
 
             let normalized_id = task.id.replace('-', "").to_lowercase();
@@ -511,7 +533,10 @@ impl<'a> TaskListModal<'a> {
             let mut spans = vec![
                 Span::styled(truncated_name, style),
                 Span::styled("  ", Style::default()),
-                Span::styled(format!("[{}]", task.status_name), status_name_style),
+                Span::styled(
+                    format!("[{} {}]", status_icon, task.status_name),
+                    status_name_style,
+                ),
             ];
 
             if let Some(agent_name) = assigned_info {

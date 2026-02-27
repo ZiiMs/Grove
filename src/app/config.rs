@@ -271,6 +271,114 @@ impl Default for TaskListConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StatusAppearance {
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub color: String,
+}
+
+impl StatusAppearance {
+    pub fn new(icon: &str, color: &str) -> Self {
+        Self {
+            icon: icon.to_string(),
+            color: color.to_string(),
+        }
+    }
+
+    pub fn default_for_status(name: &str) -> Self {
+        let lower = name.to_lowercase();
+        let (icon, color) = if lower.contains("progress")
+            || lower.contains("doing")
+            || lower.contains("review")
+            || lower.contains("started")
+        {
+            ("◐", "yellow")
+        } else if lower.contains("done") || lower.contains("complete") || lower.contains("closed") {
+            ("✓", "green")
+        } else if lower.contains("block") || lower.contains("error") {
+            ("✗", "red")
+        } else if lower.contains("cancel") {
+            ("⊘", "dark_gray")
+        } else {
+            ("○", "gray")
+        };
+        Self::new(icon, color)
+    }
+}
+
+impl Default for StatusAppearance {
+    fn default() -> Self {
+        Self::new("○", "gray")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderStatusAppearance {
+    #[serde(default)]
+    pub statuses: std::collections::HashMap<String, StatusAppearance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AppearanceConfig {
+    #[serde(default)]
+    pub asana: ProviderStatusAppearance,
+    #[serde(default)]
+    pub notion: ProviderStatusAppearance,
+    #[serde(default)]
+    pub clickup: ProviderStatusAppearance,
+    #[serde(default)]
+    pub airtable: ProviderStatusAppearance,
+    #[serde(default)]
+    pub linear: ProviderStatusAppearance,
+}
+
+impl AppearanceConfig {
+    pub fn for_provider(&mut self, provider: ProjectMgmtProvider) -> &mut ProviderStatusAppearance {
+        match provider {
+            ProjectMgmtProvider::Asana => &mut self.asana,
+            ProjectMgmtProvider::Notion => &mut self.notion,
+            ProjectMgmtProvider::Clickup => &mut self.clickup,
+            ProjectMgmtProvider::Airtable => &mut self.airtable,
+            ProjectMgmtProvider::Linear => &mut self.linear,
+        }
+    }
+
+    pub fn get_for_provider(&self, provider: ProjectMgmtProvider) -> &ProviderStatusAppearance {
+        match provider {
+            ProjectMgmtProvider::Asana => &self.asana,
+            ProjectMgmtProvider::Notion => &self.notion,
+            ProjectMgmtProvider::Clickup => &self.clickup,
+            ProjectMgmtProvider::Airtable => &self.airtable,
+            ProjectMgmtProvider::Linear => &self.linear,
+        }
+    }
+
+    pub fn sync_with_status_options(
+        &mut self,
+        provider: ProjectMgmtProvider,
+        status_options: &[crate::app::StatusOption],
+    ) {
+        use std::collections::HashSet;
+
+        let provider_config = self.for_provider(provider);
+        let current_status_names: HashSet<&str> =
+            status_options.iter().map(|s| s.name.as_str()).collect();
+
+        provider_config
+            .statuses
+            .retain(|name, _| current_status_names.contains(name.as_str()));
+
+        for status in status_options {
+            provider_config
+                .statuses
+                .entry(status.name.clone())
+                .or_insert_with(|| StatusAppearance::default_for_status(&status.name));
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
@@ -572,6 +680,8 @@ pub struct Keybinds {
     pub yank: Keybind,
     #[serde(default = "default_copy_path")]
     pub copy_path: Keybind,
+    #[serde(default = "default_toggle_continue")]
+    pub toggle_continue: Keybind,
     #[serde(default = "default_merge")]
     pub merge: Keybind,
     #[serde(default = "default_push")]
@@ -639,6 +749,9 @@ fn default_yank() -> Keybind {
 }
 fn default_copy_path() -> Keybind {
     Keybind::new("c")
+}
+fn default_toggle_continue() -> Keybind {
+    Keybind::with_modifiers("c", vec!["Shift".to_string()])
 }
 fn default_merge() -> Keybind {
     Keybind::new("m")
@@ -708,6 +821,7 @@ impl Default for Keybinds {
             set_note: default_set_note(),
             yank: default_yank(),
             copy_path: default_copy_path(),
+            toggle_continue: default_toggle_continue(),
             merge: default_merge(),
             push: default_push(),
             fetch: default_fetch(),
@@ -743,6 +857,7 @@ impl Keybinds {
             ("set_note", &self.set_note),
             ("yank", &self.yank),
             ("copy_path", &self.copy_path),
+            ("toggle_continue", &self.toggle_continue),
             ("merge", &self.merge),
             ("push", &self.push),
             ("fetch", &self.fetch),
@@ -935,6 +1050,8 @@ pub struct RepoConfig {
     pub prompts: PromptsConfig,
     #[serde(default)]
     pub dev_server: DevServerConfig,
+    #[serde(default)]
+    pub appearance: AppearanceConfig,
     #[serde(default)]
     pub automation: AutomationConfig,
 }
@@ -1199,6 +1316,7 @@ impl RepoConfig {
                     },
                     prompts: legacy.prompts,
                     dev_server: DevServerConfig::default(),
+                    appearance: AppearanceConfig::default(),
                     automation: AutomationConfig::default(),
                 });
             }

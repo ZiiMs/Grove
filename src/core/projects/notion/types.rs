@@ -37,6 +37,14 @@ impl NotionTaskStatus {
         }
     }
 
+    pub fn status_name_full(&self) -> Option<&str> {
+        match self {
+            NotionTaskStatus::None => None,
+            NotionTaskStatus::Linked { status_name, .. } => Some(status_name.as_str()),
+            NotionTaskStatus::Error { .. } => None,
+        }
+    }
+
     pub fn page_id(&self) -> Option<&str> {
         match self {
             NotionTaskStatus::None => None,

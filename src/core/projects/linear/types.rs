@@ -59,6 +59,16 @@ impl LinearTaskStatus {
         }
     }
 
+    pub fn status_name_full(&self) -> Option<&str> {
+        match self {
+            LinearTaskStatus::None => None,
+            LinearTaskStatus::NotStarted { status_name, .. }
+            | LinearTaskStatus::InProgress { status_name, .. }
+            | LinearTaskStatus::Completed { status_name, .. } => Some(status_name.as_str()),
+            LinearTaskStatus::Error { .. } => None,
+        }
+    }
+
     pub fn id(&self) -> Option<&str> {
         match self {
             LinearTaskStatus::None => None,

@@ -58,6 +58,16 @@ impl AsanaTaskStatus {
         }
     }
 
+    pub fn status_name_full(&self) -> Option<&str> {
+        match self {
+            AsanaTaskStatus::None => None,
+            AsanaTaskStatus::NotStarted { status_name, .. }
+            | AsanaTaskStatus::InProgress { status_name, .. }
+            | AsanaTaskStatus::Completed { status_name, .. } => Some(status_name.as_str()),
+            AsanaTaskStatus::Error { .. } => None,
+        }
+    }
+
     /// Get the task GID if linked.
     pub fn gid(&self) -> Option<&str> {
         match self {

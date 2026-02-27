@@ -386,6 +386,21 @@ pub enum Action {
         action_type: AutomationActionType,
     },
 
+    // Appearance Settings
+    LoadAppearanceStatusOptions,
+    AppearanceStatusOptionsLoaded {
+        options: Vec<crate::app::StatusOption>,
+    },
+    AppearanceNextColumn,
+    AppearancePrevColumn,
+    AppearanceOpenDropdown,
+    AppearanceIconSelected {
+        icon: String,
+    },
+    AppearanceColorSelected {
+        color: String,
+    },
+
     // PM Status Debug
     OpenPmStatusDebug,
     ClosePmStatusDebug,

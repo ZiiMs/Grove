@@ -1740,6 +1740,30 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
         KeyCode::BackTab => Some(Action::SettingsSwitchSectionBack),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsSelectPrev),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsSelectNext),
+        KeyCode::Left | KeyCode::Char('h') => {
+            if state.settings.tab == grove::app::SettingsTab::Appearance
+                && matches!(
+                    state.settings.current_item(),
+                    grove::app::SettingsItem::StatusAppearanceRow { .. }
+                )
+            {
+                Some(Action::AppearancePrevColumn)
+            } else {
+                None
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if state.settings.tab == grove::app::SettingsTab::Appearance
+                && matches!(
+                    state.settings.current_item(),
+                    grove::app::SettingsItem::StatusAppearanceRow { .. }
+                )
+            {
+                Some(Action::AppearanceNextColumn)
+            } else {
+                None
+            }
+        }
         KeyCode::Enter => {
             if let Some(btn) = state.settings.current_action_button() {
                 use grove::app::ActionButtonType;
@@ -6313,6 +6337,9 @@ async fn process_action(
             if matches!(new_tab, grove::app::SettingsTab::Automation) {
                 let _ = action_tx.send(Action::LoadAutomationStatusOptions);
             }
+            if matches!(new_tab, grove::app::SettingsTab::Appearance) {
+                let _ = action_tx.send(Action::LoadAppearanceStatusOptions);
+            }
         }
 
         Action::SettingsSwitchSectionBack => {
@@ -6325,6 +6352,9 @@ async fn process_action(
 
             if matches!(new_tab, grove::app::SettingsTab::Automation) {
                 let _ = action_tx.send(Action::LoadAutomationStatusOptions);
+            }
+            if matches!(new_tab, grove::app::SettingsTab::Appearance) {
+                let _ = action_tx.send(Action::LoadAppearanceStatusOptions);
             }
         }
 
@@ -6357,31 +6387,48 @@ async fn process_action(
         }
 
         Action::SettingsDropdownNext => {
-            let field = state.settings.current_field();
             if let grove::app::DropdownState::Open { selected_index } = &state.settings.dropdown {
-                let max = match field {
-                    grove::app::SettingsField::AiAgent => grove::app::AiAgent::all().len(),
-                    grove::app::SettingsField::GitProvider => grove::app::GitProvider::all().len(),
-                    grove::app::SettingsField::LogLevel => grove::app::ConfigLogLevel::all().len(),
-                    grove::app::SettingsField::WorktreeLocation => {
-                        grove::app::WorktreeLocation::all().len()
+                // Check if we're on Appearance tab with StatusAppearanceRow
+                let max = if state.settings.tab == grove::app::SettingsTab::Appearance
+                    && matches!(
+                        state.settings.current_item(),
+                        grove::app::SettingsItem::StatusAppearanceRow { .. }
+                    ) {
+                    use grove::app::state::StatusAppearanceColumn;
+                    match state.settings.appearance_column {
+                        StatusAppearanceColumn::Icon => grove::ui::ICON_PRESETS.len(),
+                        StatusAppearanceColumn::Color => grove::ui::COLOR_PALETTE.len(),
                     }
-                    grove::app::SettingsField::CodebergCiProvider => {
-                        grove::app::CodebergCiProvider::all().len()
+                } else {
+                    let field = state.settings.current_field();
+                    match field {
+                        grove::app::SettingsField::AiAgent => grove::app::AiAgent::all().len(),
+                        grove::app::SettingsField::GitProvider => {
+                            grove::app::GitProvider::all().len()
+                        }
+                        grove::app::SettingsField::LogLevel => {
+                            grove::app::ConfigLogLevel::all().len()
+                        }
+                        grove::app::SettingsField::WorktreeLocation => {
+                            grove::app::WorktreeLocation::all().len()
+                        }
+                        grove::app::SettingsField::CodebergCiProvider => {
+                            grove::app::CodebergCiProvider::all().len()
+                        }
+                        grove::app::SettingsField::ProjectMgmtProvider => {
+                            grove::app::ProjectMgmtProvider::all().len()
+                        }
+                        grove::app::SettingsField::AutomationOnTaskAssign
+                        | grove::app::SettingsField::AutomationOnPush
+                        | grove::app::SettingsField::AutomationOnDelete => {
+                            state.settings.automation_status_options.len() + 1
+                        }
+                        grove::app::SettingsField::AutomationOnTaskAssignSubtask
+                        | grove::app::SettingsField::AutomationOnDeleteSubtask => {
+                            3 // None, Complete, Incomplete
+                        }
+                        _ => 0,
                     }
-                    grove::app::SettingsField::ProjectMgmtProvider => {
-                        grove::app::ProjectMgmtProvider::all().len()
-                    }
-                    grove::app::SettingsField::AutomationOnTaskAssign
-                    | grove::app::SettingsField::AutomationOnPush
-                    | grove::app::SettingsField::AutomationOnDelete => {
-                        state.settings.automation_status_options.len() + 1
-                    }
-                    grove::app::SettingsField::AutomationOnTaskAssignSubtask
-                    | grove::app::SettingsField::AutomationOnDeleteSubtask => {
-                        3 // None, Complete, Incomplete
-                    }
-                    _ => 0,
                 };
                 state.settings.dropdown = grove::app::DropdownState::Open {
                     selected_index: (*selected_index + 1).min(max.saturating_sub(1)),
@@ -6947,6 +6994,13 @@ async fn process_action(
                     // Keybind fields are handled by SettingsStartKeybindCapture
                 }
             }
+
+            // Handle StatusAppearanceRow for Appearance tab
+            if let grove::app::SettingsItem::StatusAppearanceRow { .. } =
+                state.settings.current_item()
+            {
+                let _ = action_tx.send(Action::AppearanceOpenDropdown);
+            }
         }
 
         Action::SettingsConfirmSelection => {
@@ -7453,6 +7507,34 @@ async fn process_action(
                     }
                     _ => {}
                 }
+
+                // Handle StatusAppearanceRow dropdown confirmations
+                if let grove::app::SettingsItem::StatusAppearanceRow { .. } =
+                    state.settings.current_item()
+                {
+                    use grove::app::state::StatusAppearanceColumn;
+                    match state.settings.appearance_column {
+                        StatusAppearanceColumn::Icon => {
+                            if let Some(icon) = grove::ui::get_icon_by_index(selected_index) {
+                                let _ = action_tx.send(Action::AppearanceIconSelected {
+                                    icon: icon.to_string(),
+                                });
+                            }
+                        }
+                        StatusAppearanceColumn::Color => {
+                            if let Some(color_name) =
+                                grove::ui::get_color_name_by_index(selected_index)
+                            {
+                                let color_str =
+                                    grove::ui::color_to_string(grove::ui::parse_color(color_name));
+                                let _ = action_tx.send(Action::AppearanceColorSelected {
+                                    color: color_str.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+
                 state.settings.dropdown = grove::app::DropdownState::Closed;
             }
         }
@@ -9846,6 +9928,279 @@ async fn process_action(
                     }
                 }
             }
+        }
+
+        // Appearance Settings Actions
+        Action::LoadAppearanceStatusOptions => {
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            let tx = action_tx.clone();
+
+            match provider {
+                grove::app::config::ProjectMgmtProvider::Asana => {
+                    let client = asana_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_sections().await {
+                            Ok(sections) => {
+                                let options: Vec<StatusOption> = sections
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.gid,
+                                        name: s.name,
+                                        is_child: false,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Asana sections for appearance: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Notion => {
+                    let client = notion_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_status_options().await {
+                            Ok(opts) => {
+                                let options: Vec<StatusOption> = opts
+                                    .all_options
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.id,
+                                        name: o.name,
+                                        is_child: false,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Notion status options for appearance: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Clickup => {
+                    let client = clickup_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_statuses().await {
+                            Ok(statuses) => {
+                                let options: Vec<StatusOption> = statuses
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.status.clone(),
+                                        name: s.status,
+                                        is_child: false,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load ClickUp statuses for appearance: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Airtable => {
+                    let client = airtable_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_status_options().await {
+                            Ok(opts) => {
+                                let options: Vec<StatusOption> = opts
+                                    .into_iter()
+                                    .map(|o| StatusOption {
+                                        id: o.name.clone(),
+                                        name: o.name,
+                                        is_child: false,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Airtable status options for appearance: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
+                    });
+                }
+                grove::app::config::ProjectMgmtProvider::Linear => {
+                    let client = linear_client.clone();
+                    tokio::spawn(async move {
+                        match client.get_workflow_states().await {
+                            Ok(states) => {
+                                let options: Vec<StatusOption> = states
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.id,
+                                        name: s.name,
+                                        is_child: false,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded { options });
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to load Linear workflow states for appearance: {}",
+                                    e
+                                );
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load statuses: {}",
+                                    e
+                                )));
+                                let _ = tx.send(Action::AppearanceStatusOptionsLoaded {
+                                    options: vec![],
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        Action::AppearanceStatusOptionsLoaded { options } => {
+            let provider = state.settings.repo_config.project_mgmt.provider;
+            state
+                .settings
+                .repo_config
+                .appearance
+                .sync_with_status_options(provider, &options);
+            state.settings.appearance_status_options = options;
+            state.settings.field_index = 0;
+        }
+
+        Action::AppearanceNextColumn => {
+            use grove::app::state::StatusAppearanceColumn;
+            state.settings.appearance_column = match state.settings.appearance_column {
+                StatusAppearanceColumn::Icon => StatusAppearanceColumn::Color,
+                StatusAppearanceColumn::Color => StatusAppearanceColumn::Icon,
+            };
+        }
+
+        Action::AppearancePrevColumn => {
+            use grove::app::state::StatusAppearanceColumn;
+            state.settings.appearance_column = match state.settings.appearance_column {
+                StatusAppearanceColumn::Icon => StatusAppearanceColumn::Color,
+                StatusAppearanceColumn::Color => StatusAppearanceColumn::Icon,
+            };
+        }
+
+        Action::AppearanceOpenDropdown => {
+            if let grove::app::SettingsItem::StatusAppearanceRow { status_index } =
+                state.settings.current_item()
+            {
+                if let Some(status) = state.settings.appearance_status_options.get(status_index) {
+                    use grove::app::state::StatusAppearanceColumn;
+                    let pm_provider = state.settings.repo_config.project_mgmt.provider;
+                    let appearance = state
+                        .settings
+                        .repo_config
+                        .appearance
+                        .get_for_provider(pm_provider);
+
+                    let current_idx = match state.settings.appearance_column {
+                        StatusAppearanceColumn::Icon => {
+                            let icon = appearance
+                                .statuses
+                                .get(&status.name)
+                                .map(|a| a.icon.as_str())
+                                .unwrap_or("○");
+                            grove::ui::find_icon_index(icon)
+                        }
+                        StatusAppearanceColumn::Color => {
+                            let color = appearance
+                                .statuses
+                                .get(&status.name)
+                                .map(|a| a.color.as_str())
+                                .unwrap_or("gray");
+                            grove::ui::find_color_index(color)
+                        }
+                    };
+
+                    state.settings.dropdown = grove::app::DropdownState::Open {
+                        selected_index: current_idx,
+                    };
+                }
+            }
+        }
+
+        Action::AppearanceIconSelected { icon } => {
+            if let grove::app::SettingsItem::StatusAppearanceRow { status_index } =
+                state.settings.current_item()
+            {
+                if let Some(status) = state.settings.appearance_status_options.get(status_index) {
+                    let pm_provider = state.settings.repo_config.project_mgmt.provider;
+                    let appearance = state
+                        .settings
+                        .repo_config
+                        .appearance
+                        .for_provider(pm_provider);
+                    appearance
+                        .statuses
+                        .entry(status.name.clone())
+                        .or_default()
+                        .icon = icon;
+                }
+            }
+            state.settings.dropdown = grove::app::DropdownState::Closed;
+        }
+
+        Action::AppearanceColorSelected { color } => {
+            if let grove::app::SettingsItem::StatusAppearanceRow { status_index } =
+                state.settings.current_item()
+            {
+                if let Some(status) = state.settings.appearance_status_options.get(status_index) {
+                    let pm_provider = state.settings.repo_config.project_mgmt.provider;
+                    let appearance = state
+                        .settings
+                        .repo_config
+                        .appearance
+                        .for_provider(pm_provider);
+                    appearance
+                        .statuses
+                        .entry(status.name.clone())
+                        .or_default()
+                        .color = color;
+                }
+            }
+            state.settings.dropdown = grove::app::DropdownState::Closed;
         }
 
         // Dev Server Actions
