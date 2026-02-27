@@ -11,8 +11,21 @@ use super::config::{
 use super::task_list::TaskListItem;
 use crate::agent::Agent;
 use crate::ui::components::file_browser::DirEntry;
+use arboard::Clipboard;
 
 const SYSTEM_METRICS_HISTORY_SIZE: usize = 60;
+
+pub struct ClipboardHolder(pub Option<Clipboard>);
+
+impl std::fmt::Debug for ClipboardHolder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ClipboardHolder({})",
+            if self.0.is_some() { "Some" } else { "None" }
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PreviewTab {
@@ -1034,6 +1047,7 @@ pub struct AppState {
     pub agent_list_scroll: usize,
     pub show_status_debug: bool,
     pub pm_status_debug: PmStatusDebugState,
+    pub clipboard: ClipboardHolder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1256,6 +1270,7 @@ impl AppState {
             agent_list_scroll: 0,
             show_status_debug: false,
             pm_status_debug: PmStatusDebugState::default(),
+            clipboard: ClipboardHolder(None),
         }
     }
 
@@ -1289,6 +1304,13 @@ impl AppState {
 
     pub fn log_debug(&mut self, message: impl Into<String>) {
         self.log(LogLevel::Debug, message);
+    }
+
+    pub fn get_clipboard(&mut self) -> Option<&mut Clipboard> {
+        if self.clipboard.0.is_none() {
+            self.clipboard.0 = Clipboard::new().ok();
+        }
+        self.clipboard.0.as_mut()
     }
 
     pub fn selected_agent(&self) -> Option<&Agent> {
