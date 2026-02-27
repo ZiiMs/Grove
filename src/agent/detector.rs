@@ -114,12 +114,21 @@ static MR_URL_PATTERN: LazyLock<Regex> =
 static SPINNER_CHARS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒⣾⣽⣻⢿⡿⣟⣯⣷]").unwrap());
 
+/// Claude Code working status indicators.
+/// These appear when Claude is actively processing/generating.
+/// Pattern: dingbat char + word ending in "ing" + ellipsis
+/// e.g., "✻ Slithering…" "✢ Sketching…" "✻ Newspapering…"
+static WORKING_INDICATORS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
+        Regex::new(r"[✢✣✤✥✦✧✨✩✪✫✬✭✮✯✰✱✲✳✴✵✶✷✸✹✺✻✼✽✾✿❀❁❂❃❄❅❆❇❈❉❊❋✡✥★☆]\s*\w+ing\s*[.…]{1,3}")
+            .unwrap(),
+    ]
+});
+
 /// Tool execution patterns (Claude Code shows these when running tools)
 static TOOL_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        // Tool names with trailing context
         Regex::new(r"⏺\s*(Read|Write|Edit|Bash|Glob|Grep|Task|WebFetch|WebSearch)").unwrap(),
-        // Active status messages
         Regex::new(r"(?i)^(reading|writing|editing|searching|running|executing|thinking|analyzing|processing|fetching|installing|building|compiling|testing)").unwrap(),
     ]
 });
@@ -143,6 +152,11 @@ static QUESTION_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         Regex::new(r"Proceed with").unwrap(),
         // Numbered selection with Claude's indicator (❯ 1. Option text)
         Regex::new(r"❯\s*\d+\.").unwrap(),
+        // Option choices (Option A:, Option B:, etc.)
+        Regex::new(r"Option\s+[A-Z]:").unwrap(),
+        // Questions to user
+        Regex::new(r"Could you clarify").unwrap(),
+        Regex::new(r"Which one (are you looking for|do you want)").unwrap(),
         // Keyboard confirmation hints
         Regex::new(r"Enter\s+to\s+confirm").unwrap(),
         Regex::new(r"Esc\s+to\s+cancel").unwrap(),
@@ -624,7 +638,97 @@ fn detect_status_claude_running(output: &str) -> StatusDetection {
         }
     }
 
-    // 3. Check last 3 non-empty lines for spinners/tool execution
+    // 2.5 Check for working indicators (Sketching, Thinking, etc.) BEFORE prompt check
+    // Only check RECENT lines to avoid false positives from completed subtasks in scrollback
+    let last_15_lines: Vec<&str> = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(15)
+        .cloned()
+        .collect();
+    let last_15_text = last_15_lines.join("\n");
+
+    tracing::debug!(
+        "detect_status_claude_running: checking WORKING_INDICATORS against last 15 lines ({} chars)",
+        last_15_text.len()
+    );
+    for (i, pattern) in WORKING_INDICATORS.iter().enumerate() {
+        if pattern.is_match(&last_15_text) {
+            tracing::debug!(
+                "detect_status_claude_running: WORKING_INDICATORS[{}] matched!",
+                i
+            );
+            return StatusDetection::new(AgentStatus::Running)
+                .with_reason("Found working indicator (Sketching/Thinking/etc)")
+                .with_pattern("WORKING_INDICATORS");
+        }
+    }
+    tracing::debug!("detect_status_claude_running: no WORKING_INDICATORS matched");
+
+    // 3. Check for prompt FIRST - prevents scrollback (Plan Mode) from false Running detection
+    // Search all lines for prompt (Plan Mode can have many lines pushing prompt beyond last 10)
+    let non_empty_count = lines.iter().filter(|l| !l.trim().is_empty()).count();
+    tracing::debug!(
+        "detect_status_claude_running: {} lines, {} non-empty",
+        lines.len(),
+        non_empty_count
+    );
+
+    let is_at_prompt = lines.iter().filter(|l| !l.trim().is_empty()).any(|line| {
+        let trimmed = line.trim().trim_matches('\u{00A0}');
+        // Debug: log lines that might be prompts
+        if trimmed.contains('❯') || trimmed.contains('>') || trimmed.contains('$') {
+            tracing::debug!(
+                "detect_status_claude_running: potential prompt line: {:?}",
+                trimmed
+            );
+        }
+        if trimmed == ">" || trimmed == "›" || trimmed == "❯" || trimmed == "$" || trimmed == "%"
+        {
+            tracing::debug!("detect_status_claude_running: found exact prompt");
+            return true;
+        }
+        // Allow longer lines that start with prompt characters (e.g., "❯ Try ...")
+        if trimmed.len() <= 200
+            && (trimmed.starts_with('>')
+                || trimmed.starts_with('›')
+                || trimmed.starts_with('❯')
+                || trimmed.starts_with('$')
+                || trimmed.starts_with('%'))
+        {
+            tracing::debug!("detect_status_claude_running: found prompt prefix");
+            return true;
+        }
+        false
+    });
+
+    tracing::debug!(
+        "detect_status_claude_running: is_at_prompt = {}",
+        is_at_prompt
+    );
+
+    if is_at_prompt {
+        let last_10_lines: Vec<&str> = lines
+            .iter()
+            .rev()
+            .filter(|l| !l.trim().is_empty())
+            .take(10)
+            .cloned()
+            .collect();
+        let last_10_text = last_10_lines.join("\n");
+
+        for pattern in COMPLETION_PATTERNS.iter() {
+            if pattern.is_match(&last_10_text) {
+                return StatusDetection::new(AgentStatus::Completed)
+                    .with_reason("At prompt with completion pattern")
+                    .with_pattern("COMPLETION_PATTERNS");
+            }
+        }
+        return StatusDetection::new(AgentStatus::Idle).with_reason("At prompt, ready for input");
+    }
+
+    // 4. Check last 3 non-empty lines for spinners/tool execution
     let last_3_lines: Vec<&str> = lines
         .iter()
         .rev()
@@ -646,54 +750,6 @@ fn detect_status_claude_running(output: &str) -> StatusDetection {
                 .with_reason("Found tool execution pattern")
                 .with_pattern("TOOL_PATTERNS");
         }
-    }
-
-    // 4. Check for prompt character
-    let is_at_prompt = lines
-        .iter()
-        .rev()
-        .filter(|l| !l.trim().is_empty())
-        .take(5)
-        .any(|line| {
-            let trimmed = line.trim().trim_matches('\u{00A0}');
-            if trimmed == ">"
-                || trimmed == "›"
-                || trimmed == "❯"
-                || trimmed == "$"
-                || trimmed == "%"
-            {
-                return true;
-            }
-            if trimmed.len() <= 3
-                && (trimmed.starts_with('>')
-                    || trimmed.starts_with('›')
-                    || trimmed.starts_with('❯')
-                    || trimmed.starts_with('$')
-                    || trimmed.starts_with('%'))
-            {
-                return true;
-            }
-            false
-        });
-
-    if is_at_prompt {
-        let last_10_lines: Vec<&str> = lines
-            .iter()
-            .rev()
-            .filter(|l| !l.trim().is_empty())
-            .take(10)
-            .cloned()
-            .collect();
-        let last_10_text = last_10_lines.join("\n");
-
-        for pattern in COMPLETION_PATTERNS.iter() {
-            if pattern.is_match(&last_10_text) {
-                return StatusDetection::new(AgentStatus::Completed)
-                    .with_reason("At prompt with completion pattern")
-                    .with_pattern("COMPLETION_PATTERNS");
-            }
-        }
-        return StatusDetection::new(AgentStatus::Idle).with_reason("At prompt, ready for input");
     }
 
     // 5. Default: Claude process is running
@@ -1794,6 +1850,358 @@ mod tests {
         assert!(
             matches!(status.status, AgentStatus::Idle),
             "Expected Idle for welcome screen at prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_try_prompt_idle() {
+        let output = r#"
+╭─ Claude Code ────────────────────────────────────────────────────╮
+│                        Welcome back ZiiM!                        │
+│                                                                  │
+│                              ▐▛███▜▌                             │
+│                             ▝▜█████▛▘                            │
+│                               ▘▘ ▝▝                              │
+│                                                                  │
+│                            Sonnet 4.6                            │
+│                        API Usage Billing                         │
+│         ~/.grove/worktrees/ddc3c0fe238d6d01/claude-test2         │
+│                                                                  │
+╰──────────────────────────────────────────────────────────────────╯
+
+  /model to try Opus 4.6
+
+────────────────────────────────────────────────────────────────────
+❯ Try "write a test for <filepath>"
+────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle for 'Try' prompt at prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_try_prompt_with_nbsp() {
+        let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n❯\u{00A0}Try \"how do I log an error?\"\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ? for shortcuts\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle for 'Try' prompt with NBSP, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_try_prompt_with_ansi_reset() {
+        let output = "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n\x1b[0m❯\u{00A0}Try \"how do I log an error?\"\n──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────\n  ? for shortcuts\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n";
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle for 'Try' prompt with ANSI reset and NBSP, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_welcome_with_many_trailing_empty_lines() {
+        let output = r#"╭─ Claude Code ────────────────────────────────────────────────────╮
+│                        Welcome back ZiiM!                        │
+│                                                                  │
+│                              ▐▛███▜▌                             │
+│                             ▝▜█████▛▘                            │
+│                               ▘▘ ▝▝                              │
+│                                                                  │
+│                            Sonnet 4.6                            │
+│                        API Usage Billing                         │
+│         ~/.grove/worktrees/ddc3c0fe238d6d01/claude-test2         │
+│                                                                  │
+╰──────────────────────────────────────────────────────────────────╯
+
+  /model to try Opus 4.6
+
+────────────────────────────────────────────────────────────────────
+❯ Try "write a test for <filepath>"
+────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle for welcome screen with many trailing empty lines, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_plan_mode_idle() {
+        let output = r#"
+╭─ Claude Code ────────────────────────────────────────────────────╮
+│                        Welcome back ZiiM!                        │
+│                                                                  │
+╰──────────────────────────────────────────────────────────────────╯
+
+────────────────────────────────────────────────────────────────────
+❯ Think about how to refactor this
+────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+
+# Plan Mode - System Reminder
+
+CRITICAL: Plan mode ACTIVE - you are in READ-ONLY phase.
+
+Your current responsibility is to think, read, search, and delegate explore agents.
+
+**NOTE**: At any point in time through this workflow you should feel free to ask questions.
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle for Plan Mode with prompt, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_sketching_running() {
+        let output = r#"● Now let me explore the Command Interface implementation to        
+  understand how it works:
+
+● Explore(Explore command interface implementation)
+  ⎿  
+     Read(src/lib/commands.ts)
+
+     +7 more tool uses (ctrl+o to expand)
+     ctrl+b ctrl+b (twice) to run in background
+
+✢ Sketching… (1m 14s · ↓ 2.9k tokens)
+
+────────────────────────────────────────────────────────────────────
+❯ d
+────────────────────────────────────────────────────────────────────
+  ⏸ plan mode on (shift+tab to cycle)  
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Running),
+            "Expected Running when Sketching indicator is present, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_thinking_running() {
+        let output = r#"✢ Thinking… (30s)
+
+────────────────────────────────────────────────────────────────────
+❯ test
+────────────────────────────────────────────────────────────────────
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Running),
+            "Expected Running when Thinking indicator is present, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_newspapering_running() {
+        let output = r#"✻ Newspapering… (thinking)
+
+────────────────────────────────────────────────────────────────────
+❯ test
+────────────────────────────────────────────────────────────────────
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Running),
+            "Expected Running when Newspapering indicator is present, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_timer_pattern_idle() {
+        let output = r#"Some output here
+
+(2m 34s · ↓ 15.2k tokens)
+
+────────────────────────────────────────────────────────────────────
+❯ test
+────────────────────────────────────────────────────────────────────
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle when only timer pattern is present (no dingbat+ing), got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_done_with_tools_idle() {
+        let output = r#"● Task(Analyze and document command interface)
+  ⎿  Done (2 tool uses · 16.0k tokens · 7s)
+  (ctrl+o to expand)
+
+────────────────────────────────────────────────────────────────────
+❯ test
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle when 'Done (X tool uses' is in scrollback (subtask completed), got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_slithering_running() {
+        let output = r#"● Bash(git add docs/PLAN.md && git commit -m "$(cat <<'EOF'
+      docs: add Command Interface section to PLAN.md…)
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ commit this
+
+✻ Slithering…
+
+────────────────────────────────────────────────────────────────────
+❯
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Running),
+            "Expected Running when Slithering indicator is present, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_generating_running() {
+        let output = r#"● I'll create the documentation now.
+
+✦ Generating… (15s)
+
+────────────────────────────────────────────────────────────────────
+❯ test
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Running),
+            "Expected Running when Generating indicator is present, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_composing_running() {
+        let output = r#"★ Composing... (30s)
+
+────────────────────────────────────────────────────────────────────
+❯ continue
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Running),
+            "Expected Running when Composing indicator is present, got {:?}",
+            status
+        );
+    }
+
+    #[test]
+    fn test_claude_timer_seconds_only_idle() {
+        let output = r#"● Processing...
+
+(45s · ↓ 1.2k tokens)
+
+────────────────────────────────────────────────────────────────────
+❯ test
+"#;
+        let status = detect_status_with_process(output, ForegroundProcess::ClaudeRunning);
+        assert!(
+            matches!(status.status, AgentStatus::Idle),
+            "Expected Idle when only seconds timer is present (no dingbat+ing+ellipsis), got {:?}",
             status
         );
     }
