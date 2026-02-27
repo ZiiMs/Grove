@@ -189,6 +189,7 @@ impl<'a> HelpOverlay<'a> {
                 "  {:8} Debug status (when enabled)",
                 kb.debug_status.display_short()
             )),
+            Line::from("  S-Q      PM status debug"),
             Line::from(format!("  {:8} Quit", kb.quit.display_short())),
             Line::from("  Esc      Cancel/close dialogs"),
             Line::from("  C-c      Force quit"),

@@ -26,8 +26,7 @@ use grove::agent::{
 };
 use grove::app::{
     Action, AppState, Config, InputMode, PreviewTab, ProjectMgmtProvider, StatusOption,
-    SubtaskStatusDropdownState, TaskItemStatus, TaskListItem, TaskStatusDropdownState, Toast,
-    ToastLevel,
+    TaskListItem, TaskStatusDropdownState, Toast, ToastLevel,
 };
 use grove::core::git_providers::codeberg::OptionalCodebergClient;
 use grove::core::git_providers::github::OptionalGitHubClient;
@@ -43,6 +42,7 @@ use grove::core::projects::linear::{
     parse_linear_issue_id, LinearTaskStatus, OptionalLinearClient,
 };
 use grove::core::projects::notion::{parse_notion_page_id, NotionTaskStatus, OptionalNotionClient};
+use grove::core::projects::{fetch_status_options, ProjectClients};
 use grove::devserver::DevServerManager;
 use grove::git::{GitSync, Worktree};
 use grove::storage::{save_session, SessionStorage};
@@ -1090,6 +1090,52 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         }
     }
 
+    // Handle PM status debug overlay
+    if state.pm_status_debug.active {
+        use grove::app::state::PmStatusDebugStep;
+        return match key.code {
+            KeyCode::Esc => Some(Action::ClosePmStatusDebug),
+            KeyCode::Char('j') | KeyCode::Down => {
+                if matches!(
+                    state.pm_status_debug.step,
+                    PmStatusDebugStep::SelectProvider
+                ) {
+                    Some(Action::PmStatusDebugSelectNext)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if matches!(
+                    state.pm_status_debug.step,
+                    PmStatusDebugStep::SelectProvider
+                ) {
+                    Some(Action::PmStatusDebugSelectPrev)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Enter => {
+                if matches!(
+                    state.pm_status_debug.step,
+                    PmStatusDebugStep::SelectProvider
+                ) {
+                    Some(Action::PmStatusDebugFetchSelected)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('c') => {
+                if matches!(state.pm_status_debug.step, PmStatusDebugStep::ShowPayload) {
+                    Some(Action::PmStatusDebugCopyPayload)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+    }
+
     // Handle global setup wizard
     if state.show_global_setup {
         if let Some(wizard) = &state.global_setup {
@@ -1397,6 +1443,11 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         return Some(Action::ToggleStatusDebug);
     }
 
+    // PM status debug (Shift+Q - hardcoded)
+    if key.code == KeyCode::Char('Q') {
+        return Some(Action::OpenPmStatusDebug);
+    }
+
     match key.code {
         KeyCode::Char('T') => {
             let selected_id = state.selected_agent_id();
@@ -1500,24 +1551,6 @@ fn handle_input_mode_key(key: KeyCode, state: &AppState) -> Option<Action> {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::TaskStatusDropdownNext),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::TaskStatusDropdownPrev),
             KeyCode::Enter => Some(Action::TaskStatusDropdownSelect),
-            KeyCode::Esc => Some(Action::ExitInputMode),
-            _ => None,
-        };
-    }
-
-    if matches!(state.input_mode, Some(InputMode::SelectSubtaskStatus)) {
-        return match key {
-            KeyCode::Char('j') | KeyCode::Down => Some(Action::SubtaskStatusDropdownNext),
-            KeyCode::Char('k') | KeyCode::Up => Some(Action::SubtaskStatusDropdownPrev),
-            KeyCode::Enter => {
-                if let Some(ref dropdown) = state.subtask_status_dropdown {
-                    Some(Action::SubtaskStatusDropdownSelect {
-                        completed: dropdown.selected_index == 1,
-                    })
-                } else {
-                    Some(Action::ExitInputMode)
-                }
-            }
             KeyCode::Esc => Some(Action::ExitInputMode),
             _ => None,
         };
@@ -2692,11 +2725,19 @@ async fn process_action(
             let gid = parse_asana_task_gid(&url_or_gid);
             let client = Arc::clone(asana_client);
             let tx = action_tx.clone();
+            let project_gid = state
+                .settings
+                .repo_config
+                .project_mgmt
+                .asana
+                .project_gid
+                .clone();
             tokio::spawn(async move {
                 match client.get_task(&gid).await {
                     Ok(task) => {
                         let url = task
                             .permalink_url
+                            .clone()
                             .unwrap_or_else(|| format!("https://app.asana.com/0/0/{}/f", task.gid));
                         let is_subtask = task.parent.is_some();
                         let status = if task.completed {
@@ -2707,12 +2748,15 @@ async fn process_action(
                                 status_name: "Complete".to_string(),
                             }
                         } else {
+                            let section_name = task
+                                .get_section_name_for_project(project_gid.as_deref())
+                                .unwrap_or_else(|| "Not Started".to_string());
                             AsanaTaskStatus::NotStarted {
                                 gid: task.gid,
                                 name: task.name,
                                 url,
                                 is_subtask,
-                                status_name: "Not Started".to_string(),
+                                status_name: section_name,
                             }
                         };
                         let _ = tx.send(Action::UpdateAsanaTaskStatus { id, status });
@@ -2786,10 +2830,17 @@ async fn process_action(
                     let gid = parse_asana_task_gid(&url_or_id);
                     let client = Arc::clone(asana_client);
                     let tx = action_tx.clone();
+                    let project_gid = state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .asana
+                        .project_gid
+                        .clone();
                     tokio::spawn(async move {
                         match client.get_task(&gid).await {
                             Ok(task) => {
-                                let url = task.permalink_url.unwrap_or_else(|| {
+                                let url = task.permalink_url.clone().unwrap_or_else(|| {
                                     format!("https://app.asana.com/0/0/{}/f", task.gid)
                                 });
                                 let is_subtask = task.parent.is_some();
@@ -2801,12 +2852,15 @@ async fn process_action(
                                         status_name: "Complete".to_string(),
                                     }
                                 } else {
+                                    let section_name = task
+                                        .get_section_name_for_project(project_gid.as_deref())
+                                        .unwrap_or_else(|| "Not Started".to_string());
                                     AsanaTaskStatus::NotStarted {
                                         gid: task.gid,
                                         name: task.name,
                                         url,
                                         is_subtask,
-                                        status_name: "Not Started".to_string(),
+                                        status_name: section_name,
                                     }
                                 };
                                 let _ = tx.send(Action::UpdateProjectTaskStatus {
@@ -3734,236 +3788,45 @@ async fn process_action(
             tracing::info!("OpenTaskStatusDropdown called for agent {}", id);
             if let Some(agent) = state.agents.get(&id) {
                 tracing::info!("Agent found, pm_task_status: {:?}", agent.pm_task_status);
-                match &agent.pm_task_status {
-                    ProjectMgmtTaskStatus::Notion(notion_status) => {
-                        if !notion_client.is_configured().await {
-                            state.show_error(
-                                "Notion not configured. Set NOTION_TOKEN and database_id.",
-                            );
-                            return Ok(false);
-                        }
-                        let page_id = notion_status.page_id();
-                        if page_id.is_none() || page_id.map(|p| p.is_empty()).unwrap_or(true) {
-                            state.show_error("No Notion page linked to this task");
-                            return Ok(false);
-                        }
-                        let agent_id = id;
-                        let client = Arc::clone(notion_client);
-                        let tx = action_tx.clone();
-                        state.loading_message = Some("Loading status options...".to_string());
-                        tokio::spawn(async move {
-                            tracing::info!("Fetching Notion status options...");
-                            match client.get_status_options().await {
-                                Ok(opts) => {
-                                    tracing::info!("Got {} status options", opts.all_options.len());
-                                    let options: Vec<StatusOption> = opts
-                                        .all_options
-                                        .into_iter()
-                                        .map(|o| StatusOption {
-                                            id: o.id,
-                                            name: o.name,
-                                        })
-                                        .collect();
-                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
-                                        id: agent_id,
-                                        options,
-                                    });
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to load status options: {}", e);
-                                    let _ = tx.send(Action::SetLoading(None));
-                                    let _ = tx.send(Action::ShowError(format!(
-                                        "Failed to load status options: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        });
-                    }
-                    ProjectMgmtTaskStatus::Asana(asana_status) => {
-                        if !asana_client.is_configured().await {
-                            state.show_error(
-                                "Asana not configured. Set ASANA_TOKEN and project_gid.",
-                            );
-                            return Ok(false);
-                        }
-                        if asana_status.gid().is_none() {
-                            state.show_error("No Asana task linked to this agent");
-                            return Ok(false);
-                        }
 
-                        if asana_status.is_subtask() {
-                            let gid = asana_status.gid().unwrap().to_string();
-                            let name = asana_status.name().unwrap_or("Task").to_string();
-                            let is_completed =
-                                matches!(asana_status, AsanaTaskStatus::Completed { .. });
-                            state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
-                                task_id: gid,
-                                task_name: name,
-                                current_completed: is_completed,
-                                selected_index: if is_completed { 1 } else { 0 },
-                            });
-                            state.input_mode = Some(InputMode::SelectSubtaskStatus);
-                        } else {
-                            let agent_id = id;
-                            let client = Arc::clone(asana_client);
-                            let tx = action_tx.clone();
-                            state.loading_message = Some("Loading sections...".to_string());
-                            tokio::spawn(async move {
-                                match client.get_sections().await {
-                                    Ok(sections) => {
-                                        let options: Vec<StatusOption> = sections
-                                            .into_iter()
-                                            .map(|s| StatusOption {
-                                                id: s.gid,
-                                                name: s.name,
-                                            })
-                                            .collect();
-                                        let _ = tx.send(Action::TaskStatusOptionsLoaded {
-                                            id: agent_id,
-                                            options,
-                                        });
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to load Asana sections: {}", e);
-                                        let _ = tx.send(Action::SetLoading(None));
-                                        let _ = tx.send(Action::ShowError(format!(
-                                            "Failed to load sections: {}",
-                                            e
-                                        )));
-                                    }
-                                }
+                let is_subtask = match &agent.pm_task_status {
+                    ProjectMgmtTaskStatus::Asana(asana_status) => asana_status.is_subtask(),
+                    _ => false,
+                };
+
+                let clients = ProjectClients {
+                    notion: notion_client.clone(),
+                    asana: asana_client.clone(),
+                    clickup: clickup_client.clone(),
+                    airtable: airtable_client.clone(),
+                    linear: linear_client.clone(),
+                };
+
+                let agent_id = id;
+                let pm_status = agent.pm_task_status.clone();
+                let tx = action_tx.clone();
+
+                state.loading_message = Some("Loading status options...".to_string());
+
+                tokio::spawn(async move {
+                    match fetch_status_options(&pm_status, &clients, is_subtask).await {
+                        Ok(options) => {
+                            let _ = tx.send(Action::TaskStatusOptionsLoaded {
+                                id: agent_id,
+                                options,
                             });
                         }
-                    }
-                    ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
-                        if !clickup_client.is_configured().await {
-                            state.show_error(
-                                "ClickUp not configured. Set CLICKUP_TOKEN and list_id.",
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to load status options for {}: {}",
+                                e.provider(),
+                                e.display_message()
                             );
-                            return Ok(false);
+                            let _ = tx.send(Action::SetLoading(None));
+                            let _ = tx.send(Action::ShowError(e.display_message()));
                         }
-                        if clickup_status.id().is_none() {
-                            state.show_error("No ClickUp task linked to this agent");
-                            return Ok(false);
-                        }
-
-                        // ClickUp subtasks use the same statuses as parent tasks
-                        let agent_id = id;
-                        let client = Arc::clone(clickup_client);
-                        let tx = action_tx.clone();
-                        state.loading_message = Some("Loading statuses...".to_string());
-                        tokio::spawn(async move {
-                            match client.get_statuses().await {
-                                Ok(statuses) => {
-                                    let options: Vec<StatusOption> = statuses
-                                        .into_iter()
-                                        .map(|s| StatusOption {
-                                            id: s.status.clone(),
-                                            name: s.status,
-                                        })
-                                        .collect();
-                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
-                                        id: agent_id,
-                                        options,
-                                    });
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to load ClickUp statuses: {}", e);
-                                    let _ = tx.send(Action::SetLoading(None));
-                                    let _ = tx.send(Action::ShowError(format!(
-                                        "Failed to load statuses: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        });
                     }
-                    ProjectMgmtTaskStatus::Airtable(airtable_status) => {
-                        if !airtable_client.is_configured().await {
-                            state.show_error(
-                                "Airtable not configured. Set AIRTABLE_TOKEN, base_id, and table_name.",
-                            );
-                            return Ok(false);
-                        }
-                        if airtable_status.id().is_none() {
-                            state.show_error("No Airtable record linked to this agent");
-                            return Ok(false);
-                        }
-
-                        let agent_id = id;
-                        let client = Arc::clone(airtable_client);
-                        let tx = action_tx.clone();
-                        state.loading_message = Some("Loading statuses...".to_string());
-                        tokio::spawn(async move {
-                            match client.get_status_options().await {
-                                Ok(options) => {
-                                    let status_options: Vec<StatusOption> = options
-                                        .into_iter()
-                                        .map(|o| StatusOption {
-                                            id: o.name.clone(),
-                                            name: o.name,
-                                        })
-                                        .collect();
-                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
-                                        id: agent_id,
-                                        options: status_options,
-                                    });
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to load Airtable statuses: {}", e);
-                                    let _ = tx.send(Action::SetLoading(None));
-                                    let _ = tx.send(Action::ShowError(format!(
-                                        "Failed to load statuses: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        });
-                    }
-                    ProjectMgmtTaskStatus::Linear(linear_status) => {
-                        if !linear_client.is_configured().await {
-                            state
-                                .show_error("Linear not configured. Set LINEAR_TOKEN and team_id.");
-                            return Ok(false);
-                        }
-                        if linear_status.id().is_none() {
-                            state.show_error("No Linear issue linked to this agent");
-                            return Ok(false);
-                        }
-
-                        let agent_id = id;
-                        let client = Arc::clone(linear_client);
-                        let tx = action_tx.clone();
-                        state.loading_message = Some("Loading statuses...".to_string());
-                        tokio::spawn(async move {
-                            match client.get_workflow_states().await {
-                                Ok(states) => {
-                                    let options: Vec<StatusOption> = states
-                                        .into_iter()
-                                        .map(|s| StatusOption {
-                                            id: s.id,
-                                            name: s.name,
-                                        })
-                                        .collect();
-                                    let _ = tx.send(Action::TaskStatusOptionsLoaded {
-                                        id: agent_id,
-                                        options,
-                                    });
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to load Linear statuses: {}", e);
-                                    let _ = tx.send(Action::SetLoading(None));
-                                    let _ = tx.send(Action::ShowError(format!(
-                                        "Failed to load statuses: {}",
-                                        e
-                                    )));
-                                }
-                            }
-                        });
-                    }
-                    ProjectMgmtTaskStatus::None => {}
-                }
+                });
             }
         }
 
@@ -3977,6 +3840,8 @@ async fn process_action(
             if !options.is_empty() {
                 state.task_status_dropdown = Some(TaskStatusDropdownState {
                     agent_id: id,
+                    task_id: None,
+                    task_name: None,
                     status_options: options,
                     selected_index: 0,
                 });
@@ -4003,74 +3868,74 @@ async fn process_action(
             }
         }
 
-        Action::SubtaskStatusDropdownNext => {
-            if let Some(ref mut dropdown) = state.subtask_status_dropdown {
-                if dropdown.selected_index < 1 {
-                    dropdown.selected_index += 1;
-                }
-            }
-        }
-
-        Action::SubtaskStatusDropdownPrev => {
-            if let Some(ref mut dropdown) = state.subtask_status_dropdown {
-                if dropdown.selected_index > 0 {
-                    dropdown.selected_index -= 1;
-                }
-            }
-        }
-
         Action::TaskStatusDropdownSelect => {
             tracing::info!("TaskStatusDropdownSelect triggered");
             let dropdown = state.task_status_dropdown.take();
-            let subtask_dropdown = state.subtask_status_dropdown.take();
             state.exit_input_mode();
             if let Some(dropdown) = dropdown {
                 let agent_id = dropdown.agent_id;
+                let task_id = dropdown.task_id.clone();
                 if let Some(selected_option) = dropdown.status_options.get(dropdown.selected_index)
                 {
                     let option_id = selected_option.id.clone();
                     let option_name = selected_option.name.clone();
 
-                    // Check if this is a task from the task list (nil UUID)
-                    if agent_id == Uuid::nil() {
-                        if let Some(subtask) = subtask_dropdown {
-                            let task_id = subtask.task_id.clone();
-                            let option_id = option_id.clone();
-                            let status_name = option_name.clone();
-                            let provider = state.settings.repo_config.project_mgmt.provider;
+                    // Check if this is a task from the task list (has task_id)
+                    if let Some(task_id) = task_id {
+                        let option_id = option_id.clone();
+                        let status_name = option_name.clone();
+                        let provider = state.settings.repo_config.project_mgmt.provider;
 
-                            if matches!(provider, ProjectMgmtProvider::Notion) {
-                                let client = Arc::clone(notion_client);
-                                let tx = action_tx.clone();
-                                let status_prop_name = state
-                                    .settings
-                                    .repo_config
-                                    .project_mgmt
-                                    .notion
-                                    .status_property_name
-                                    .clone();
-                                state.loading_message = Some("Updating task status...".to_string());
+                        if matches!(provider, ProjectMgmtProvider::Notion) {
+                            let client = Arc::clone(notion_client);
+                            let tx = action_tx.clone();
+                            let status_prop_name = state
+                                .settings
+                                .repo_config
+                                .project_mgmt
+                                .notion
+                                .status_property_name
+                                .clone();
+                            state.loading_message = Some("Updating task status...".to_string());
 
-                                let task_id_for_spawn = task_id.clone();
-                                let status_name_for_spawn = status_name.clone();
-                                tokio::spawn(async move {
-                                    let prop_name =
-                                        status_prop_name.unwrap_or_else(|| "Status".to_string());
-                                    if let Err(e) = client
-                                        .update_page_status(
-                                            &task_id_for_spawn,
-                                            &prop_name,
-                                            &option_id,
-                                        )
-                                        .await
-                                    {
-                                        tracing::error!("Failed to update Notion status: {}", e);
-                                        let _ = tx.send(Action::SetLoading(None));
-                                        let _ = tx.send(Action::ShowError(format!(
-                                            "Failed to update status: {}",
-                                            e
-                                        )));
-                                    } else {
+                            let task_id_for_spawn = task_id.clone();
+                            let status_name_for_spawn = status_name.clone();
+                            tokio::spawn(async move {
+                                let prop_name =
+                                    status_prop_name.unwrap_or_else(|| "Status".to_string());
+                                if let Err(e) = client
+                                    .update_page_status(&task_id_for_spawn, &prop_name, &option_id)
+                                    .await
+                                {
+                                    tracing::error!("Failed to update Notion status: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to update status: {}",
+                                        e
+                                    )));
+                                } else {
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowToast {
+                                        message: format!("Task → {}", status_name_for_spawn),
+                                        level: ToastLevel::Success,
+                                    });
+                                    let _ = tx.send(Action::RefreshTaskList);
+                                }
+                            });
+                        } else if matches!(provider, ProjectMgmtProvider::Linear) {
+                            let client = Arc::clone(linear_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Updating task status...".to_string());
+
+                            let task_id_for_spawn = task_id.clone();
+                            let status_name_for_spawn = status_name.clone();
+                            let state_id_for_spawn = option_id.clone();
+                            tokio::spawn(async move {
+                                match client
+                                    .update_issue_status(&task_id_for_spawn, &state_id_for_spawn)
+                                    .await
+                                {
+                                    Ok(()) => {
                                         let _ = tx.send(Action::SetLoading(None));
                                         let _ = tx.send(Action::ShowToast {
                                             message: format!("Task → {}", status_name_for_spawn),
@@ -4078,40 +3943,77 @@ async fn process_action(
                                         });
                                         let _ = tx.send(Action::RefreshTaskList);
                                     }
-                                });
-
-                                if let Some(task) =
-                                    state.task_list.iter_mut().find(|t| t.id == task_id)
-                                {
-                                    let lower = status_name.to_lowercase();
-                                    task.status_name = status_name.clone();
-                                    task.completed =
-                                        lower.contains("done") || lower.contains("complete");
-                                    task.status = if task.completed {
-                                        TaskItemStatus::Completed
-                                    } else if lower.contains("progress") {
-                                        TaskItemStatus::InProgress
-                                    } else {
-                                        TaskItemStatus::NotStarted
-                                    };
+                                    Err(e) => {
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to update task: {}",
+                                            e
+                                        )));
+                                    }
                                 }
-                                state.show_success(format!("Task → {}", status_name));
-                            } else if matches!(provider, ProjectMgmtProvider::Linear) {
-                                let client = Arc::clone(linear_client);
-                                let tx = action_tx.clone();
-                                state.loading_message = Some("Updating task status...".to_string());
+                            });
 
-                                let task_id_for_spawn = task_id.clone();
-                                let status_name_for_spawn = status_name.clone();
-                                let state_id_for_spawn = option_id.clone();
+                            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id)
+                            {
+                                task.status_name = status_name.clone();
+                            }
+                            state.show_success(format!("Task → {}", status_name));
+                        } else if matches!(provider, ProjectMgmtProvider::Asana) {
+                            let client = Arc::clone(asana_client);
+                            let tx = action_tx.clone();
+
+                            let task_id_for_spawn = task_id.clone();
+                            let status_name_for_spawn = status_name.clone();
+                            let option_id_for_spawn = option_id.clone();
+
+                            // Check if this is a section GID (parent task) or complete/uncomplete (subtask)
+                            let is_section_move =
+                                !matches!(option_id.as_str(), "completed" | "not_completed");
+
+                            if is_section_move {
+                                // Parent task: move to section
+                                state.loading_message =
+                                    Some("Moving task to section...".to_string());
                                 tokio::spawn(async move {
                                     match client
-                                        .update_issue_status(
+                                        .move_task_to_section(
                                             &task_id_for_spawn,
-                                            &state_id_for_spawn,
+                                            &option_id_for_spawn,
                                         )
                                         .await
                                     {
+                                        Ok(()) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowToast {
+                                                message: format!(
+                                                    "Task → {}",
+                                                    status_name_for_spawn
+                                                ),
+                                                level: ToastLevel::Success,
+                                            });
+                                            let _ = tx.send(Action::RefreshTaskList);
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(Action::SetLoading(None));
+                                            let _ = tx.send(Action::ShowError(format!(
+                                                "Failed to move task: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                });
+                            } else {
+                                // Subtask: complete/uncomplete
+                                state.loading_message =
+                                    Some("Updating subtask status...".to_string());
+                                let completed = option_id == "completed";
+                                tokio::spawn(async move {
+                                    let result = if completed {
+                                        client.complete_task(&task_id_for_spawn).await
+                                    } else {
+                                        client.uncomplete_task(&task_id_for_spawn).await
+                                    };
+                                    match result {
                                         Ok(()) => {
                                             let _ = tx.send(Action::SetLoading(None));
                                             let _ = tx.send(Action::ShowToast {
@@ -4132,87 +4034,37 @@ async fn process_action(
                                         }
                                     }
                                 });
-
-                                if let Some(task) =
-                                    state.task_list.iter_mut().find(|t| t.id == task_id)
-                                {
-                                    let lower = status_name.to_lowercase();
-                                    task.status_name = status_name.clone();
-                                    task.status = if lower.contains("done")
-                                        || lower.contains("complete")
-                                        || lower.contains("cancelled")
-                                    {
-                                        task.completed = true;
-                                        TaskItemStatus::Completed
-                                    } else if lower.contains("progress")
-                                        || lower.contains("started")
-                                    {
-                                        task.completed = false;
-                                        TaskItemStatus::InProgress
-                                    } else {
-                                        task.completed = false;
-                                        TaskItemStatus::NotStarted
-                                    };
-                                }
-                                state.show_success(format!("Task → {}", status_name));
-                            } else {
-                                let client = Arc::clone(clickup_client);
-                                let tx = action_tx.clone();
-                                state.loading_message =
-                                    Some("Updating subtask status...".to_string());
-
-                                let task_id_for_spawn = task_id.clone();
-                                let status_name_for_spawn = status_name.clone();
-                                tokio::spawn(async move {
-                                    match client
-                                        .update_task_status(
-                                            &task_id_for_spawn,
-                                            &status_name_for_spawn,
-                                        )
-                                        .await
-                                    {
-                                        Ok(()) => {
-                                            let _ = tx.send(Action::SetLoading(None));
-                                            let _ = tx.send(Action::ShowToast {
-                                                message: format!(
-                                                    "Subtask → {}",
-                                                    status_name_for_spawn
-                                                ),
-                                                level: ToastLevel::Success,
-                                            });
-                                            let _ = tx.send(Action::RefreshTaskList);
-                                        }
-                                        Err(e) => {
-                                            let _ = tx.send(Action::SetLoading(None));
-                                            let _ = tx.send(Action::ShowError(format!(
-                                                "Failed to update subtask: {}",
-                                                e
-                                            )));
-                                        }
-                                    }
-                                });
-
-                                if let Some(task) =
-                                    state.task_list.iter_mut().find(|t| t.id == task_id)
-                                {
-                                    let lower = status_name.to_lowercase();
-                                    task.status_name = status_name.clone();
-                                    task.status = if lower.contains("done")
-                                        || lower.contains("complete")
-                                        || lower.contains("closed")
-                                    {
-                                        task.completed = true;
-                                        TaskItemStatus::Completed
-                                    } else if lower.contains("progress") {
-                                        task.completed = false;
-                                        TaskItemStatus::InProgress
-                                    } else {
-                                        task.completed = false;
-                                        TaskItemStatus::NotStarted
-                                    };
-                                }
-                                state.show_success(format!("Subtask → {}", status_name));
                             }
+                        } else {
+                            // ClickUp
+                            let client = Arc::clone(clickup_client);
+                            let tx = action_tx.clone();
+                            state.loading_message = Some("Updating subtask status...".to_string());
+
+                            let task_id_for_spawn = task_id.clone();
+                            let status_name_for_spawn = status_name.clone();
+                            tokio::spawn(async move {
+                                match client
+                                    .update_task_status(&task_id_for_spawn, &status_name_for_spawn)
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowToast {
+                                            message: format!("Task → {}", status_name_for_spawn),
+                                            level: ToastLevel::Success,
+                                        });
+                                        let _ = tx.send(Action::RefreshTaskList);
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(Action::SetLoading(None));
+                                        let _ = tx.send(Action::ShowError(format!(
+                                            "Failed to update task: {}",
+                                            e
+                                        )));
+                                    }
+                                }
+                            });
                         }
                         return Ok(false);
                     }
@@ -4288,53 +4140,105 @@ async fn process_action(
                                     let is_subtask = asana_status.is_subtask();
                                     let client = Arc::clone(asana_client);
                                     let agent_id_clone = agent_id;
-                                    let section_gid = option_id.clone();
-                                    let section_name_lower = option_name.to_lowercase();
+                                    let option_id_clone = option_id.clone();
 
-                                    let is_done = section_name_lower.contains("done")
-                                        || section_name_lower.contains("complete");
-                                    let is_in_progress = section_name_lower.contains("progress");
-
-                                    let new_status = if is_done {
-                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
-                                            gid: task_gid.clone(),
-                                            name: task_name.clone(),
-                                            is_subtask,
-                                            status_name: option_name.clone(),
-                                        })
-                                    } else if is_in_progress {
-                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::InProgress {
-                                            gid: task_gid.clone(),
-                                            name: task_name.clone(),
-                                            url: String::new(),
-                                            is_subtask,
-                                            status_name: option_name.clone(),
-                                        })
-                                    } else {
-                                        ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
-                                            gid: task_gid.clone(),
-                                            name: task_name.clone(),
-                                            url: String::new(),
-                                            is_subtask,
-                                            status_name: option_name.clone(),
-                                        })
-                                    };
-
-                                    tokio::spawn(async move {
-                                        if is_done {
-                                            let _ = client.complete_task(&task_gid).await;
+                                    if is_subtask {
+                                        // Subtasks use complete/uncomplete based on option_id
+                                        let completed = option_id == "completed";
+                                        let new_status = if completed {
+                                            ProjectMgmtTaskStatus::Asana(
+                                                AsanaTaskStatus::Completed {
+                                                    gid: task_gid.clone(),
+                                                    name: task_name.clone(),
+                                                    is_subtask,
+                                                    status_name: option_name.clone(),
+                                                },
+                                            )
                                         } else {
-                                            let _ = client.uncomplete_task(&task_gid).await;
-                                        }
-                                        let _ = client
-                                            .move_task_to_section(&task_gid, &section_gid)
-                                            .await;
-                                    });
+                                            ProjectMgmtTaskStatus::Asana(
+                                                AsanaTaskStatus::NotStarted {
+                                                    gid: task_gid.clone(),
+                                                    name: task_name.clone(),
+                                                    url: String::new(),
+                                                    is_subtask,
+                                                    status_name: option_name.clone(),
+                                                },
+                                            )
+                                        };
 
-                                    if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
-                                        agent.pm_task_status = new_status;
+                                        tokio::spawn(async move {
+                                            let result = if completed {
+                                                client.complete_task(&task_gid).await
+                                            } else {
+                                                client.uncomplete_task(&task_gid).await
+                                            };
+                                            if let Err(e) = result {
+                                                tracing::error!(
+                                                    "Failed to update Asana subtask: {}",
+                                                    e
+                                                );
+                                            }
+                                        });
+
+                                        if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
+                                            agent.pm_task_status = new_status;
+                                        }
+                                        state.show_success(format!("Task → {}", option_name));
+                                    } else {
+                                        // Parent tasks use sections
+                                        let section_name_lower = option_name.to_lowercase();
+                                        let is_done = section_name_lower.contains("done")
+                                            || section_name_lower.contains("complete");
+                                        let is_in_progress =
+                                            section_name_lower.contains("progress");
+
+                                        let new_status = if is_done {
+                                            ProjectMgmtTaskStatus::Asana(
+                                                AsanaTaskStatus::Completed {
+                                                    gid: task_gid.clone(),
+                                                    name: task_name.clone(),
+                                                    is_subtask,
+                                                    status_name: option_name.clone(),
+                                                },
+                                            )
+                                        } else if is_in_progress {
+                                            ProjectMgmtTaskStatus::Asana(
+                                                AsanaTaskStatus::InProgress {
+                                                    gid: task_gid.clone(),
+                                                    name: task_name.clone(),
+                                                    url: String::new(),
+                                                    is_subtask,
+                                                    status_name: option_name.clone(),
+                                                },
+                                            )
+                                        } else {
+                                            ProjectMgmtTaskStatus::Asana(
+                                                AsanaTaskStatus::NotStarted {
+                                                    gid: task_gid.clone(),
+                                                    name: task_name.clone(),
+                                                    url: String::new(),
+                                                    is_subtask,
+                                                    status_name: option_name.clone(),
+                                                },
+                                            )
+                                        };
+
+                                        tokio::spawn(async move {
+                                            if is_done {
+                                                let _ = client.complete_task(&task_gid).await;
+                                            } else {
+                                                let _ = client.uncomplete_task(&task_gid).await;
+                                            }
+                                            let _ = client
+                                                .move_task_to_section(&task_gid, &option_id_clone)
+                                                .await;
+                                        });
+
+                                        if let Some(agent) = state.agents.get_mut(&agent_id_clone) {
+                                            agent.pm_task_status = new_status;
+                                        }
+                                        state.show_success(format!("Task → {}", option_name));
                                     }
-                                    state.show_success(format!("Task → {}", option_name));
                                 }
                             }
                             ProjectMgmtTaskStatus::ClickUp(clickup_status) => {
@@ -4718,46 +4622,26 @@ async fn process_action(
                             Ok(tasks) => {
                                 let mut items: Vec<TaskListItem> = tasks
                                     .into_iter()
-                                    .filter(|t| {
-                                        if t.parent_gid.is_some() {
-                                            true
-                                        } else {
-                                            !t.completed
-                                        }
-                                    })
                                     .map(|t| {
-                                        let status_name =
-                                            t.section_name.clone().unwrap_or_else(|| {
-                                                if t.completed {
-                                                    "Completed".to_string()
-                                                } else {
-                                                    "No Section".to_string()
-                                                }
-                                            });
-                                        let status =
-                                            if status_name.to_lowercase().contains("progress")
-                                                || status_name.to_lowercase().contains("doing")
-                                                || status_name.to_lowercase().contains("review")
-                                            {
-                                                TaskItemStatus::InProgress
-                                            } else if status_name.to_lowercase().contains("done")
-                                                || status_name.to_lowercase().contains("complete")
-                                            {
-                                                TaskItemStatus::Completed
+                                        let status_name = if t.parent_gid.is_some() {
+                                            if t.completed {
+                                                "Complete".to_string()
                                             } else {
-                                                TaskItemStatus::NotStarted
-                                            };
-                                        let completed = t.completed;
+                                                "Not Complete".to_string()
+                                            }
+                                        } else {
+                                            t.section_name
+                                                .clone()
+                                                .unwrap_or_else(|| "No Section".to_string())
+                                        };
                                         TaskListItem {
                                             id: t.gid,
                                             identifier: None,
                                             name: t.name,
-                                            status,
                                             status_name,
                                             url: t.permalink_url.unwrap_or_default(),
                                             parent_id: t.parent_gid,
                                             has_children: t.num_subtasks > 0,
-                                            completed,
                                         }
                                     })
                                     .collect();
@@ -4783,28 +4667,15 @@ async fn process_action(
                                             .status_name
                                             .clone()
                                             .unwrap_or_else(|| "Unknown".to_string());
-                                        let status =
-                                            if status_name.to_lowercase().contains("progress") {
-                                                TaskItemStatus::InProgress
-                                            } else if status_name.to_lowercase().contains("done")
-                                                || status_name.to_lowercase().contains("complete")
-                                            {
-                                                TaskItemStatus::Completed
-                                            } else {
-                                                TaskItemStatus::NotStarted
-                                            };
-                                        let completed = matches!(status, TaskItemStatus::Completed);
                                         let has_children = parent_ids.contains(&p.id);
                                         TaskListItem {
                                             id: p.id,
                                             identifier: None,
                                             name: p.name,
-                                            status,
                                             status_name,
                                             url: p.url,
                                             parent_id: p.parent_page_id,
                                             has_children,
-                                            completed,
                                         }
                                     })
                                     .collect();
@@ -4825,41 +4696,17 @@ async fn process_action(
 
                                 let mut items: Vec<TaskListItem> = tasks
                                     .into_iter()
-                                    .filter(|t| {
-                                        if t.parent_id.is_some() {
-                                            true
-                                        } else {
-                                            t.status_type != "closed"
-                                        }
-                                    })
                                     .map(|t| {
                                         let status_name = t.status.clone();
-                                        let status =
-                                            if status_name.to_lowercase().contains("progress")
-                                                || status_name.to_lowercase().contains("review")
-                                            {
-                                                TaskItemStatus::InProgress
-                                            } else if status_name.to_lowercase().contains("done")
-                                                || status_name.to_lowercase().contains("complete")
-                                                || status_name.to_lowercase().contains("closed")
-                                            {
-                                                TaskItemStatus::Completed
-                                            } else {
-                                                TaskItemStatus::NotStarted
-                                            };
-                                        let completed =
-                                            t.status_type == "closed" || t.status_type == "done";
                                         let has_children = parent_ids.contains(&t.id);
                                         TaskListItem {
                                             id: t.id,
                                             identifier: None,
                                             name: t.name,
-                                            status,
                                             status_name,
                                             url: t.url.unwrap_or_default(),
                                             parent_id: t.parent_id,
                                             has_children,
-                                            completed,
                                         }
                                     })
                                     .collect();
@@ -4885,28 +4732,15 @@ async fn process_action(
                                             .status
                                             .clone()
                                             .unwrap_or_else(|| "Unknown".to_string());
-                                        let status =
-                                            if status_name.to_lowercase().contains("progress") {
-                                                TaskItemStatus::InProgress
-                                            } else if status_name.to_lowercase().contains("done")
-                                                || status_name.to_lowercase().contains("complete")
-                                            {
-                                                TaskItemStatus::Completed
-                                            } else {
-                                                TaskItemStatus::NotStarted
-                                            };
-                                        let completed = matches!(status, TaskItemStatus::Completed);
                                         let has_children = parent_ids.contains(&t.id);
                                         TaskListItem {
                                             id: t.id,
                                             identifier: None,
                                             name: t.name,
-                                            status,
                                             status_name,
                                             url: t.url,
                                             parent_id: t.parent_id,
                                             has_children,
-                                            completed,
                                         }
                                     })
                                     .collect();
@@ -4938,26 +4772,16 @@ async fn process_action(
 
                                 let mut items: Vec<TaskListItem> = issues
                                     .into_iter()
-                                    .filter(|i| {
-                                        i.state_type != "completed" && i.state_type != "cancelled"
-                                    })
                                     .map(|i| {
-                                        let status = match i.state_type.as_str() {
-                                            "started" => TaskItemStatus::InProgress,
-                                            _ => TaskItemStatus::NotStarted,
-                                        };
-                                        let completed = i.state_type == "completed";
                                         let has_children = parent_ids.contains(&i.id);
                                         TaskListItem {
                                             id: i.id,
                                             identifier: Some(i.identifier),
                                             name: i.title,
-                                            status,
                                             status_name: i.state_name,
                                             url: i.url,
                                             parent_id: i.parent_id,
                                             has_children,
-                                            completed,
                                         }
                                     })
                                     .collect();
@@ -4992,6 +4816,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.id,
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect()),
                                 Err(e) => Err(e.to_string()),
@@ -5008,6 +4833,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.id,
                                         name: s.name,
+                                        is_child: false,
                                     })
                                     .collect()),
                                 Err(e) => Err(e.to_string()),
@@ -5024,6 +4850,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.status.clone(),
                                         name: s.status,
+                                        is_child: false,
                                     })
                                     .collect()),
                                 Err(e) => Err(e.to_string()),
@@ -5040,6 +4867,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.name.clone(),
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect()),
                                 Err(e) => Err(e.to_string()),
@@ -5050,14 +4878,28 @@ async fn process_action(
                         if !asana_client_status.is_configured().await {
                             Err("Asana not configured".to_string())
                         } else {
-                            match asana_client_status.get_sections().await {
-                                Ok(sections) => Ok(sections
-                                    .into_iter()
-                                    .map(|s| StatusOption {
-                                        id: s.gid,
-                                        name: s.name,
-                                    })
-                                    .collect()),
+                            match asana_client_status.fetch_statuses().await {
+                                Ok(statuses) => {
+                                    let mut options: Vec<StatusOption> = statuses
+                                        .parent
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.id,
+                                            name: s.name,
+                                            is_child: false,
+                                        })
+                                        .collect();
+                                    if let Some(children) = statuses.children {
+                                        options.extend(children.into_iter().map(|s| {
+                                            StatusOption {
+                                                id: s.id,
+                                                name: s.name,
+                                                is_child: true,
+                                            }
+                                        }));
+                                    }
+                                    Ok(options)
+                                }
                                 Err(e) => Err(e.to_string()),
                             }
                         }
@@ -5207,6 +5049,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.id,
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5246,6 +5089,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.id,
                                         name: s.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5287,6 +5131,7 @@ async fn process_action(
                                         .map(|s| StatusOption {
                                             id: s.status.clone(),
                                             name: s.status,
+                                            is_child: false,
                                         })
                                         .collect();
                                     let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5306,14 +5151,49 @@ async fn process_action(
                             }
                         });
                     } else {
-                        // Asana subtasks use simple complete/incomplete toggle
-                        state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
-                            task_id: task.id.clone(),
-                            task_name: task.name.clone(),
-                            current_completed: task.completed,
-                            selected_index: if task.completed { 1 } else { 0 },
+                        // Asana subtasks: fetch children options (Completed/Not Completed)
+                        if !asana_client.is_configured().await {
+                            state.show_error(
+                                "Asana not configured. Set ASANA_TOKEN and project_gid.",
+                            );
+                            return Ok(false);
+                        }
+
+                        let task_id_for_dropdown = task.id.clone();
+                        let task_name_for_dropdown = task.name.clone();
+                        let client = Arc::clone(asana_client);
+                        let tx = action_tx.clone();
+                        state.loading_message = Some("Loading status options...".to_string());
+
+                        tokio::spawn(async move {
+                            match client.fetch_statuses().await {
+                                Ok(provider_statuses) => {
+                                    let options: Vec<StatusOption> = provider_statuses
+                                        .children
+                                        .unwrap_or_default()
+                                        .into_iter()
+                                        .map(|s| StatusOption {
+                                            id: s.id,
+                                            name: s.name,
+                                            is_child: true,
+                                        })
+                                        .collect();
+                                    let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                        task_id: task_id_for_dropdown,
+                                        task_name: task_name_for_dropdown,
+                                        options,
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load Asana subtask options: {}", e);
+                                    let _ = tx.send(Action::SetLoading(None));
+                                    let _ = tx.send(Action::ShowError(format!(
+                                        "Failed to load status options: {}",
+                                        e
+                                    )));
+                                }
+                            }
                         });
-                        state.input_mode = Some(InputMode::SelectSubtaskStatus);
                     }
                 } else if matches!(provider, ProjectMgmtProvider::Clickup) {
                     // ClickUp parent tasks also support status dropdown
@@ -5335,6 +5215,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.status.clone(),
                                         name: s.status,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
@@ -5348,6 +5229,46 @@ async fn process_action(
                                 let _ = tx.send(Action::SetLoading(None));
                                 let _ = tx.send(Action::ShowError(format!(
                                     "Failed to load statuses: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    });
+                } else if matches!(provider, ProjectMgmtProvider::Asana) {
+                    // Asana parent tasks: use sections as status options
+                    if !asana_client.is_configured().await {
+                        state.show_error("Asana not configured. Set ASANA_TOKEN and project_gid.");
+                        return Ok(false);
+                    }
+
+                    let task_id_for_dropdown = task.id.clone();
+                    let task_name_for_dropdown = task.name.clone();
+                    let client = Arc::clone(asana_client);
+                    let tx = action_tx.clone();
+                    state.loading_message = Some("Loading sections...".to_string());
+
+                    tokio::spawn(async move {
+                        match client.get_sections().await {
+                            Ok(sections) => {
+                                let options: Vec<StatusOption> = sections
+                                    .into_iter()
+                                    .map(|s| StatusOption {
+                                        id: s.gid,
+                                        name: s.name,
+                                        is_child: false,
+                                    })
+                                    .collect();
+                                let _ = tx.send(Action::SubtaskStatusOptionsLoaded {
+                                    task_id: task_id_for_dropdown,
+                                    task_name: task_name_for_dropdown,
+                                    options,
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to load Asana sections: {}", e);
+                                let _ = tx.send(Action::SetLoading(None));
+                                let _ = tx.send(Action::ShowError(format!(
+                                    "Failed to load sections: {}",
                                     e
                                 )));
                             }
@@ -5367,174 +5288,15 @@ async fn process_action(
             state.loading_message = None;
             if !options.is_empty() {
                 state.task_status_dropdown = Some(TaskStatusDropdownState {
-                    agent_id: Uuid::nil(), // Using nil UUID to indicate this is for a subtask
+                    agent_id: Uuid::nil(),
+                    task_id: Some(task_id),
+                    task_name: Some(task_name),
                     status_options: options,
-                    selected_index: 0,
-                });
-                // Store task info for later use
-                state.subtask_status_dropdown = Some(SubtaskStatusDropdownState {
-                    task_id,
-                    task_name,
-                    current_completed: false, // Not used for ClickUp
                     selected_index: 0,
                 });
                 state.input_mode = Some(InputMode::SelectTaskStatus);
             } else {
                 state.show_warning("No status options found");
-            }
-        }
-
-        Action::SubtaskStatusOptionSelected {
-            task_id,
-            status_name,
-        } => {
-            let client = Arc::clone(clickup_client);
-            let tx = action_tx.clone();
-            let status_name_for_spawn = status_name.clone();
-            let task_id_for_spawn = task_id.clone();
-            state.loading_message = Some("Updating subtask status...".to_string());
-
-            tokio::spawn(async move {
-                match client
-                    .update_task_status(&task_id_for_spawn, &status_name_for_spawn)
-                    .await
-                {
-                    Ok(()) => {
-                        let _ = tx.send(Action::SetLoading(None));
-                        let _ = tx.send(Action::ShowToast {
-                            message: format!("Subtask → {}", status_name_for_spawn),
-                            level: ToastLevel::Success,
-                        });
-                        // Trigger a refresh of the task list
-                        let _ = tx.send(Action::RefreshTaskList);
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Action::SetLoading(None));
-                        let _ = tx.send(Action::ShowError(format!(
-                            "Failed to update subtask: {}",
-                            e
-                        )));
-                    }
-                }
-            });
-
-            // Update local state
-            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id) {
-                let lower = status_name.to_lowercase();
-                task.status_name = status_name.clone();
-                task.status = if lower.contains("done")
-                    || lower.contains("complete")
-                    || lower.contains("closed")
-                {
-                    task.completed = true;
-                    TaskItemStatus::Completed
-                } else if lower.contains("progress") {
-                    task.completed = false;
-                    TaskItemStatus::InProgress
-                } else {
-                    task.completed = false;
-                    TaskItemStatus::NotStarted
-                };
-            }
-        }
-
-        Action::SubtaskStatusDropdownSelect { completed } => {
-            let dropdown = state.subtask_status_dropdown.take();
-            state.exit_input_mode();
-            if let Some(dropdown) = dropdown {
-                let task_id = dropdown.task_id.clone();
-                let task_name = dropdown.task_name.clone();
-                let current_completed = dropdown.current_completed;
-
-                if completed == current_completed {
-                    state.show_info("No change needed");
-                    return Ok(false);
-                }
-
-                let client = Arc::clone(asana_client);
-                let tx = action_tx.clone();
-                state.loading_message = Some("Updating subtask status...".to_string());
-
-                tokio::spawn(async move {
-                    let result = if completed {
-                        client.complete_task(&task_id).await
-                    } else {
-                        client.uncomplete_task(&task_id).await
-                    };
-
-                    match result {
-                        Ok(()) => {
-                            let _ = tx.send(Action::SubtaskStatusUpdated { task_id, completed });
-                            let _ = tx.send(Action::SetLoading(None));
-                            let _ = tx.send(Action::ShowToast {
-                                message: format!(
-                                    "{} → {}",
-                                    task_name,
-                                    if completed {
-                                        "Completed"
-                                    } else {
-                                        "Not Complete"
-                                    }
-                                ),
-                                level: ToastLevel::Success,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Action::SetLoading(None));
-                            let _ = tx.send(Action::ShowError(format!(
-                                "Failed to update subtask: {}",
-                                e
-                            )));
-                        }
-                    }
-                });
-            }
-        }
-
-        Action::SubtaskStatusUpdated { task_id, completed } => {
-            if let Some(task) = state.task_list.iter_mut().find(|t| t.id == task_id) {
-                task.completed = completed;
-                task.status = if completed {
-                    TaskItemStatus::Completed
-                } else {
-                    TaskItemStatus::NotStarted
-                };
-                task.status_name = if completed {
-                    "Completed".to_string()
-                } else {
-                    "Not Started".to_string()
-                };
-            }
-
-            for agent in state.agents.values_mut() {
-                if let Some(gid) = agent.pm_task_status.id() {
-                    if gid == task_id {
-                        let name = agent.pm_task_status.name().unwrap_or("").to_string();
-                        let url = agent.pm_task_status.url().unwrap_or("").to_string();
-                        let is_subtask = agent
-                            .pm_task_status
-                            .as_asana()
-                            .map(|s| s.is_subtask())
-                            .unwrap_or(false);
-                        agent.pm_task_status = if completed {
-                            ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::Completed {
-                                gid: task_id.clone(),
-                                name,
-                                is_subtask,
-                                status_name: "Complete".to_string(),
-                            })
-                        } else {
-                            ProjectMgmtTaskStatus::Asana(AsanaTaskStatus::NotStarted {
-                                gid: task_id.clone(),
-                                name,
-                                url,
-                                is_subtask,
-                                status_name: "Not Started".to_string(),
-                            })
-                        };
-                        break;
-                    }
-                }
             }
         }
 
@@ -5782,6 +5544,158 @@ async fn process_action(
             }
         }
 
+        // PM Status Debug
+        Action::OpenPmStatusDebug => {
+            state.pm_status_debug.active = true;
+            state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::SelectProvider;
+            state.pm_status_debug.selected_index = 0;
+            state.pm_status_debug.selected_provider = None;
+            state.pm_status_debug.loading = false;
+            state.pm_status_debug.payload = None;
+            state.pm_status_debug.error = None;
+        }
+
+        Action::ClosePmStatusDebug => {
+            state.pm_status_debug.active = false;
+            state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::SelectProvider;
+            state.pm_status_debug.payload = None;
+            state.pm_status_debug.error = None;
+        }
+
+        Action::PmStatusDebugSelectNext => {
+            let providers = grove::app::config::ProjectMgmtProvider::all();
+            if state.pm_status_debug.selected_index < providers.len() - 1 {
+                state.pm_status_debug.selected_index += 1;
+            }
+        }
+
+        Action::PmStatusDebugSelectPrev => {
+            if state.pm_status_debug.selected_index > 0 {
+                state.pm_status_debug.selected_index -= 1;
+            }
+        }
+
+        Action::PmStatusDebugFetchSelected => {
+            use grove::app::config::ProjectMgmtProvider;
+
+            let providers = ProjectMgmtProvider::all();
+            if let Some(&provider) = providers.get(state.pm_status_debug.selected_index) {
+                state.pm_status_debug.selected_provider = Some(provider);
+                state.pm_status_debug.loading = true;
+                state.pm_status_debug.error = None;
+
+                let is_configured = match provider {
+                    ProjectMgmtProvider::Asana => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .asana
+                        .project_gid
+                        .is_some(),
+                    ProjectMgmtProvider::Notion => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .notion
+                        .database_id
+                        .is_some(),
+                    ProjectMgmtProvider::Clickup => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .clickup
+                        .list_id
+                        .is_some(),
+                    ProjectMgmtProvider::Airtable => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .airtable
+                        .base_id
+                        .is_some(),
+                    ProjectMgmtProvider::Linear => state
+                        .settings
+                        .repo_config
+                        .project_mgmt
+                        .linear
+                        .team_id
+                        .is_some(),
+                };
+
+                if !is_configured {
+                    state.pm_status_debug.loading = false;
+                    state.pm_status_debug.error =
+                        Some(format!("{} is not configured.", provider.display_name()));
+                    state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::ShowPayload;
+                } else {
+                    let asana_client = Arc::clone(asana_client);
+                    let notion_client = Arc::clone(notion_client);
+                    let clickup_client = Arc::clone(clickup_client);
+                    let airtable_client = Arc::clone(airtable_client);
+                    let linear_client = Arc::clone(linear_client);
+                    let tx = action_tx.clone();
+
+                    tokio::spawn(async move {
+                        let result = match provider {
+                            ProjectMgmtProvider::Asana => asana_client.fetch_statuses().await,
+                            ProjectMgmtProvider::Notion => notion_client.fetch_statuses().await,
+                            ProjectMgmtProvider::Clickup => clickup_client.fetch_statuses().await,
+                            ProjectMgmtProvider::Airtable => airtable_client.fetch_statuses().await,
+                            ProjectMgmtProvider::Linear => linear_client.fetch_statuses().await,
+                        };
+
+                        match result {
+                            Ok(statuses) => {
+                                let payload = serde_json::to_string_pretty(&statuses)
+                                    .unwrap_or_else(|e| format!("Failed to serialize: {}", e));
+                                let _ = tx.send(Action::PmStatusDebugFetched { provider, payload });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Action::PmStatusDebugFetchError {
+                                    provider,
+                                    error: e.to_string(),
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        Action::PmStatusDebugFetched { provider, payload } => {
+            if state.pm_status_debug.selected_provider == Some(provider) {
+                state.pm_status_debug.loading = false;
+                state.pm_status_debug.payload = Some(payload);
+                state.pm_status_debug.error = None;
+                state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::ShowPayload;
+            }
+        }
+
+        Action::PmStatusDebugFetchError { provider, error } => {
+            if state.pm_status_debug.selected_provider == Some(provider) {
+                state.pm_status_debug.loading = false;
+                state.pm_status_debug.error = Some(error);
+                state.pm_status_debug.step = grove::app::state::PmStatusDebugStep::ShowPayload;
+            }
+        }
+
+        Action::PmStatusDebugCopyPayload => {
+            if let Some(ref payload) = state.pm_status_debug.payload {
+                match Clipboard::new() {
+                    Ok(mut clipboard) => {
+                        if let Err(e) = clipboard.set_text(payload) {
+                            state.log_error(format!("Failed to copy to clipboard: {}", e));
+                        } else {
+                            state.show_info("Payload copied to clipboard");
+                        }
+                    }
+                    Err(e) => {
+                        state.log_error(format!("Failed to access clipboard: {}", e));
+                    }
+                }
+            }
+        }
+
         Action::ShowError(msg) => {
             state.toast = Some(Toast::new(msg, ToastLevel::Error));
         }
@@ -5944,9 +5858,6 @@ async fn process_action(
                     InputMode::SelectTaskStatus => {
                         // Handled by TaskStatusDropdownNext/Prev/Select
                     }
-                    InputMode::SelectSubtaskStatus => {
-                        // Handled by SubtaskStatusDropdownNext/Prev/Select
-                    }
                 }
             }
         }
@@ -6043,18 +5954,39 @@ async fn process_action(
                     }
                 });
 
+                let asana_project_gid = state
+                    .settings
+                    .repo_config
+                    .project_mgmt
+                    .asana
+                    .project_gid
+                    .clone();
+
                 match &agent.pm_task_status {
                     ProjectMgmtTaskStatus::Asana(asana_status) => {
                         if let Some(task_gid) = asana_status.gid() {
                             let asana_client_clone = Arc::clone(asana_client);
                             let tx_clone = action_tx.clone();
                             let gid = task_gid.to_string();
+                            let project_gid = asana_project_gid.clone();
                             tokio::spawn(async move {
                                 if let Ok(task) = asana_client_clone.get_task(&gid).await {
-                                    let url = task.permalink_url.unwrap_or_else(|| {
+                                    let url = task.permalink_url.clone().unwrap_or_else(|| {
                                         format!("https://app.asana.com/0/0/{}/f", task.gid)
                                     });
                                     let is_subtask = task.parent.is_some();
+
+                                    let section_name = if is_subtask {
+                                        if task.completed {
+                                            "Complete".to_string()
+                                        } else {
+                                            "Not Complete".to_string()
+                                        }
+                                    } else {
+                                        task.get_section_name_for_project(project_gid.as_deref())
+                                            .unwrap_or_else(|| "No Section".to_string())
+                                    };
+
                                     let status = if task.completed {
                                         grove::core::projects::asana::AsanaTaskStatus::Completed {
                                             gid: task.gid,
@@ -6068,7 +6000,7 @@ async fn process_action(
                                             name: task.name,
                                             url,
                                             is_subtask,
-                                            status_name: "In Progress".to_string(),
+                                            status_name: section_name,
                                         }
                                     };
                                     let _ = tx_clone.send(Action::UpdateProjectTaskStatus {
@@ -9218,6 +9150,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.gid,
                                         name: s.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9249,6 +9182,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.id,
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9279,6 +9213,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.status.clone(),
                                         name: s.status,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9309,6 +9244,7 @@ async fn process_action(
                                     .map(|o| StatusOption {
                                         id: o.name.clone(),
                                         name: o.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -9339,6 +9275,7 @@ async fn process_action(
                                     .map(|s| StatusOption {
                                         id: s.id,
                                         name: s.name,
+                                        is_child: false,
                                     })
                                     .collect();
                                 let _ = tx.send(Action::AutomationStatusOptionsLoaded { options });
@@ -10362,7 +10299,11 @@ fn compute_visible_task_indices(
         tasks: &[TaskListItem],
     ) -> bool {
         let mut current_id = task.id.as_str();
+        let mut visited = HashSet::new();
         loop {
+            if !visited.insert(current_id) {
+                return true;
+            }
             match child_to_parent.get(current_id) {
                 None => return true,
                 Some(&parent_id) => {

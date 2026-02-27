@@ -1031,9 +1031,9 @@ pub struct AppState {
     pub task_list_filter_open: bool,
     pub task_list_filter_selected: usize,
     pub task_status_dropdown: Option<TaskStatusDropdownState>,
-    pub subtask_status_dropdown: Option<SubtaskStatusDropdownState>,
     pub agent_list_scroll: usize,
     pub show_status_debug: bool,
+    pub pm_status_debug: PmStatusDebugState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1109,22 +1109,35 @@ impl ProjectSetupState {
 #[derive(Debug, Clone)]
 pub struct TaskStatusDropdownState {
     pub agent_id: Uuid,
+    pub task_id: Option<String>,
+    pub task_name: Option<String>,
     pub status_options: Vec<StatusOption>,
     pub selected_index: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct SubtaskStatusDropdownState {
-    pub task_id: String,
-    pub task_name: String,
-    pub current_completed: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PmStatusDebugStep {
+    #[default]
+    SelectProvider,
+    ShowPayload,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PmStatusDebugState {
+    pub active: bool,
+    pub step: PmStatusDebugStep,
     pub selected_index: usize,
+    pub selected_provider: Option<crate::app::config::ProjectMgmtProvider>,
+    pub loading: bool,
+    pub payload: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct StatusOption {
     pub id: String,
     pub name: String,
+    pub is_child: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1240,9 +1253,9 @@ impl AppState {
             task_list_filter_open: false,
             task_list_filter_selected: 0,
             task_status_dropdown: None,
-            subtask_status_dropdown: None,
             agent_list_scroll: 0,
             show_status_debug: false,
+            pm_status_debug: PmStatusDebugState::default(),
         }
     }
 
@@ -1368,7 +1381,6 @@ impl AppState {
         self.input_mode = None;
         self.input_buffer.clear();
         self.task_status_dropdown = None;
-        self.subtask_status_dropdown = None;
     }
 
     pub fn show_error(&mut self, msg: impl Into<String>) {

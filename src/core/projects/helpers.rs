@@ -1,10 +1,43 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::cache::Cache;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StatusPayload {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub status_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderStatuses {
+    pub parent: Vec<StatusPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<StatusPayload>>,
+}
+
+impl ProviderStatuses {
+    pub fn new(parent: Vec<StatusPayload>) -> Self {
+        Self {
+            parent,
+            children: None,
+        }
+    }
+
+    pub fn with_children(parent: Vec<StatusPayload>, children: Vec<StatusPayload>) -> Self {
+        Self {
+            parent,
+            children: Some(children),
+        }
+    }
+}
 
 pub fn truncate_with_ellipsis(s: &str, max: usize) -> String {
     if s.chars().count() <= max {

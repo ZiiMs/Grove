@@ -530,6 +530,24 @@ impl OptionalNotionClient {
         self.cached_tasks.invalidate().await;
         tracing::debug!("Notion cache manually invalidated");
     }
+
+    pub async fn fetch_statuses(&self) -> Result<crate::core::projects::ProviderStatuses> {
+        use crate::core::projects::{ProviderStatuses, StatusPayload};
+
+        let status_options = self.get_status_options().await?;
+        let parent: Vec<StatusPayload> = status_options
+            .all_options
+            .into_iter()
+            .map(|opt| StatusPayload {
+                id: opt.id,
+                name: opt.name,
+                status_type: None,
+                color: None,
+            })
+            .collect();
+
+        Ok(ProviderStatuses::new(parent))
+    }
 }
 
 pub fn parse_notion_page_id(input: &str) -> String {

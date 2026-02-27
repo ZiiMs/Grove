@@ -161,23 +161,10 @@ pub enum Action {
         status_name: String,
     },
 
-    SubtaskStatusDropdownNext,
-    SubtaskStatusDropdownPrev,
-    SubtaskStatusDropdownSelect {
-        completed: bool,
-    },
-    SubtaskStatusUpdated {
-        task_id: String,
-        completed: bool,
-    },
     SubtaskStatusOptionsLoaded {
         task_id: String,
         task_name: String,
         options: Vec<crate::app::StatusOption>,
-    },
-    SubtaskStatusOptionSelected {
-        task_id: String,
-        status_name: String,
     },
 
     ConfirmTaskReassignment,
@@ -398,6 +385,22 @@ pub enum Action {
         agent_id: Uuid,
         action_type: AutomationActionType,
     },
+
+    // PM Status Debug
+    OpenPmStatusDebug,
+    ClosePmStatusDebug,
+    PmStatusDebugSelectNext,
+    PmStatusDebugSelectPrev,
+    PmStatusDebugFetchSelected,
+    PmStatusDebugFetched {
+        provider: crate::app::config::ProjectMgmtProvider,
+        payload: String,
+    },
+    PmStatusDebugFetchError {
+        provider: crate::app::config::ProjectMgmtProvider,
+        error: String,
+    },
+    PmStatusDebugCopyPayload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -413,5 +416,4 @@ pub enum InputMode {
     ConfirmDeleteAsana,
     BrowseTasks,
     SelectTaskStatus,
-    SelectSubtaskStatus,
 }

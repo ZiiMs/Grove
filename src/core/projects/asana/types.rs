@@ -122,15 +122,37 @@ pub struct AsanaTaskData {
     pub memberships: Option<Vec<AsanaTaskMembership>>,
 }
 
+impl AsanaTaskData {
+    pub fn get_section_name_for_project(&self, project_gid: Option<&str>) -> Option<String> {
+        self.memberships.as_ref().and_then(|memberships| {
+            for membership in memberships {
+                if let Some(ref project) = membership.project {
+                    let matches_project = project_gid
+                        .map(|pg| project.gid.as_deref() == Some(pg))
+                        .unwrap_or(true);
+                    if matches_project {
+                        if let Some(ref section) = membership.section {
+                            if let Some(ref name) = section.name {
+                                return Some(name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AsanaTaskMembership {
     pub project: Option<AsanaMembershipProject>,
+    pub section: Option<AsanaMembershipSection>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct AsanaMembershipProject {
     pub gid: Option<String>,
-    pub section: Option<AsanaMembershipSection>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,15 +238,28 @@ impl AsanaTaskSummary {
                     let matches_project = project_gid
                         .map(|pg| project.gid.as_deref() == Some(pg))
                         .unwrap_or(true);
+                    tracing::debug!(
+                        "Asana task {} membership: project_gid={:?}, membership.project.gid={:?}, matches={}",
+                        data.gid, project_gid, project.gid, matches_project
+                    );
                     if matches_project {
-                        if let Some(ref section) = project.section {
+                        if let Some(ref section) = membership.section {
                             if let Some(ref name) = section.name {
+                                tracing::debug!(
+                                    "Asana task {} found section: {}",
+                                    data.gid, name
+                                );
                                 return Some(name.clone());
                             }
                         }
                     }
                 }
             }
+            tracing::debug!(
+                "Asana task {} has {} memberships but no matching section found",
+                data.gid,
+                memberships.len()
+            );
             None
         });
 
