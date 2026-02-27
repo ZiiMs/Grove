@@ -6264,6 +6264,7 @@ async fn process_action(
                 state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
                 state.settings.pending_automation = state.config.automation.clone();
+                state.settings.pending_appearance = state.config.appearance.clone();
 
                 let _ = action_tx.send(Action::LoadAutomationStatusOptions);
             }
