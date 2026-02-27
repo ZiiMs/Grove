@@ -6321,7 +6321,6 @@ async fn process_action(
                 state.settings.pending_debug_mode = state.config.global.debug_mode;
                 state.settings.pending_ui = state.config.ui.clone();
                 state.settings.pending_automation = state.config.automation.clone();
-                state.settings.pending_appearance = state.config.appearance.clone();
 
                 let _ = action_tx.send(Action::LoadAutomationStatusOptions);
             }
@@ -7612,7 +7611,6 @@ async fn process_action(
             state.config.ui = state.settings.pending_ui.clone();
             state.config.keybinds = state.settings.pending_keybinds.clone();
             state.config.automation = state.settings.pending_automation.clone();
-            state.config.appearance = state.settings.pending_appearance.clone();
 
             if let Err(e) = state.config.save() {
                 state.log_error(format!("Failed to save config: {}", e));
@@ -10101,7 +10099,8 @@ async fn process_action(
             let provider = state.settings.repo_config.project_mgmt.provider;
             state
                 .settings
-                .pending_appearance
+                .repo_config
+                .appearance
                 .sync_with_status_options(provider, &options);
             state.settings.appearance_status_options = options;
             state.settings.field_index = 0;
@@ -10132,7 +10131,8 @@ async fn process_action(
                     let pm_provider = state.settings.repo_config.project_mgmt.provider;
                     let appearance = state
                         .settings
-                        .pending_appearance
+                        .repo_config
+                        .appearance
                         .get_for_provider(pm_provider);
 
                     let current_idx = match state.settings.appearance_column {
@@ -10167,7 +10167,11 @@ async fn process_action(
             {
                 if let Some(status) = state.settings.appearance_status_options.get(status_index) {
                     let pm_provider = state.settings.repo_config.project_mgmt.provider;
-                    let appearance = state.settings.pending_appearance.for_provider(pm_provider);
+                    let appearance = state
+                        .settings
+                        .repo_config
+                        .appearance
+                        .for_provider(pm_provider);
                     appearance
                         .statuses
                         .entry(status.name.clone())
@@ -10184,7 +10188,11 @@ async fn process_action(
             {
                 if let Some(status) = state.settings.appearance_status_options.get(status_index) {
                     let pm_provider = state.settings.repo_config.project_mgmt.provider;
-                    let appearance = state.settings.pending_appearance.for_provider(pm_provider);
+                    let appearance = state
+                        .settings
+                        .repo_config
+                        .appearance
+                        .for_provider(pm_provider);
                     appearance
                         .statuses
                         .entry(status.name.clone())

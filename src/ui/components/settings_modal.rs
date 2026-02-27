@@ -1365,7 +1365,11 @@ impl<'a> SettingsModal<'a> {
         use crate::app::state::StatusAppearanceColumn;
 
         let pm_provider = self.state.repo_config.project_mgmt.provider;
-        let appearance = self.state.pending_appearance.get_for_provider(pm_provider);
+        let appearance = self
+            .state
+            .repo_config
+            .appearance
+            .get_for_provider(pm_provider);
 
         let current_icon = appearance
             .statuses

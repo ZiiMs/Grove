@@ -411,7 +411,7 @@ impl<'a> AppWidget<'a> {
                     self.state.task_list_loading,
                     provider_name,
                     self.state.settings.repo_config.project_mgmt.provider,
-                    &self.state.settings.pending_appearance,
+                    &self.state.settings.repo_config.appearance,
                     &assigned_tasks,
                     &self.state.task_list_expanded_ids,
                     &self.state.config.task_list.hidden_status_names,
@@ -475,7 +475,7 @@ impl<'a> AppWidget<'a> {
                 self.state.animation_frame,
                 self.state.settings.repo_config.git.provider,
                 &self.devserver_statuses,
-                &self.state.settings.pending_appearance,
+                &self.state.settings.repo_config.appearance,
                 self.state.settings.repo_config.project_mgmt.provider,
             )
             .with_count(self.state.agents.len())

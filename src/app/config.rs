@@ -406,8 +406,6 @@ pub struct Config {
     #[serde(default)]
     pub task_list: TaskListConfig,
     #[serde(default)]
-    pub appearance: AppearanceConfig,
-    #[serde(default)]
     pub tutorial_completed: bool,
 }
 
@@ -1054,6 +1052,8 @@ pub struct RepoConfig {
     pub prompts: PromptsConfig,
     #[serde(default)]
     pub dev_server: DevServerConfig,
+    #[serde(default)]
+    pub appearance: AppearanceConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1316,6 +1316,7 @@ impl RepoConfig {
                     },
                     prompts: legacy.prompts,
                     dev_server: DevServerConfig::default(),
+                    appearance: AppearanceConfig::default(),
                 });
             }
 

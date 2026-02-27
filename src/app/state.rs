@@ -784,7 +784,6 @@ pub struct SettingsState {
     pub file_browser: FileBrowserState,
     pub reset_confirmation: Option<ResetType>,
     pub scroll_offset: usize,
-    pub pending_appearance: crate::app::config::AppearanceConfig,
     pub appearance_status_options: Vec<StatusOption>,
     pub appearance_column: StatusAppearanceColumn,
 }
@@ -815,7 +814,6 @@ impl Default for SettingsState {
             file_browser: FileBrowserState::default(),
             reset_confirmation: None,
             scroll_offset: 0,
-            pending_appearance: crate::app::config::AppearanceConfig::default(),
             appearance_status_options: Vec::new(),
             appearance_column: StatusAppearanceColumn::default(),
         }
@@ -1028,7 +1026,7 @@ impl SettingsState {
     }
 
     pub fn reset_appearance_defaults(&mut self) {
-        self.pending_appearance = crate::app::config::AppearanceConfig::default();
+        self.repo_config.appearance = crate::app::config::AppearanceConfig::default();
     }
 
     pub fn reset_current_tab(&mut self) {
