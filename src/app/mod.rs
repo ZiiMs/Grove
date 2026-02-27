@@ -14,6 +14,6 @@ pub use state::{
     GlobalSetupState, GlobalSetupStep, LogEntry, LogLevel, PmSetupState, PmSetupStep, PreviewTab,
     ProjectSetupState, ResetType, SettingsCategory, SettingsField, SettingsItem, SettingsState,
     SettingsTab, SetupSource, StatusOption, TaskReassignmentWarning, TaskStatusDropdownState,
-    Toast, ToastLevel,
+    Toast, ToastLevel, TutorialState, TutorialStep,
 };
 pub use task_list::TaskListItem;

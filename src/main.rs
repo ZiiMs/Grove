@@ -3,7 +3,6 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arboard::Clipboard;
 use sysinfo::System;
 
 use anyhow::Result;
@@ -178,14 +177,15 @@ async fn main() -> Result<()> {
         state.global_setup = Some(grove::app::GlobalSetupState::default());
         state.log_info("First launch - showing global setup wizard".to_string());
     } else if project_needs_setup {
-        // Show project setup wizard if project not configured
-        state.show_project_setup = true;
         let wizard = grove::app::ProjectSetupState {
             config: state.settings.repo_config.clone(),
             ..Default::default()
         };
         state.project_setup = Some(wizard);
         state.log_info("Project not configured - showing project setup wizard".to_string());
+    } else if !state.config.tutorial_completed {
+        state.show_tutorial = true;
+        state.tutorial = Some(grove::app::TutorialState::default());
     }
 
     let agent_manager = Arc::new(AgentManager::new(&repo_path, state.worktree_base.clone()));
@@ -196,9 +196,8 @@ async fn main() -> Result<()> {
         let count = session.agents.len();
         for mut agent in session.agents {
             agent.migrate_legacy();
-            if agent.continue_session {
-                agents_to_continue.push(agent.clone());
-            }
+            agent.continue_session = true;
+            agents_to_continue.push(agent.clone());
             state.add_agent(agent);
         }
         state.selected_index = session
@@ -1136,7 +1135,6 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         };
     }
 
-    // Handle global setup wizard
     if state.show_global_setup {
         if let Some(wizard) = &state.global_setup {
             return match key.code {
@@ -1146,7 +1144,7 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
                     } else if matches!(wizard.step, grove::app::GlobalSetupStep::AgentSettings) {
                         Some(Action::GlobalSetupPrevStep)
                     } else {
-                        None // Can't go back from first step
+                        None
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -1190,7 +1188,24 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
         }
     }
 
-    // Handle project setup wizard
+    if state.show_tutorial {
+        if let Some(tutorial) = &state.tutorial {
+            let is_last_step = matches!(tutorial.step, grove::app::TutorialStep::GettingHelp);
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => Some(Action::TutorialSkip),
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+                    if is_last_step {
+                        Some(Action::TutorialComplete)
+                    } else {
+                        Some(Action::TutorialNextStep)
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => Some(Action::TutorialPrevStep),
+                _ => None,
+            };
+        }
+    }
+
     if state.show_project_setup {
         if let Some(wizard) = &state.project_setup {
             if wizard.file_browser.active {
@@ -1290,13 +1305,6 @@ fn handle_key_event(key: crossterm::event::KeyEvent, state: &AppState) -> Option
     // Refresh selected agent status
     if matches_keybind(key, &kb.refresh_task_list) && state.selected_agent_id().is_some() {
         return Some(Action::RefreshSelected);
-    }
-
-    // Toggle continue session
-    if matches_keybind(key, &kb.toggle_continue) {
-        return state
-            .selected_agent_id()
-            .map(|id| Action::ToggleContinueSession { id });
     }
 
     // Yank (copy) agent name to clipboard
@@ -1768,6 +1776,7 @@ fn handle_settings_key(key: crossterm::event::KeyEvent, state: &AppState) -> Opt
                     }),
                     ActionButtonType::SetupPm => Some(Action::SettingsSelectField),
                     ActionButtonType::SetupGit => Some(Action::OpenGitSetup),
+                    ActionButtonType::ResetTutorial => Some(Action::ResetTutorial),
                 }
             } else {
                 let field = state.settings.current_field();
@@ -2339,20 +2348,21 @@ async fn process_action(
                 let worktree_path = agent.worktree_path.clone();
                 let cd_cmd = format!("cd {}", worktree_path);
 
-                // Copy to clipboard
-                let clipboard_result = Clipboard::new().and_then(|mut c| c.set_text(&cd_cmd));
-
-                // Print to stdout (visible when app exits)
-                println!("{}", cd_cmd);
-
-                let message = if clipboard_result.is_ok() {
-                    format!("Copied: {}", cd_cmd)
+                if let Some(clipboard) = state.get_clipboard() {
+                    match clipboard.set_text(&cd_cmd) {
+                        Ok(()) => {
+                            state.log_info(format!("Copied: {}", cd_cmd));
+                            state.show_success(format!("Copied: {}", cd_cmd));
+                        }
+                        Err(e) => {
+                            state.log_error(format!("Clipboard error: {}", e));
+                            state.show_error(format!("Copy failed: {}", e));
+                        }
+                    }
                 } else {
-                    format!("cd command: {}", cd_cmd)
-                };
-
-                state.log_info(&message);
-                state.show_success(message);
+                    state.log_error("Failed to access clipboard".to_string());
+                    state.show_error("Clipboard unavailable".to_string());
+                }
             }
         }
 
@@ -5705,19 +5715,66 @@ async fn process_action(
 
         Action::PmStatusDebugCopyPayload => {
             if let Some(ref payload) = state.pm_status_debug.payload {
-                match Clipboard::new() {
-                    Ok(mut clipboard) => {
-                        if let Err(e) = clipboard.set_text(payload) {
+                let payload = payload.clone();
+                if let Some(clipboard) = state.get_clipboard() {
+                    match clipboard.set_text(&payload) {
+                        Ok(()) => state.show_info("Payload copied to clipboard"),
+                        Err(e) => {
                             state.log_error(format!("Failed to copy to clipboard: {}", e));
-                        } else {
-                            state.show_info("Payload copied to clipboard");
+                            state.show_error(format!("Copy failed: {}", e));
                         }
                     }
-                    Err(e) => {
-                        state.log_error(format!("Failed to access clipboard: {}", e));
-                    }
+                } else {
+                    state.log_error("Failed to access clipboard".to_string());
+                    state.show_error("Clipboard unavailable".to_string());
                 }
             }
+        }
+
+        Action::TutorialNextStep => {
+            if let Some(ref mut tutorial) = state.tutorial {
+                tutorial.step = tutorial.step.next();
+                if tutorial.step == grove::app::TutorialStep::default() {
+                    state.config.tutorial_completed = true;
+                    if let Err(e) = state.config.save() {
+                        state.log_error(format!("Failed to save config: {}", e));
+                    }
+                    state.show_tutorial = false;
+                    state.tutorial = None;
+                    state.show_success("Tutorial completed!");
+                }
+            }
+        }
+        Action::TutorialPrevStep => {
+            if let Some(ref mut tutorial) = state.tutorial {
+                tutorial.step = tutorial.step.prev();
+            }
+        }
+        Action::TutorialSkip => {
+            state.config.tutorial_completed = true;
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+            state.show_tutorial = false;
+            state.tutorial = None;
+        }
+        Action::TutorialComplete => {
+            state.config.tutorial_completed = true;
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+            state.show_tutorial = false;
+            state.tutorial = None;
+            state.show_success("Tutorial completed!");
+        }
+        Action::ResetTutorial => {
+            state.config.tutorial_completed = false;
+            if let Err(e) = state.config.save() {
+                state.log_error(format!("Failed to save config: {}", e));
+            }
+            state.settings.active = false;
+            state.show_tutorial = true;
+            state.tutorial = Some(grove::app::TutorialState::default());
         }
 
         Action::ShowError(msg) => {
@@ -5890,13 +5947,13 @@ async fn process_action(
         Action::CopyAgentName { id } => {
             if let Some(agent) = state.agents.get(&id) {
                 let name = agent.name.clone();
-                match Clipboard::new().and_then(|mut c| c.set_text(&name)) {
-                    Ok(()) => {
-                        state.show_success(format!("Copied '{}'", name));
+                if let Some(clipboard) = state.get_clipboard() {
+                    match clipboard.set_text(&name) {
+                        Ok(()) => state.show_success(format!("Copied '{}'", name)),
+                        Err(e) => state.show_error(format!("Copy failed: {}", e)),
                     }
-                    Err(e) => {
-                        state.show_error(format!("Copy failed: {}", e));
-                    }
+                } else {
+                    state.show_error("Clipboard unavailable".to_string());
                 }
             }
         }
@@ -7964,6 +8021,9 @@ async fn process_action(
                         ..Default::default()
                     };
                     state.project_setup = Some(wizard);
+                } else if !state.config.tutorial_completed {
+                    state.show_tutorial = true;
+                    state.tutorial = Some(grove::app::TutorialState::default());
                 }
             }
         }
@@ -8066,11 +8126,19 @@ async fn process_action(
                             }
                         }
                         state.show_project_setup = false;
+                        if !state.config.tutorial_completed {
+                            state.show_tutorial = true;
+                            state.tutorial = Some(grove::app::TutorialState::default());
+                        }
                     }
                     7 => {
                         state.show_project_setup = false;
                         state.project_setup = None;
                         state.log_info("Project setup closed".to_string());
+                        if !state.config.tutorial_completed {
+                            state.show_tutorial = true;
+                            state.tutorial = Some(grove::app::TutorialState::default());
+                        }
                     }
                     _ => {}
                 }
@@ -8138,7 +8206,11 @@ async fn process_action(
         Action::ProjectSetupSkip => {
             state.show_project_setup = false;
             state.project_setup = None;
-            state.log_info("Project setup closed".to_string());
+            state.log_info("Project setup skipped".to_string());
+            if !state.config.tutorial_completed {
+                state.show_tutorial = true;
+                state.tutorial = Some(grove::app::TutorialState::default());
+            }
         }
         Action::ProjectSetupComplete => {
             if let Some(wizard) = state.project_setup.take() {
@@ -8150,6 +8222,10 @@ async fn process_action(
                 }
             }
             state.show_project_setup = false;
+            if !state.config.tutorial_completed {
+                state.show_tutorial = true;
+                state.tutorial = Some(grove::app::TutorialState::default());
+            }
         }
         Action::ProjectSetupOpenSymlinks => {
             if let Some(wizard) = &mut state.project_setup {

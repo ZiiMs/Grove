@@ -67,7 +67,7 @@ impl<'a> AgentListWidget<'a> {
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
         let header_cells = [
-            "", "S", "C", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Server",
+            "", "S", "Name", "Status", "Active", "Rate", "Tasks", "MR", "Pipeline", "Server",
             "Task", "Task St", "Note",
         ]
         .iter()
@@ -79,7 +79,6 @@ impl<'a> AgentListWidget<'a> {
             let table = Table::new(
                 vec![Row::new(vec![Cell::from("")])],
                 [
-                    Constraint::Length(2),
                     Constraint::Length(2),
                     Constraint::Length(2),
                     Constraint::Length(28),
@@ -177,7 +176,6 @@ impl<'a> AgentListWidget<'a> {
                 let separator = Row::new(vec![
                     Cell::from("──"),
                     Cell::from("──"),
-                    Cell::from("──"),
                     Cell::from("──────────────────"),
                     Cell::from("──────────────────"),
                     Cell::from("────────"),
@@ -213,7 +211,6 @@ impl<'a> AgentListWidget<'a> {
             [
                 Constraint::Length(2),  // Selector
                 Constraint::Length(2),  // Summary
-                Constraint::Length(2),  // Continue
                 Constraint::Length(26), // Name
                 Constraint::Length(18), // Status
                 Constraint::Length(8),  // Activity time
@@ -246,13 +243,6 @@ impl<'a> AgentListWidget<'a> {
         // Summary column
         let summary_cell = if agent.summary_requested {
             Cell::from("✓").style(Style::default().fg(Color::Green))
-        } else {
-            Cell::from("")
-        };
-
-        // Continue session column
-        let continue_cell = if agent.continue_session {
-            Cell::from("↻").style(Style::default().fg(Color::Cyan))
         } else {
             Cell::from("")
         };
@@ -330,7 +320,6 @@ impl<'a> AgentListWidget<'a> {
         Row::new(vec![
             selector_cell,
             summary_cell,
-            continue_cell,
             name_cell,
             status_cell,
             activity_cell,

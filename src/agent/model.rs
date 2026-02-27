@@ -285,7 +285,7 @@ impl Agent {
             asana_task_status: AsanaTaskStatus::None,
             pm_task_status: ProjectMgmtTaskStatus::None,
             summary_requested: false,
-            continue_session: false,
+            continue_session: true,
             opencode_session_id: None,
             status_reason: None,
         }

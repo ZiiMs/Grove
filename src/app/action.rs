@@ -416,6 +416,13 @@ pub enum Action {
         error: String,
     },
     PmStatusDebugCopyPayload,
+
+    // Tutorial
+    TutorialNextStep,
+    TutorialPrevStep,
+    TutorialSkip,
+    TutorialComplete,
+    ResetTutorial,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

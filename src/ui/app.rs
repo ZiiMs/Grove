@@ -19,7 +19,7 @@ use super::components::{
     EmptyOutputWidget, GitSetupModal, GlobalSetupWizard, HelpOverlay, LoadingOverlay,
     OutputViewWidget, PmSetupModal, PmStatusDebugOverlay, ProjectSetupWizard, SettingsModal,
     StatusBarWidget, StatusDebugOverlay, StatusDropdown, SystemMetricsWidget, TaskListModal,
-    TaskReassignmentWarningModal, ToastWidget,
+    TaskReassignmentWarningModal, ToastWidget, TutorialWizard,
 };
 
 #[derive(Clone)]
@@ -155,6 +155,13 @@ impl<'a> AppWidget<'a> {
                     .and_then(|n| n.to_str())
                     .unwrap_or("Project");
                 let wizard = ProjectSetupWizard::new(wizard_state, repo_name);
+                wizard.render(frame);
+            }
+        }
+
+        if self.state.show_tutorial {
+            if let Some(tutorial_state) = &self.state.tutorial {
+                let wizard = TutorialWizard::new(tutorial_state);
                 wizard.render(frame);
             }
         }

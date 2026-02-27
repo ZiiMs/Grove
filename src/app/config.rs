@@ -407,6 +407,8 @@ pub struct Config {
     pub task_list: TaskListConfig,
     #[serde(default)]
     pub appearance: AppearanceConfig,
+    #[serde(default)]
+    pub tutorial_completed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
