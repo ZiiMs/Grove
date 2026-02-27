@@ -47,24 +47,28 @@ impl<'a> ToastWidget<'a> {
 }
 
 fn get_toast_area(frame_area: Rect, message_len: usize) -> Rect {
-    let toast_width = (message_len as u16 + 6).min(frame_area.width - 4).max(20);
     let toast_height = 3u16;
+    let bottom_padding = 2u16;
+
+    let max_width = frame_area.width.saturating_sub(4);
+    let desired_width = (message_len as u16 + 6).min(max_width);
+    let toast_width = desired_width.max(20.min(max_width));
 
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(frame_area.height.saturating_sub(toast_height + 2)),
+            Constraint::Min(0),
             Constraint::Length(toast_height),
-            Constraint::Length(2),
+            Constraint::Length(bottom_padding),
         ])
         .split(frame_area);
 
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length((frame_area.width.saturating_sub(toast_width)) / 2),
+            Constraint::Min(0),
             Constraint::Length(toast_width),
-            Constraint::Length((frame_area.width.saturating_sub(toast_width)) / 2),
+            Constraint::Min(0),
         ])
         .split(popup_layout[1])[1]
 }
