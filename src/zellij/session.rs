@@ -16,18 +16,23 @@ impl ZellijSession {
     }
 
     pub fn create(&self, working_dir: &str, command: &str) -> Result<()> {
-        let output = Command::new("zellij")
-            .args(["new-session", "-d", "-s", &self.name, "--cwd", working_dir])
-            .output()
-            .context("Failed to execute zellij")?;
+        // Run the create command - ignore stderr/panic because zellij
+        // may error about terminal attributes (ENOTTY) when not in a TTY,
+        // but the session is still created successfully.
+        let _ = Command::new("zellij")
+            .args(["-s", &self.name])
+            .args(["--cwd", working_dir])
+            .output();
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to create zellij session: {}", stderr);
+        // Give zellij a moment to create the session
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Verify session was created (this is the real success check)
+        if !self.exists() {
+            anyhow::bail!("Failed to create zellij session '{}'", self.name);
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
+        // Send the initial command
         self.send_keys(command)?;
 
         Ok(())
