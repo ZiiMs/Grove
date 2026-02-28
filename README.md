@@ -1,51 +1,91 @@
 # Grove
 
-A terminal UI (TUI) for managing multiple Claude Code agents with git worktree isolation.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Homebrew](https://img.shields.io/badge/homebrew-ZiiMs%2Fgrove%2Fgrove-orange)](https://github.com/ZiiMs/homebrew-grove)
 
-Grove allows you to run multiple instances of Claude Code simultaneously, each working on its own git branch in an isolated worktree. Monitor their progress, attach to their terminal sessions, and integrate with GitLab merge requests and Asana tasks.
+A terminal UI for managing multiple AI coding agents with git worktree isolation.
+
+**Website: https://grove.ziim.dev/**
+
+Grove allows you to run multiple AI coding agents simultaneously, each working on its own git branch in an isolated worktree. Monitor their progress, attach to their terminal sessions, and integrate with your existing tools.
+
+## Screenshots
+
+**Agent List with Preview Panel**
+
+![Agents and preview](./assets/agents-preview.webp)
+
+**Task List View**
+
+![Task list](./assets/tasklist.webp)
+
+**Settings Panel**
+
+![Settings](./assets/settings.webp)
 
 ## Features
 
-- **Multi-Agent Management**: Run multiple Claude Code agents in parallel, each in its own tmux session
-- **Git Worktree Isolation**: Each agent works on a separate branch in an isolated worktree, preventing conflicts
-- **Real-Time Monitoring**: See live output from each agent, detect status (running, waiting, error), and track activity
-- **GitLab Integration**: Automatically detect merge requests, view pipeline status, and open MRs in browser
-- **Asana Integration**: Link agents to Asana tasks, automatically move tasks through workflow stages
+- **Multi-Agent Management**: Run multiple AI agents in parallel, each in its own tmux session
+- **Multiple AI Providers**: Supports Claude Code, Opencode, Codex, and Gemini CLI
+- **Git Worktree Isolation**: Each agent works on a separate branch in an isolated worktree
+- **Real-Time Monitoring**: See live output, detect status (running, waiting, error), track token usage
+- **Git Provider Integration**: GitLab, GitHub, and Codeberg support with MR/PR and pipeline status
+- **Project Management Integration**: Asana, Notion, ClickUp, Airtable, and Linear task tracking
+- **Dev Server Management**: Start, restart, and monitor development servers per agent
 - **Session Persistence**: Agent sessions persist across restarts with tmux
+- **Customizable Keybinds**: All keyboard shortcuts can be personalized
 - **System Metrics**: Monitor CPU and memory usage while agents work
 
-## Prerequisites
+## Comparison
 
-Before installing Grove, ensure you have the following:
+| Feature | Grove | Manual tmux + worktree | git-worktree-manager |
+|---------|-------|------------------------|---------------------|
+| Multi-agent TUI | Yes | No | No |
+| AI agent detection | Yes | No | No |
+| Task management integration | Yes | No | No |
+| Git provider integration | Yes | No | No |
+| Dev server management | Yes | No | No |
+| Session persistence | Yes | Manual | No |
+| Customizable keybinds | Yes | No | No |
+
+## Prerequisites
 
 ### Required
 
 1. **tmux**
-    ```bash
-    # macOS
-    brew install tmux
+   ```bash
+   # macOS
+   brew install tmux
 
-    # Ubuntu/Debian
-    sudo apt install tmux
+   # Ubuntu/Debian
+   sudo apt install tmux
 
-    # Fedora
-    sudo dnf install tmux
-    ```
+   # Fedora
+   sudo dnf install tmux
+   ```
 
-2. **Claude Code CLI**
+2. **Git** (version 2.5+ with worktree support)
 
-   The `claude` command must be available in your PATH. Install Claude Code following Anthropic's instructions.
-
-3. **Git** (with worktree support, version 2.5+)
+3. **An AI coding CLI** - at least one of:
+   - [Claude Code](https://claude.ai/code) (`claude`)
+   - [Opencode](https://opencode.ai) (`opencode`)
+   - [Codex](https://github.com/openai/codex) (`codex`)
+   - [Gemini CLI](https://github.com/google-gemini/gemini-cli) (`gemini`)
 
 ### Optional (for integrations)
 
-- **GitLab Account** with API access token (for MR tracking)
-- **Asana Account** with personal access token (for task management)
+- GitLab, GitHub, or Codeberg account with API token
+- Asana, Notion, ClickUp, Airtable, or Linear account with API token
 
 ## Installation
 
-### Quick Install (Recommended)
+### Homebrew (macOS, recommended)
+
+```bash
+brew install ZiiMs/grove/grove
+```
+
+### Quick Install (Linux/macOS)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash
@@ -64,31 +104,25 @@ The installer will:
 curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash -s -- --bin-dir /usr/local/bin
 
 # Install specific version
-curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash -s -- --version abc1234
+curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash -s -- --version 0.2.0
 
-# Skip dependency installation (if you already have tmux)
+# Skip dependency installation
 curl -fsSL https://raw.githubusercontent.com/ZiiMs/Grove/main/install.sh | bash -s -- --no-deps
-```
-
-### From Source
-
-```bash
-# Clone the repository
-git clone https://github.com/ZiiMs/Grove.git
-cd Grove
-
-# Build in release mode
-cargo build --release
-
-# The binary will be at ./target/release/grove
-# Optionally, copy it to a directory in your PATH:
-cp target/release/grove ~/.local/bin/
 ```
 
 ### From crates.io
 
 ```bash
-cargo install grove-tui
+cargo install grove-ai
+```
+
+### From Source
+
+```bash
+git clone https://github.com/ZiiMs/Grove.git
+cd Grove
+cargo build --release
+cp target/release/grove ~/.local/bin/
 ```
 
 ## Quick Start
@@ -106,111 +140,94 @@ grove /path/to/your/project
 
 ## Configuration
 
-Grove uses a TOML configuration file located at `~/.grove/config.toml`. Create this file to customize behavior and set up integrations.
+Grove uses a two-level configuration system:
 
-### Configuration File
+### Global Config (`~/.grove/config.toml`)
 
-Create `~/.grove/config.toml`:
+User preferences stored globally:
 
 ```toml
-# GitLab Integration
-[gitlab]
-# Your GitLab instance URL (default: "https://gitlab.com")
-base_url = "https://gitlab.com"
+[global]
+ai_agent = "claude-code"  # claude-code, opencode, codex, gemini
+log_level = "info"
+worktree_location = "project"  # project or home
 
-# Your project's numeric ID (find it on your project's main page)
-project_id = 12345678
-
-# The main/default branch name (default: "main")
-main_branch = "main"
-
-# Asana Integration
-[asana]
-# Your Asana project GID (find it in the project URL)
-# Example: In https://app.asana.com/0/1234567890/list the GID is 1234567890
-project_gid = "1234567890123456"
-
-# Optional: Override section GIDs for automatic task movement
-# If not set, Grove will auto-detect sections named "In Progress" and "Done"
-in_progress_section_gid = "1234567890123457"
-done_section_gid = "1234567890123458"
-
-# How often to poll Asana for task updates (default: 120 seconds)
-refresh_secs = 120
-
-# UI Settings
 [ui]
-# Target frame rate (default: 30)
 frame_rate = 30
-
-# Tick rate in milliseconds (default: 250)
 tick_rate_ms = 250
-
-# Number of output lines to buffer per agent (default: 5000)
 output_buffer_lines = 5000
 
-# Performance Settings
 [performance]
-# How often to poll agent status in milliseconds (default: 500)
 agent_poll_ms = 500
-
-# How often to refresh git status in seconds (default: 30)
 git_refresh_secs = 30
-
-# How often to poll GitLab for MR status in seconds (default: 60)
-gitlab_refresh_secs = 60
 ```
 
-## Environment Variables
+### Project Config (`.grove/project.toml`)
 
-Grove uses environment variables for sensitive credentials. Set these in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+Project-specific settings stored in your repo (can be committed):
 
-### GitLab Token
+```toml
+[git]
+provider = "gitlab"           # gitlab, github, codeberg
+branch_prefix = "feature/"
+main_branch = "main"
+
+[dev_server]
+command = "npm run dev"
+port = 3000
+auto_start = false
+```
+
+**Note:** Git provider settings (owner, repo, project IDs) are auto-detected from your git remotes. You only need to configure them manually if auto-detection fails.
+
+## API Tokens
+
+Grove reads API tokens from environment variables. Set these in your shell profile:
+
+### Git Providers
 
 ```bash
-export GITLAB_TOKEN="your-gitlab-personal-access-token"
+# GitLab
+export GITLAB_TOKEN="glpat-your-token"
+
+# GitHub  
+export GITHUB_TOKEN="ghp_your-token"
+
+# Codeberg
+export CODEBERG_TOKEN="your-token"
 ```
 
-**How to create a GitLab token:**
-1. Go to GitLab > User Settings > Access Tokens
-2. Click "Add new token"
-3. Name: `grove` (or any name you prefer)
-4. Expiration date: Set as needed
-5. Scopes: Select `api` (for full API access) or `read_api` (for read-only)
-6. Click "Create personal access token"
-7. Copy the token and set it as `GITLAB_TOKEN`
-
-### Asana Token
+### Project Management
 
 ```bash
-export ASANA_TOKEN="your-asana-personal-access-token"
+export ASANA_TOKEN="your-asana-token"
+export NOTION_TOKEN="your-notion-token"
+export CLICKUP_TOKEN="your-clickup-token"
+export AIRTABLE_TOKEN="your-airtable-token"
+export LINEAR_TOKEN="your-linear-token"
 ```
 
-**How to create an Asana token:**
-1. Go to [Asana Developer Console](https://app.asana.com/0/developer-console)
-2. Click "Create new token"
-3. Name: `grove` (or any name you prefer)
-4. Click "Create token"
-5. Copy the token and set it as `ASANA_TOKEN`
+### Creating Tokens
 
-### Example Shell Configuration
+**GitLab:** User Settings → Access Tokens → Create token with `api` scope
 
-Add to your `~/.zshrc` or `~/.bashrc`:
+**GitHub:** Settings → Developer settings → Personal access tokens → `repo` scope
 
-```bash
-# Grove Configuration
-export GITLAB_TOKEN="glpat-xxxxxxxxxxxxxxxxxxxx"
-export ASANA_TOKEN="1/1234567890123456:abcdefghijklmnopqrstuvwxyz"
-```
+**Asana:** [Developer Console](https://app.asana.com/0/developer-console) → Create new token
 
-Then reload your shell:
-```bash
-source ~/.zshrc  # or source ~/.bashrc
-```
+**Notion:** [My integrations](https://www.notion.so/my-integrations) → New integration
+
+**ClickUp:** Settings → Apps → API Token
+
+**Airtable:** [Personal access tokens](https://airtable.com/create/tokens)
+
+**Linear:** Settings → API → Personal API keys
 
 ## Usage
 
 ### Keyboard Shortcuts
+
+All keybinds are customizable in `~/.grove/config.toml`. Defaults:
 
 #### Navigation
 | Key | Action |
@@ -223,31 +240,29 @@ source ~/.zshrc  # or source ~/.bashrc
 #### Agent Management
 | Key | Action |
 |-----|--------|
-| `n` | Create new agent (prompts for branch name) |
+| `n` | Create new agent |
 | `d` | Delete selected agent |
 | `Enter` | Attach to agent's tmux session |
-| `N` | Set/edit custom note for agent |
-| `s` | Request work summary (for sharing on Slack) |
-| `y` | Copy agent/branch name to clipboard |
+| `N` | Set/edit custom note |
+| `s` | Request work summary |
+| `y` | Copy agent/branch name |
 
 #### Git Operations
 | Key | Action |
 |-----|--------|
 | `c` | Copy `cd` command to worktree |
-| `m` | Send merge main request to Claude |
-| `p` | Send /push command to Claude |
+| `m` | Send merge main request |
+| `p` | Push changes |
 | `f` | Fetch remote |
 
-#### GitLab
+#### Integrations
 | Key | Action |
 |-----|--------|
-| `o` | Open merge request in browser |
-
-#### Asana
-| Key | Action |
-|-----|--------|
-| `a` | Assign Asana task to agent |
-| `A` | Open Asana task in browser |
+| `o` | Open MR/PR in browser |
+| `a` | Assign task to agent |
+| `A` | Open task in browser |
+| `t` | Toggle task list |
+| `e` | Open worktree in editor |
 
 #### Other
 | Key | Action |
@@ -255,45 +270,23 @@ source ~/.zshrc  # or source ~/.bashrc
 | `R` | Refresh all status |
 | `?` | Toggle help overlay |
 | `L` | Toggle logs view |
+| `S` | Toggle settings |
+| `/` | Toggle diff view |
 | `q` | Quit |
-| `Esc` | Cancel current action / close dialogs |
 
 ### Creating an Agent
 
 1. Press `n` to create a new agent
-2. Enter a branch name (this will be both the agent name and git branch)
+2. Enter a branch name
 3. Grove will:
-   - Create a new git branch (if it doesn't exist)
+   - Create a new git branch
    - Create a git worktree for isolated work
    - Start a tmux session
-   - Launch Claude Code in that session
+   - Launch your configured AI agent
 
 ### Attaching to an Agent
 
-Press `Enter` on a selected agent to attach to its tmux session. You'll be connected directly to Claude's terminal.
-
-To detach and return to Grove: press `Ctrl+B` then `D` (standard tmux detach).
-
-### Copy Worktree Path
-
-Press `c` to copy a `cd` command for the selected agent's worktree to your clipboard. This is printed to the terminal and copied so you can easily switch to that directory in another terminal.
-
-This is useful when you need to work directly in the agent's worktree for debugging or manual testing.
-
-### Asana Integration Workflow
-
-1. Create an agent for your task (`n`)
-2. Assign an Asana task (`a`) by entering the task URL or GID
-3. When Claude starts working (detected as "Running"), the task automatically moves to "In Progress"
-4. When you delete the agent with `y` at the confirmation prompt, the task moves to "Done" and is marked complete
-
-### GitLab Integration
-
-When configured, Grove will:
-- Automatically detect when Claude creates a merge request
-- Show MR status in the agent list
-- Display pipeline status (pending, running, passed, failed)
-- Allow quick access to MRs in browser (`o`)
+Press `Enter` to attach to an agent's tmux session. Detach with `Ctrl+B` then `D`.
 
 ## Troubleshooting
 
@@ -303,49 +296,56 @@ Install tmux using your package manager (see Prerequisites).
 
 ### "Not a git repository"
 
-Grove must be run from within a git repository, or you must specify a git repository path as an argument.
+Run Grove from within a git repository, or specify a path as an argument.
 
-### GitLab integration not working
+### Integration not working
 
-1. Verify `GITLAB_TOKEN` is set: `echo $GITLAB_TOKEN`
-2. Check that `project_id` is set in `~/.grove/config.toml`
-3. Ensure your token has `api` or `read_api` scope
-4. Test the token: `curl --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "https://gitlab.com/api/v4/user"`
-
-### Asana integration not working
-
-1. Verify `ASANA_TOKEN` is set: `echo $ASANA_TOKEN`
-2. Check the logs for error messages (press `L` to view logs)
-3. Verify the token is valid by testing the API:
-   ```bash
-   curl -H "Authorization: Bearer $ASANA_TOKEN" "https://app.asana.com/api/1.0/users/me"
-   ```
+1. Verify the token is set: `echo $GITLAB_TOKEN`
+2. Check logs with `L` key
+3. Test the token directly with curl
 
 ### Agent stuck in wrong status
 
 Press `R` to force refresh all agent statuses.
 
-### Session persistence
+### Session persistence issues
 
-Agent sessions are saved to `~/.grove/sessions/<repo-hash>.json`. If you experience issues, you can delete this file to start fresh (note: this won't affect running tmux sessions).
+Sessions are stored in `~/.grove/sessions/`. Delete the relevant file to start fresh.
 
 ## Architecture
 
 ```
 grove/
 ├── src/
-│   ├── main.rs          # Entry point, event loop, action processing
+│   ├── main.rs          # Entry point, event loop
 │   ├── lib.rs           # Module exports
-│   ├── agent/           # Agent model, status detection, lifecycle
-│   ├── app/             # Application state, config, actions
-│   ├── asana/           # Asana API client and types
-│   ├── git/             # Git operations, worktree management
-│   ├── gitlab/          # GitLab API client and types
+│   ├── agent/           # Agent model, status detection
+│   ├── app/             # State, config, actions
+│   ├── asana/           # Asana API client
+│   ├── notion/          # Notion API client
+│   ├── clickup/         # ClickUp API client
+│   ├── airtable/        # Airtable API client
+│   ├── linear/          # Linear API client
+│   ├── git/             # Git operations, worktree
+│   ├── gitlab/          # GitLab API client
+│   ├── github/          # GitHub API client
+│   ├── codeberg/        # Codeberg API client
 │   ├── storage/         # Session persistence
 │   ├── tmux/            # tmux session management
-│   └── ui/              # TUI components (ratatui)
+│   └── ui/              # TUI components
 └── Cargo.toml
 ```
+
+## Credits
+
+Grove is built with:
+
+- [ratatui](https://github.com/ratatui-org/ratatui) - TUI framework
+- [git2](https://github.com/rust-lang/git2-rs) - Git operations
+- [tokio](https://github.com/tokio-rs/tokio) - Async runtime
+- [tmux](https://github.com/tmux/tmux) - Terminal multiplexing
+
+Thanks to Anthropic, OpenAI, and Google for their AI coding assistants.
 
 ## License
 
