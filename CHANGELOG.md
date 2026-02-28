@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/ZiiMs/Grove/compare/v0.2.0...v0.2.1) - 2026-02-28
+
+### Other
+
+- Create LICENSE
+- Update README for multi-provider support
+- Fix install.sh
+- Update ascii again
+- update ascii
+- map Rust target triples to release asset names in install script
+- Add Grove homepage with hero, install commands, and terminal screenshot
+- Fix gitignore
+- Remove readme and .gitignore that are out of date.
+- Upload Website
+
 ## [0.2.0](https://github.com/ZiiMs/Grove/compare/v0.1.3...v0.2.0) - 2026-02-27
 
 ### Added
