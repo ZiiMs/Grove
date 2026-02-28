@@ -50,7 +50,7 @@ main() {
 
     local _tmp_dir
     _tmp_dir="$(mktemp -d)" || err "mktemp: could not create temporary directory"
-    trap 'rm -rf "$_tmp_dir"' EXIT
+    trap 'rm -rf "${_tmp_dir:-}"' EXIT
     cd "${_tmp_dir}" || err "cd: failed to enter directory: ${_tmp_dir}"
 
     local _package
@@ -219,6 +219,18 @@ setup_path() {
     esac
 }
 
+get_asset_pattern() {
+    local _arch="$1"
+    
+    case "${_arch}" in
+    x86_64-unknown-linux-*) echo "Linux_x86_64" ;;
+    aarch64-unknown-linux-*) echo "Linux_arm64" ;;
+    x86_64-apple-darwin) echo "Darwin_x86_64" ;;
+    aarch64-apple-darwin) echo "Darwin_arm64" ;;
+    *) echo "${_arch}" ;;
+    esac
+}
+
 download_flock() {
     local _arch="$1"
 
@@ -271,13 +283,16 @@ download_flock() {
         err "wget: failed to download ${_releases_list_url}" ;;
     esac
     
-    _package_url="$(echo "${_releases_list}" | grep "browser_download_url" | cut -d'"' -f4 | grep -- "${_version}" | grep -- "${_arch}" | head -1)"
+    local _asset_pattern
+    _asset_pattern="$(get_asset_pattern "${_arch}")"
+    
+    _package_url="$(echo "${_releases_list}" | grep "browser_download_url" | cut -d'"' -f4 | grep -- "${_version}" | grep -- "${_asset_pattern}" | grep '\.tar\.gz$' | head -1)"
     
     if [ -z "${_package_url}" ]; then
-        err "No release found for architecture (${_arch}) and version (${_version}).
+        err "No release found for architecture (${_asset_pattern}) and version (${_version}).
 
 Available architectures for version ${_version}:
-$(echo "${_releases_list}" | grep "browser_download_url" | cut -d'"' -f4 | grep -- "${_version}" | xargs -n1 basename 2>/dev/null || echo "None found")
+$(echo "${_releases_list}" | grep "browser_download_url" | cut -d'"' -f4 | grep -- "${_version}" | grep '\.tar\.gz$' | xargs -n1 basename 2>/dev/null || echo "None found")
 
 Please check https://github.com/${REPO}/releases for available downloads."
     fi
