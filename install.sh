@@ -87,7 +87,7 @@ main() {
     fi
 
     echo ""
-    echo "Run '${BINARY_NAME} --help' to get started."
+    echo "Run '${BINARY_NAME}' to get started."
 }
 
 parse_args() {
