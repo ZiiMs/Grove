@@ -1,5 +1,6 @@
-import { Terminal, Copy, Check, Github, Cpu, GitBranch, Trello, Monitor, Activity, Beer, Package } from "lucide-react"
-import { useState } from "react"
+import { Terminal, Copy, Check, Github, Cpu, GitBranch, Trello, Monitor, Activity, Beer, Package, BookOpen, Star } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Link } from "react-router-dom"
 import groveTui from "@/assets/grove_tui.webp"
 
 const INSTALL_COMMANDS = [
@@ -76,6 +77,40 @@ function CopyButton({ command }: { command: string }) {
   )
 }
 
+function formatStarCount(count: number): string {
+  if (count >= 1000) {
+    return (count / 1000).toFixed(1).replace(/\.0$/, "") + "k"
+  }
+  return count.toString()
+}
+
+function GitHubStarsButton() {
+  const [stars, setStars] = useState<number | null>(null)
+
+  useEffect(() => {
+    fetch("https://api.github.com/repos/ZiiMs/Grove")
+      .then((res) => res.json())
+      .then((data) => {
+        if (typeof data.stargazers_count === "number") {
+          setStars(data.stargazers_count)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  return (
+    <a
+      href="https://github.com/ZiiMs/Grove"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-2 px-4 py-2 bg-[#111] rounded-l-lg text-gray-300 hover:text-white transition-colors text-sm"
+    >
+      <Star className="w-4 h-4" />
+      {stars !== null ? formatStarCount(stars) : "—"}
+    </a>
+  )
+}
+
 function InstallTab({ label, icon: Icon, active, onClick }: {
   label: string
   icon: React.ComponentType<{ className?: string }>
@@ -143,6 +178,17 @@ function HeroSection() {
             </code>
             <CopyButton command={activeCommand} />
           </div>
+
+          <div className="flex mt-6 border border-[#222] rounded-lg has-[:hover]:border-green-500/50 transition-colors">
+            <GitHubStarsButton />
+            <Link
+              to="/docs"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-[#111] rounded-r-lg text-gray-300 hover:text-white transition-colors text-sm border-l border-[#222] hover:border-green-500/50"
+            >
+              <BookOpen className="w-4 h-4" />
+              Read the docs
+            </Link>
+          </div>
         </div>
       </div>
     </section>
@@ -207,16 +253,25 @@ function Footer() {
   return (
     <footer className="py-12 px-6 border-t border-[#1a1a1a]">
       <div className="max-w-4xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-2 text-gray-400">
-          <Github className="w-5 h-5" />
-          <a
-            href="https://github.com/ZiiMs/Grove"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="hover:text-white transition-colors"
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2 text-gray-400">
+            <Github className="w-5 h-5" />
+            <a
+              href="https://github.com/ZiiMs/Grove"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-white transition-colors"
+            >
+              ZiiMs/Grove
+            </a>
+          </div>
+          <Link
+            to="/docs"
+            className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
           >
-            ZiiMs/Grove
-          </a>
+            <BookOpen className="w-5 h-5" />
+            Docs
+          </Link>
         </div>
 
         <div className="text-gray-500 text-sm">
