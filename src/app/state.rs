@@ -120,7 +120,6 @@ pub enum SettingsField {
     ShowPreview,
     ShowMetrics,
     ShowLogs,
-    ShowBanner,
     GitProvider,
     GitLabProjectId,
     GitLabBaseUrl,
@@ -374,7 +373,6 @@ impl SettingsField {
             | SettingsField::ShowPreview
             | SettingsField::ShowMetrics
             | SettingsField::ShowLogs
-            | SettingsField::ShowBanner
             | SettingsField::Version
             | SettingsField::SummaryPrompt
             | SettingsField::MergePrompt
@@ -569,7 +567,6 @@ impl SettingsItem {
                 SettingsItem::Field(SettingsField::ShowPreview),
                 SettingsItem::Field(SettingsField::ShowMetrics),
                 SettingsItem::Field(SettingsField::ShowLogs),
-                SettingsItem::Field(SettingsField::ShowBanner),
                 SettingsItem::ActionButton(ActionButtonType::ResetTutorial),
                 SettingsItem::ActionButton(ActionButtonType::ResetTab),
                 SettingsItem::ActionButton(ActionButtonType::ResetAll),

@@ -601,8 +601,6 @@ pub struct UiConfig {
     pub show_metrics: bool,
     #[serde(default = "default_true")]
     pub show_logs: bool,
-    #[serde(default = "default_true")]
-    pub show_banner: bool,
     #[serde(default)]
     pub column_visibility: ColumnVisibility,
 }
@@ -728,7 +726,6 @@ impl Default for UiConfig {
             show_preview: default_true(),
             show_metrics: default_true(),
             show_logs: default_true(),
-            show_banner: default_true(),
             column_visibility: ColumnVisibility::default(),
         }
     }

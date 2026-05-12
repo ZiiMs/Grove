@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -28,17 +28,6 @@ pub struct DevServerRenderInfo {
     pub logs: Vec<String>,
     pub agent_name: String,
 }
-
-const BANNER: &[&str] = &[
-    "",
-    " ██████╗ ██████╗  ██████╗ ██╗   ██╗███████╗",
-    " ██╔════╝ ██╔══██╗██╔═══██╗██║   ██║██╔════╝",
-    " ██║  ███╗██████╔╝██║   ██║██║   ██║█████╗  ",
-    " ██║   ██║██╔══██╗██║   ██║╚██╗ ██╔╝██╔══╝  ",
-    " ╚██████╔╝██║  ██║╚██████╔╝ ╚████╔╝ ███████╗",
-    "  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝   ╚═══╝  ╚══════╝",
-    "",
-];
 
 pub struct AppWidget<'a> {
     state: &'a AppState,
@@ -68,7 +57,6 @@ impl<'a> AppWidget<'a> {
     pub fn render(self, frame: &mut Frame) {
         let size = frame.area();
 
-        let show_banner = self.state.config.ui.show_banner;
         let show_preview = self.state.config.ui.show_preview;
         let show_metrics = self.state.config.ui.show_metrics;
         let show_logs = self.state.config.ui.show_logs;
@@ -78,9 +66,6 @@ impl<'a> AppWidget<'a> {
 
         let mut constraints: Vec<Constraint> = Vec::new();
 
-        if show_banner {
-            constraints.push(Constraint::Length(8));
-        }
         constraints.push(Constraint::Length(agent_list_height));
         if show_preview {
             constraints.push(Constraint::Min(8));
@@ -99,11 +84,6 @@ impl<'a> AppWidget<'a> {
             .split(size);
 
         let mut chunk_idx = 0;
-
-        if show_banner {
-            self.render_banner(frame, chunks[chunk_idx]);
-            chunk_idx += 1;
-        }
 
         self.render_agent_list(frame, chunks[chunk_idx]);
         chunk_idx += 1;
@@ -435,16 +415,6 @@ impl<'a> AppWidget<'a> {
                 }
             }
         }
-    }
-
-    fn render_banner(&self, frame: &mut Frame, area: Rect) {
-        let lines: Vec<Line> = BANNER
-            .iter()
-            .map(|&line| Line::from(Span::styled(line, Style::default().fg(Color::White))))
-            .collect();
-
-        let banner = Paragraph::new(lines).alignment(Alignment::Left);
-        frame.render_widget(banner, area);
     }
 
     fn render_agent_list(&self, frame: &mut Frame, area: Rect) {

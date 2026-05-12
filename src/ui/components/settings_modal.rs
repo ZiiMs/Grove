@@ -530,16 +530,6 @@ impl<'a> SettingsModal<'a> {
                 .to_string(),
                 true,
             ),
-            SettingsField::ShowBanner => (
-                "Banner".to_string(),
-                if self.ui_config.show_banner {
-                    "[x]"
-                } else {
-                    "[ ]"
-                }
-                .to_string(),
-                true,
-            ),
             SettingsField::DebugMode => (
                 "Debug Mode".to_string(),
                 if self.state.pending_debug_mode {
@@ -1020,7 +1010,6 @@ impl<'a> SettingsModal<'a> {
                 SettingsField::ShowPreview
                     | SettingsField::ShowMetrics
                     | SettingsField::ShowLogs
-                    | SettingsField::ShowBanner
                     | SettingsField::DebugMode
                     | SettingsField::DevServerAutoStart
             );

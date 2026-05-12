@@ -7059,10 +7059,6 @@ async fn process_action(
                     state.config.ui.show_logs = state.settings.pending_ui.show_logs;
                     state.show_logs = state.config.ui.show_logs;
                 }
-                grove::app::SettingsField::ShowBanner => {
-                    state.settings.pending_ui.show_banner = !state.settings.pending_ui.show_banner;
-                    state.config.ui.show_banner = state.settings.pending_ui.show_banner;
-                }
                 grove::app::SettingsField::DebugMode => {
                     state.settings.pending_debug_mode = !state.settings.pending_debug_mode;
                     state.config.global.debug_mode = state.settings.pending_debug_mode;
