@@ -5,4 +5,7 @@ pub mod error;
 pub mod types;
 
 pub use error::{ErrorCode, IpcError, IpcResult};
-pub use types::{AppInfo, EventEnvelope};
+pub use types::{
+    AppInfo, CreateSessionRequest, EventEnvelope, HarnessInfo, Session, SessionDetail,
+    SessionSummary,
+};

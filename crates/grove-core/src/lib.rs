@@ -4,14 +4,18 @@
 //! `tauri` (asserted by `tests/architecture.rs`) so that the whole product surface stays testable
 //! headlessly, and so the UI shell can be replaced without touching behaviour.
 
+pub mod adapters;
 pub mod gitops;
 pub mod ipc;
 pub mod paths;
 pub mod secrets;
+pub mod sessions;
 pub mod skills;
 pub mod specgraph;
+pub mod store;
 
 use paths::AppPaths;
+use sessions::manager::{SessionError, SessionManager};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -22,7 +26,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// Feature modules add one field here (see `architecture.md` §Extension seams). Constructing it is
 /// cheap and does no I/O; call [`GroveCore::init`] to create directories and open the store.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GroveCore {
     pub paths: AppPaths,
     /// The project whose specs, git state and plan Grove is looking at. Tickets that need a project
@@ -31,21 +35,23 @@ pub struct GroveCore {
     pub project_root: PathBuf,
     pub skills: Arc<skills::SkillService>,
     pub git: gitops::Git,
+    /// The session runtime: adapters, live sessions, and the SQLite transcript.
+    pub sessions: Arc<SessionManager>,
 }
 
 impl GroveCore {
+    /// Cheap construction that does no I/O: the session manager keeps an in-memory store. The app
+    /// calls [`GroveCore::init`]; tests and previews that never persist use this.
     pub fn new(paths: AppPaths) -> Self {
-        let secrets: Arc<dyn secrets::SecretStore> = Arc::new(secrets::MemorySecretStore::new());
-        let project_root = std::env::var_os("GROVE_PROJECT_ROOT")
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
-        Self {
-            skills: Arc::new(skills::SkillService::new(paths.clone(), secrets)),
-            paths,
-            project_root,
-            git: gitops::Git::system(),
-        }
+        let sessions = SessionManager::in_memory(&paths).expect("open the in-memory Grove store");
+        Self::assemble(paths, Arc::new(sessions))
+    }
+
+    /// Create the directories the app writes to and open the durable store at `paths.database`.
+    pub fn init(paths: AppPaths) -> Result<Self, SessionError> {
+        paths.ensure()?;
+        let sessions = SessionManager::open(paths.clone())?;
+        Ok(Self::assemble(paths, Arc::new(sessions)))
     }
 
     pub fn with_project_root(mut self, project_root: impl Into<PathBuf>) -> Self {
@@ -53,9 +59,19 @@ impl GroveCore {
         self
     }
 
-    /// Create the directories the app writes to.
-    pub fn init(&self) -> std::io::Result<()> {
-        self.paths.ensure()
+    fn assemble(paths: AppPaths, sessions: Arc<SessionManager>) -> Self {
+        let secrets: Arc<dyn secrets::SecretStore> = Arc::new(secrets::MemorySecretStore::new());
+        let project_root = std::env::var_os("GROVE_PROJECT_ROOT")
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        Self {
+            skills: Arc::new(skills::SkillService::new(paths.clone(), secrets)),
+            git: gitops::Git::system(),
+            paths,
+            project_root,
+            sessions,
+        }
     }
 
     /// What the webview shows in its header. Shape is pinned by `contract/fixtures/app-info.json`.

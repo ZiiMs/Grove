@@ -1,5 +1,6 @@
 import type { AppCommands } from "./app";
 import type { GitCommands } from "./git";
+import type { SessionsCommands } from "./sessions";
 import type { SkillCommands } from "./skills";
 import type { SpecsCommands } from "./specs";
 
@@ -8,7 +9,11 @@ import type { SpecsCommands } from "./specs";
  *
  * Adding a domain: declare `<Domain>Commands` beside this file, then add it to the intersection below.
  */
-export type CommandMap = AppCommands & GitCommands & SkillCommands & SpecsCommands;
+export type CommandMap = AppCommands &
+  GitCommands &
+  SessionsCommands &
+  SkillCommands &
+  SpecsCommands;
 
 export type CommandName = keyof CommandMap;
 export type CommandArgs<K extends CommandName> = CommandMap[K]["args"];
