@@ -1,3 +1,4 @@
+use grove_core::adapters::{Capabilities, Detection};
 use grove_core::gitops::{
     DiffTarget, GitBranch, GitDiff, GitStatus, GitStatusFile, GitWorktree, PrResult,
 };
@@ -56,6 +57,40 @@ fn ipc_error_matches_fixture() {
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("ipc-error.json")
+    );
+}
+
+#[test]
+fn capabilities_matches_fixture() {
+    // Capability honesty, pinned: Claude's honest set (no interactive permissions in one-shot mode,
+    // no synthesized diffs yet) rather than an aspirational all-true.
+    let sample = Capabilities {
+        streaming_deltas: true,
+        tool_calls: true,
+        diffs: false,
+        permissions: false,
+        resume: true,
+        images: false,
+        mcp: false,
+        usage: true,
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("capabilities.json")
+    );
+}
+
+#[test]
+fn detection_matches_fixture() {
+    let sample = Detection {
+        installed: true,
+        version: Some("2.1.302 (Claude Code)".into()),
+        path: Some("C:/Users/demo/AppData/Roaming/npm/claude.cmd".into()),
+        detail: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("detection.json")
     );
 }
 

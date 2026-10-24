@@ -45,9 +45,16 @@ fn adapters_do_not_import_each_other_or_tauri() {
         let source = read(&path);
 
         assert!(
-            !source.contains("use tauri"),
+            !source.contains("use tauri") && !source.contains("tauri::"),
             "adapter {name} must not import tauri (UI code belongs in the shell)"
         );
+
+        for forbidden in ["crate::sessions::manager", "crate::sessions::pump"] {
+            assert!(
+                !source.contains(forbidden),
+                "adapter {name} must not reach into {forbidden}: the session manager drives the adapter, never the other way round"
+            );
+        }
 
         for other in ["claude", "codex", "acp", "opencode", "pi", "mock"] {
             if other == name {

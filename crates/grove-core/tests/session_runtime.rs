@@ -183,7 +183,8 @@ async fn an_unknown_harness_cannot_be_started() {
     let manager = manager(&dir);
     let error = manager
         .create(CreateSessionRequest {
-            harness: "claude".into(),
+            // Ticket 08 registered `claude`; this name must never be a harness.
+            harness: "not-a-harness".into(),
             ..Default::default()
         })
         .await

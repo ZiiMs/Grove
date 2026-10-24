@@ -153,6 +153,18 @@ export const harnessInfoSchema = z.object({
 });
 export type HarnessInfo = z.infer<typeof harnessInfoSchema>;
 
+/**
+ * What detection reports about one harness install: whether the binary resolves, its version when a
+ * probe ran, and where it lives. The doctor (Settings) reads this; a session never needs it.
+ */
+export const detectionSchema = z.object({
+  installed: z.boolean(),
+  version: z.string().nullable(),
+  path: z.string().nullable(),
+  detail: z.string().nullable(),
+});
+export type Detection = z.infer<typeof detectionSchema>;
+
 /** Arguments to `session_create`. */
 export const createSessionRequestSchema = z.object({
   harness: z.string(),
