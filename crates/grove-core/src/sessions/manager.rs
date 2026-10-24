@@ -303,6 +303,9 @@ impl SessionManager {
             self.store.set_resume_token(&session.id, Some(&token))?;
         }
         let events = handle.take_events();
+        // A process-backed adapter learns its conversation id after this point; the pump mirrors the
+        // shared slot so the row is current without waiting for another command.
+        let resume_token = handle.resume_token_slot();
         let (inject, injected) = tokio::sync::mpsc::unbounded_channel();
         let pump = pump::spawn(
             Arc::clone(&self.store),
@@ -310,6 +313,7 @@ impl SessionManager {
             session.id.clone(),
             events,
             injected,
+            resume_token,
         );
         let live = Arc::new(LiveSession {
             commands: Mutex::new(handle),

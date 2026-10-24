@@ -4,15 +4,18 @@
 //! never on another adapter, `tauri`, or UI code. Adding a harness is one module plus one line in
 //! [`registry::builtin_registry`]; nothing else in Grove changes.
 
+pub mod claude;
 pub mod mock;
 pub mod registry;
+
+pub use claude::ClaudeAdapter;
 
 use crate::paths::AppPaths;
 use crate::secrets::SecretStore;
 use crate::sessions::event::HarnessEvent;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Stable harness name. It is what the UI stores, what the settings file keys on, and what
 /// `sessions.harness` holds.
@@ -153,6 +156,14 @@ pub trait HarnessAdapter: Send + Sync {
     ) -> Result<Box<dyn HarnessSession>, AdapterError>;
 }
 
+/// A handle to the harness's conversation id, shared by the adapter that learns it and the session
+/// pump that persists it.
+///
+/// A process-backed adapter learns the id from the harness's *first line* — after the manager's
+/// post-command mirror has already run — so it updates this slot as soon as it knows, and the pump
+/// mirrors it into `sessions.resume_token` without waiting for another command.
+pub type ResumeToken = Arc<Mutex<Option<String>>>;
+
 /// One running conversation with a harness.
 ///
 /// Commands are serialized by the session manager, so a session never has two writers on the same
@@ -172,4 +183,13 @@ pub trait HarnessSession: Send {
     /// The harness's own conversation id, mirrored into `sessions.resume_token`. `None` until the
     /// harness has told the adapter what it is.
     fn resume_token(&self) -> Option<String>;
+
+    /// The slot [`HarnessSession::resume_token`] reads, when the adapter can update it mid-turn.
+    ///
+    /// Adapters that know their token at start (the mock) leave this `None`: the manager mirrors
+    /// after every command. A process-backed adapter returns the same slot its reader task writes,
+    /// and the pump mirrors it as soon as it changes.
+    fn resume_token_slot(&self) -> Option<ResumeToken> {
+        None
+    }
 }

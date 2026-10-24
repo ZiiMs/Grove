@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  capabilitiesSchema,
+  detectionSchema,
   harnessEventSchema,
   sessionDetailSchema,
   sessionSchema,
@@ -55,6 +57,43 @@ describe("session contract fixtures", () => {
     expect(toolCall).toMatchObject({ kind: "tool_call", call_id: "mock-call-1", name: "echo" });
     const toolResult = events[5];
     expect(toolResult).toMatchObject({ kind: "tool_result", status: "ok" });
+  });
+});
+
+describe("harness capabilities and detection", () => {
+  it("capabilities.json matches the zod schema", () => {
+    const parsed = capabilitiesSchema.parse(fixture("capabilities.json"));
+    expect(parsed).toEqual({
+      streamingDeltas: true,
+      toolCalls: true,
+      diffs: false,
+      permissions: false,
+      resume: true,
+      images: false,
+      mcp: false,
+      usage: true,
+    });
+  });
+
+  it("detection.json matches the zod schema", () => {
+    const parsed = detectionSchema.parse(fixture("detection.json"));
+    expect(parsed).toEqual({
+      installed: true,
+      version: "2.1.302 (Claude Code)",
+      path: "C:/Users/demo/AppData/Roaming/npm/claude.cmd",
+      detail: null,
+    });
+  });
+
+  it("a missing install is a valid detection with a reason", () => {
+    const parsed = detectionSchema.parse({
+      installed: false,
+      version: null,
+      path: null,
+      detail: "claude is not on PATH",
+    });
+    expect(parsed.installed).toBe(false);
+    expect(parsed.detail).toBe("claude is not on PATH");
   });
 });
 

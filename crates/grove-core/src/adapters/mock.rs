@@ -345,7 +345,7 @@ mod tests {
             .iter()
             .map(|adapter| adapter.id().as_str())
             .collect();
-        assert_eq!(ids, vec!["mock"]);
+        assert!(ids.contains(&"mock"), "the mock stays registered: {ids:?}");
     }
 
     #[tokio::test]
