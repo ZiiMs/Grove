@@ -35,6 +35,13 @@ CREATE TABLE events (
 
 CREATE INDEX events_by_session ON events(session_id, seq);
 "#,
+    // 2 — typed settings documents (ticket 07). Values are JSON; secrets never live here.
+    r#"
+CREATE TABLE settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"#,
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +52,9 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    /// A caller-supplied value failed validation. Domains map this to the wire's `invalid` code.
+    #[error("invalid: {0}")]
+    Invalid(String),
 }
 
 /// The database. One connection behind a mutex: writes are tiny (one event at a time) and every
@@ -152,14 +162,14 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.applied_migrations().unwrap(), vec![1]);
+            assert_eq!(store.applied_migrations().unwrap(), vec![1, 2]);
         }
         assert!(path.exists(), "the database file is created on open");
 
         let reopened = Store::open(&path).unwrap();
         assert_eq!(
             reopened.applied_migrations().unwrap(),
-            vec![1],
+            vec![1, 2],
             "reopening does not replay migrations"
         );
     }
@@ -167,6 +177,6 @@ mod tests {
     #[test]
     fn in_memory_store_migrates_too() {
         let store = Store::open_in_memory().unwrap();
-        assert_eq!(store.applied_migrations().unwrap(), vec![1]);
+        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2]);
     }
 }

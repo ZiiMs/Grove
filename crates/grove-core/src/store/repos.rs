@@ -1,10 +1,11 @@
-//! Session and event queries. Every read reconstructs the same DTOs the wire carries, so the store and
-//! the IPC contract can never drift apart silently.
+//! Session, event and settings queries. Every read reconstructs the same DTOs the wire carries, so the
+//! store and the IPC contract can never drift apart silently.
 
 use super::{Store, StoreError};
 use crate::ipc::{Session, SessionDetail, SessionSummary};
 use crate::sessions::event::{now, EventKind, HarnessEvent, SessionState};
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
+use std::collections::BTreeMap;
 
 const SESSION_COLUMNS: &str =
     "s.id, s.harness, s.cwd, s.model, s.title, s.status, s.created_at, s.updated_at";
@@ -190,6 +191,50 @@ impl Store {
             )?)
         })
     }
+
+    /// Every settings row as JSON, keyed by its name. Storing one JSON document per key is what lets
+    /// an unknown key survive a round-trip: this build does not have to understand it to keep it.
+    pub fn settings(&self) -> Result<BTreeMap<String, serde_json::Value>, StoreError> {
+        self.with_conn(read_settings)
+    }
+
+    /// Read, modify and write every settings row in one transaction. `update` returns the value the
+    /// caller wants; the rows it leaves behind are what gets committed, so a patch is all-or-nothing
+    /// and a validation failure writes nothing.
+    pub fn update_settings<T>(
+        &self,
+        update: impl FnOnce(&mut BTreeMap<String, serde_json::Value>) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let mut rows = read_settings(conn)?;
+            let outcome = update(&mut rows)?;
+            {
+                let mut statement = tx.prepare(
+                    "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                )?;
+                for (key, value) in &rows {
+                    statement.execute(params![key, value.to_string()])?;
+                }
+            }
+            tx.commit()?;
+            Ok(outcome)
+        })
+    }
+}
+
+fn read_settings(conn: &Connection) -> Result<BTreeMap<String, serde_json::Value>, StoreError> {
+    let mut statement = conn.prepare("SELECT key, value FROM settings ORDER BY key")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut settings = BTreeMap::new();
+    for row in rows {
+        let (key, raw) = row?;
+        settings.insert(key, serde_json::from_str(&raw)?);
+    }
+    Ok(settings)
 }
 
 #[cfg(test)]
