@@ -3,6 +3,7 @@
 
 use grove_core::gitops::GitStatus;
 use grove_core::ipc::EventEnvelope;
+use grove_core::plan::Plan;
 use grove_core::specgraph::SpecChange;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -10,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 pub const SESSION_EVENT: &str = "grove://session-event";
 pub const SPEC_CHANGED: &str = "grove://spec-changed";
 pub const GIT_CHANGED: &str = "grove://git-changed";
+pub const PLAN_CHANGED: &str = "grove://plan-changed";
 
 pub fn emit_session_event<T>(app: &AppHandle, envelope: EventEnvelope<T>)
 where
@@ -33,5 +35,14 @@ pub fn emit_git_changed<R: tauri::Runtime>(app: &AppHandle<R>, status: GitStatus
     let envelope = EventEnvelope::global(status);
     if let Err(err) = app.emit(GIT_CHANGED, envelope) {
         tracing::warn!(target: "grove::events", "failed to emit {GIT_CHANGED}: {err}");
+    }
+}
+
+/// An agent edited the plan mirror and `PlanService` imported it: the payload is the new plan, and
+/// the session it belongs to rides in the envelope. The panel reloads only if the user has no
+/// unsaved draft.
+pub fn emit_plan_changed(app: &AppHandle, envelope: EventEnvelope<Plan>) {
+    if let Err(err) = app.emit(PLAN_CHANGED, envelope) {
+        tracing::warn!(target: "grove::events", "failed to emit {PLAN_CHANGED}: {err}");
     }
 }

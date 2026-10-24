@@ -1,6 +1,8 @@
 import type {
   EventEnvelope,
   HarnessInfo,
+  Plan,
+  PlanUpdate,
   Session,
   SessionDetail,
   SessionSummary,
@@ -18,6 +20,7 @@ export interface FakeBridgeSeed {
   harnesses?: HarnessInfo[];
   sessions?: SessionSummary[];
   details?: Record<string, SessionDetail>;
+  plans?: Record<string, Plan>;
 }
 
 export interface FakeBridge extends GroveBridge {
@@ -34,6 +37,8 @@ export interface FakeBridge extends GroveBridge {
   invocations: string[];
   /** Every invocation with its arguments, for asserting what the UI asked the core to do. */
   calls: FakeBridgeCall[];
+  /** Replace a session's plan as an agent edit would: the next `plan_get` sees the new version. */
+  setPlan(plan: Plan): void;
 }
 
 const DEFAULT_APP_INFO = {
@@ -94,6 +99,14 @@ export function createFakeBridge(
   const harnesses = seed.harnesses ?? DEFAULT_HARNESSES;
   const sessions: SessionSummary[] = [...(seed.sessions ?? [])];
   const details: Record<string, SessionDetail> = { ...(seed.details ?? {}) };
+  const plans: Record<string, Plan> = { ...(seed.plans ?? {}) };
+
+  const emptyPlan = (sessionId: string): Plan => ({
+    sessionId,
+    markdown: "",
+    version: 0,
+    mirrorPath: `C:/projects/grove/.grove/sessions/${sessionId}/plan.md`,
+  });
 
   const setStatus = (id: string, status: Session["status"]) => {
     const row = sessions.find((session) => session.id === id);
@@ -166,6 +179,28 @@ export function createFakeBridge(
         if (!row) throw new Error(`FakeBridge has no session: ${id}`);
         return { ...row } as CommandMap[K]["result"];
       }
+      if (command === "plan_get") {
+        const { id } = args as { id: string };
+        return { ...(plans[id] ?? emptyPlan(id)) } as CommandMap[K]["result"];
+      }
+      if (command === "plan_set") {
+        const { id, update } = args as { id: string; update: PlanUpdate };
+        const current = plans[id] ?? emptyPlan(id);
+        if (current.version !== update.expectedVersion) {
+          throw {
+            code: "conflict",
+            message: `plan changed: expected version ${update.expectedVersion}, found ${current.version}`,
+            detail: current.mirrorPath,
+          };
+        }
+        const next: Plan = {
+          ...current,
+          markdown: update.markdown,
+          version: current.version + 1,
+        };
+        plans[id] = next;
+        return { ...next } as CommandMap[K]["result"];
+      }
 
       throw new Error(`FakeBridge has no handler for command: ${command}`);
     },
@@ -188,6 +223,9 @@ export function createFakeBridge(
     },
     on(command, handler) {
       commands.set(command, handler as (args: unknown) => unknown);
+    },
+    setPlan(plan) {
+      plans[plan.sessionId] = { ...plan };
     },
     invocations,
     calls,

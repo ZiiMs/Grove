@@ -2,6 +2,8 @@
 //! §Persistence).
 
 pub mod db;
+pub mod plans;
 pub mod repos;
 
 pub use db::{Store, StoreError, MIGRATIONS};
+pub use plans::PlanRow;

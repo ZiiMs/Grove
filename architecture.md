@@ -57,7 +57,7 @@ contract/fixtures/             golden JSON, written by Rust tests, parsed by TS 
 crates/grove-core/src/
   adapters/{mod,registry,mock,claude,codex,acp,opencode,pi}.rs
   sessions/{mod,event,manager,pump}.rs
-  store/{mod,db,repos}.rs
+  store/{mod,db,repos,plans}.rs
   specgraph/{mod,frontmatter,index,watch}.rs
   plan/{mod,service,mirror}.rs
   skills/{mod,catalog,targets,install}.rs
@@ -187,7 +187,7 @@ sessions(id TEXT PK, harness TEXT, cwd TEXT, model TEXT, title TEXT, status TEXT
          adapter_config TEXT, resume_token TEXT, created_at TEXT, updated_at TEXT)
 events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, at TEXT,
        kind TEXT, payload TEXT)                       -- payload = full EventKind JSON
-plans(session_id TEXT PK, markdown TEXT, version INTEGER, updated_at TEXT)
+plans(session_id TEXT PK, markdown TEXT, version INTEGER, mirror_hash TEXT, updated_at TEXT)
 pins(session_id TEXT, spec_id TEXT, PRIMARY KEY(session_id, spec_id))
 installs(skill TEXT, harness TEXT, path TEXT, installed_at TEXT, PRIMARY KEY(skill, harness, path))
 settings(key TEXT PK, value TEXT)                     -- JSON; never secrets
@@ -198,8 +198,13 @@ each harness's own directory; the git repo is git. The DB holds only what has no
 the event log, plan versions, pins, install records, settings.
 
 **Plan dual-edit.** SQLite is the record; every write also mirrors `.grove/sessions/<id>/plan.md` in the
-project (gitignored). A watcher imports external edits (the agent editing the file) when its hash
-differs from the last mirror. Human and agent edits both move `version`, so a stale write returns
+project (gitignored), atomically (temp file + rename). `mirror_hash` holds the content the record last
+wrote to that file, so a read can tell the agent's external edit apart from Grove's own mirror write.
+Before every read (and so before every save) `PlanService` compares the file's hash with the record and
+the mirrored hash: a file that changed while the record stayed put is imported (version bumped, record
+written, `grove://plan-changed` emitted); a file that is stale or missing is rewritten from the record.
+The Plan panel also re-reads on window focus and on a short timer, which is what makes an agent edit
+visible without a native watcher. Human and agent edits both move `version`, so a stale write returns
 `conflict` and the UI re-reads rather than clobbering.
 
 ## IPC contract (settled)

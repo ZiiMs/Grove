@@ -35,6 +35,18 @@ CREATE TABLE events (
 
 CREATE INDEX events_by_session ON events(session_id, seq);
 "#,
+    // 2 — the session TODO plan (ticket 09). `mirror_hash` is the content the row last wrote to
+    // `.grove/sessions/<id>/plan.md`, which is how an agent's external edit is told apart from
+    // Grove's own mirror write. See `architecture.md` §Persistence → plan dual-edit.
+    r#"
+CREATE TABLE plans (
+    session_id  TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    markdown    TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    mirror_hash TEXT,
+    updated_at  TEXT NOT NULL
+);
+"#,
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -152,14 +164,14 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.applied_migrations().unwrap(), vec![1]);
+            assert_eq!(store.applied_migrations().unwrap(), vec![1, 2]);
         }
         assert!(path.exists(), "the database file is created on open");
 
         let reopened = Store::open(&path).unwrap();
         assert_eq!(
             reopened.applied_migrations().unwrap(),
-            vec![1],
+            vec![1, 2],
             "reopening does not replay migrations"
         );
     }
@@ -167,6 +179,6 @@ mod tests {
     #[test]
     fn in_memory_store_migrates_too() {
         let store = Store::open_in_memory().unwrap();
-        assert_eq!(store.applied_migrations().unwrap(), vec![1]);
+        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2]);
     }
 }

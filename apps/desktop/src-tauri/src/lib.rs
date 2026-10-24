@@ -32,6 +32,16 @@ pub fn run() {
                 }
             });
 
+            // Plans take the same route: `PlanService` announces an imported external edit on its
+            // bus and the shell is the only place that knows about tauri events.
+            let mut plan_changes = state.core.plan.subscribe();
+            let plan_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Ok(envelope) = plan_changes.recv().await {
+                    events::emit_plan_changed(&plan_handle, envelope);
+                }
+            });
+
             // Watching is an enhancement: a missing/unwatchable project root must not stop the window
             // from opening. The panel still indexes on demand.
             let watcher_handle = app.handle().clone();

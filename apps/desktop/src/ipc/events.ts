@@ -2,17 +2,21 @@ import {
   harnessEventSchema,
   parseEventEnvelope,
   parseGitChanged,
+  parsePlanChanged,
   type EventEnvelope,
   type GitStatus,
   type HarnessEvent,
+  type Plan,
 } from "@grove/contract";
 import type { GroveBridge, UnlistenFn } from "./bridge";
 
 export const SESSION_EVENT = "grove://session-event" as const;
 export const GIT_CHANGED = "grove://git-changed" as const;
+export const PLAN_CHANGED = "grove://plan-changed" as const;
 
 export type SessionEventHandler = (envelope: EventEnvelope) => void;
 export type GitChangedHandler = (status: GitStatus) => void;
+export type PlanChangedHandler = (sessionId: string | null, plan: Plan) => void;
 
 /**
  * Subscribe to the session event stream. Malformed payloads and unknown event kinds are dropped here,
@@ -36,6 +40,20 @@ export async function subscribeToGitChanged(
   return bridge.listen(GIT_CHANGED, (raw) => {
     const envelope = parseGitChanged(raw);
     if (envelope) handler(envelope.payload);
+  });
+}
+
+/**
+ * Subscribe to `grove://plan-changed`, emitted when the core imported an agent's edit to the plan
+ * mirror. Malformed payloads are dropped here, like every other event.
+ */
+export async function subscribeToPlanChanged(
+  bridge: GroveBridge,
+  handler: PlanChangedHandler,
+): Promise<UnlistenFn> {
+  return bridge.listen(PLAN_CHANGED, (raw) => {
+    const envelope = parsePlanChanged(raw);
+    if (envelope) handler(envelope.sessionId ?? null, envelope.payload);
   });
 }
 
