@@ -5,14 +5,15 @@ local server or starts `opencode serve` itself, then shows messages, tool calls,
 cancellation. Fully local — no external network.
 
 **Context pointers:** `architecture.md` §The adapter contract, §Normalized event model. Ticket 08 owns the
-conformance suite and fixtures.
+conformance suite and fixtures. **Protocol reference:** `C:/Users/zyko8/.grove-notes/protocols.md` §4
+(OpenCode) — readiness is `GET /global/health`, not a guessed port banner.
 
 **Blocked by:** 08 (adapter contract + Claude Code adapter)
 
 **Status:** ready-for-agent
 
 - [ ] Config accepts a server URL (attach) or spawns `opencode serve --port <free>`; readiness is awaited
-      with a timeout and captured stderr appears in the failure reason
+      by polling `GET /global/health` with a timeout, and captured stderr appears in the failure reason
 - [ ] A session is created over HTTP, user turns are sent over HTTP, and `/event` SSE is consumed and
       mapped to normalized events, including `diff` events from edit tools
 - [ ] Cancel aborts the in-flight turn; the spawned server child is killed on shutdown (no orphans),

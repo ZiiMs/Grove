@@ -5,7 +5,8 @@ session: streamed messages, tool calls, permission prompts, cancellation, and re
 harness-specific code — this adapter is the proof that the ACP path is generic.
 
 **Context pointers:** `architecture.md` §The adapter contract, §Normalized event model.
-`docs/adapters.md` from ticket 08.
+`docs/adapters.md` from ticket 08. **Protocol reference:** `C:/Users/zyko8/.grove-notes/protocols.md` §3
+(ACP) — pin `protocolVersion: 1`; v2 is draft with renames.
 
 **Blocked by:** 08 (adapter contract + Claude Code adapter)
 
@@ -13,11 +14,15 @@ harness-specific code — this adapter is the proof that the ACP path is generic
 
 - [ ] Command and args come from config; with no command configured, `detect` reports not installed with
       a clear reason and starting fails as `unavailable` (not a panic)
-- [ ] JSON-RPC over stdio: `initialize` with protocol-version negotiation, `session/new` with cwd and
-      MCP server list, `session/prompt` with prompt blocks, `session/cancel`
+- [ ] JSON-RPC over stdio: `initialize` with `protocolVersion: 1`, `session/new` with cwd and MCP server
+      list, `session/prompt` with prompt blocks, `session/cancel`
+- [ ] Resume uses `session/resume` (or suppresses replay), never plain `session/load`: ACP replays the
+      whole conversation as updates and would duplicate Grove's append-only transcript
 - [ ] `session/update` notifications map to normalized events: agent message chunks, tool call + tool
-      update, and safely ignored plan updates; `session/request_permission` becomes `permission_request`
-      and the decision is returned in the agent's expected shape
+      update, and safely ignored plan updates
+- [ ] `session/request_permission` is a request that is always answered: an approval returns
+      `{outcome: {outcome: "selected", optionId}}`, and a cancelled turn returns
+      `{outcome: {outcome: "cancelled"}}` so the agent never hangs waiting
 - [ ] A protocol-version rejection produces a clear error naming both versions, and the session ends with
       `status error` rather than hanging
 - [ ] The ACP session id is the resume token and is reused on restart

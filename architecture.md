@@ -172,8 +172,8 @@ resume token. Commands (`send`, `cancel`, `respond_permission`) go through the m
 `tokio::sync::Mutex` per session so no two commands interleave on one stdio pipe.
 
 **Restart survival.** Sessions are rows, not processes. `session_resume(id)` restarts the adapter with
-the stored `resume_token` (Claude `--resume`, Codex thread id, OpenCode session id, ACP session id, pi
-conversation id). If an adapter has no resume capability, Grove replays the conversation tail as
+the stored `resume_token` (Claude `--resume`, Codex `thread/resume`, OpenCode session id, ACP session id,
+pi's session file path). If an adapter has no resume capability, Grove replays the conversation tail as
 context — the log is already local, so the plan and history survive either way.
 
 ## Persistence (settled)
@@ -231,10 +231,12 @@ stdio.
 - `session.send {sessionId, text}`, `session.permission {sessionId, requestId, decision}`,
   `session.cancel {sessionId}`, `session.stop {sessionId}`
 - notification `session.event {sessionId, event}` — **already-normalized `HarnessEvent`**, because the
-  JS SDK's shape is known only to the sidecar. Rust re-validates with serde and drops malformed ones.
+  harness's wire format is known only to the sidecar. Rust re-validates with serde and drops malformed ones.
 
 The `pi` adapter is a host for this protocol, so the sidecar is swappable and the adapter is testable
-against `fixtures/harnesses/pi_sidecar_fake.mjs`.
+against `fixtures/harnesses/pi_sidecar_fake.mjs`. The sidecar fronts pi's RPC mode (`pi --mode rpc`,
+strict JSONL split on `\n` only): an RPC CLI is the stable surface, and an optional SDK path is future
+work rather than a first-build requirement.
 
 ## Rendering (settled)
 
