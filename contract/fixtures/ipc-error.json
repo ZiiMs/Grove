@@ -1,0 +1,5 @@
+{
+  "code": "conflict",
+  "message": "plan changed on disk",
+  "detail": "expected version 3"
+}
