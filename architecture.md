@@ -58,7 +58,7 @@ crates/grove-core/src/
   adapters/{mod,registry,mock,claude,codex,acp,opencode,pi}.rs
   sessions/{mod,event,manager,pump}.rs
   store/{mod,db,repos}.rs
-  specgraph/{mod,index,watch}.rs
+  specgraph/{mod,frontmatter,index,watch}.rs
   plan/{mod,service,mirror}.rs
   skills/{mod,catalog,targets,install}.rs
   mcp/{mod,discover,probe}.rs
@@ -252,7 +252,9 @@ against `fixtures/harnesses/pi_sidecar_fake.mjs`.
 - **specgraph** — index repo `.md` files carrying frontmatter `id` + `type`; parse `parent`,
   `depends-on`, `references`, `implements`, `covers`; expose tree, ancestors, subtree, neighbours;
   validate dangling links / duplicate ids / cycles; `spec_write` is hash-guarded (optimistic
-  concurrency). `notify` watcher emits `grove://spec-changed`.
+  concurrency). `notify` watcher emits `grove://spec-changed`. The index root is
+  `GroveCore::project_root` (`GROVE_PROJECT_ROOT`, else the process working directory) and is returned
+  as `SpecGraph.root`, so later panels share one notion of "the project".
 - **plan** — see dual-edit above; `PlanService` owns version bumps and mirror writes.
 - **skills** — sources are GitHub repos (default `anthropics/skills`, `mattpocock/skills`); fetch the
   repo tree, keep entries with a `SKILL.md`, cache the manifest with a TTL and serve it offline.

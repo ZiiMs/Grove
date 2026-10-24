@@ -1,11 +1,12 @@
 import type { AppCommands } from "./app";
+import type { SpecsCommands } from "./specs";
 
 /**
  * Every command the webview may invoke, with its argument and result types.
  *
  * Adding a domain: declare `<Domain>Commands` beside this file, then add it to the intersection below.
  */
-export type CommandMap = AppCommands;
+export type CommandMap = AppCommands & SpecsCommands;
 
 export type CommandName = keyof CommandMap;
 export type CommandArgs<K extends CommandName> = CommandMap[K]["args"];

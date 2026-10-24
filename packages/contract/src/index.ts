@@ -7,3 +7,4 @@
  */
 
 export * from "./core";
+export * from "./specs";
