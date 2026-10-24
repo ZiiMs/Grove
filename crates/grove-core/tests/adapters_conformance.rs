@@ -9,6 +9,7 @@ mod adapter_support;
 use adapter_support::acp_fixture;
 use adapter_support::claude_fixture;
 use adapter_support::conformance::{run_all, Target};
+use adapter_support::pi_fixture;
 use grove_core::adapters::mock::MockAdapter;
 use grove_core::adapters::registry::builtin_registry;
 use grove_core::adapters::StartContext;
@@ -44,12 +45,18 @@ async fn acp_passes_conformance() {
     run_all(&acp_fixture::target()).await;
 }
 
+#[tokio::test]
+async fn pi_passes_conformance() {
+    run_all(&pi_fixture::target()).await;
+}
+
 #[test]
 fn every_registered_adapter_has_a_conformance_target() {
     let targets = [
         mock_target(),
         claude_fixture::target(),
         acp_fixture::target(),
+        pi_fixture::target(),
     ];
     for adapter in builtin_registry() {
         let name = adapter.id().as_str();

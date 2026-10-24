@@ -6,4 +6,5 @@
 pub mod acp_fixture;
 pub mod claude_fixture;
 pub mod conformance;
+pub mod pi_fixture;
 pub mod runtime;

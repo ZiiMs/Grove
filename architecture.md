@@ -125,6 +125,9 @@ pub trait HarnessSession: Send {
     async fn cancel(&mut self) -> Result<(), AdapterError>;
     async fn shutdown(&mut self) -> Result<(), AdapterError>;
     fn resume_token(&self) -> Option<String>;
+    /// Adapters that only learn their conversation id mid-stream expose a shared slot; the session
+    /// pump mirrors it into `sessions.resume_token` as soon as it changes.
+    fn resume_token_slot(&self) -> Option<ResumeToken> { None }
 }
 
 pub fn builtin_registry() -> Vec<std::sync::Arc<dyn HarnessAdapter>>;
@@ -168,8 +171,10 @@ pub struct HarnessEvent { pub at: String /* RFC3339 */, pub kind: EventKind }
 
 `SessionManager` owns live sessions: adapter process + a pump task per session. The pump drains the
 adapter's receiver, appends to the SQLite event log, broadcasts on the in-process bus, and mirrors the
-resume token. Commands (`send`, `cancel`, `respond_permission`) go through the manager, which holds a
-`tokio::sync::Mutex` per session so no two commands interleave on one stdio pipe.
+resume token — watching the adapter's shared slot, so an id learned mid-stream (Claude's `session_id`
+arrives on the first line) is persisted. Commands (`send`, `cancel`, `respond_permission`) go through
+the manager, which holds a `tokio::sync::Mutex` per session so no two commands interleave on one stdio
+pipe.
 
 **Restart survival.** Sessions are rows, not processes. `session_resume(id)` restarts the adapter with
 the stored `resume_token` (Claude `--resume`, Codex `thread/resume`, OpenCode session id, ACP session id,
