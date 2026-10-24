@@ -1,10 +1,15 @@
 //! Secret access.
 //!
 //! Secrets never live in `settings` or the database: the durable store only ever holds a key *name*.
-//! Ticket 07 adds the OS-keychain implementation of [`SecretStore`]; until then the core uses
-//! [`MemorySecretStore`], so the rest of the app can already read an optional token without caring
-//! where it comes from.
+//! [`KeychainSecretStore`] is the production implementation (ticket 07); [`MemorySecretStore`] keeps
+//! tests and previews off the OS keychain. The rest of the app only ever sees [`SecretStore`], so it
+//! does not care which one it was handed.
 
+mod keychain;
+
+pub use keychain::KeychainSecretStore;
+
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Mutex;
@@ -14,7 +19,8 @@ pub const GITHUB_TOKEN: &str = "github.token";
 
 /// Whether a secret can be read right now. `Unavailable` is distinct from `Absent`: a locked or
 /// missing keychain must not look like "the user configured no token".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SecretStatus {
     Present,
     Absent,

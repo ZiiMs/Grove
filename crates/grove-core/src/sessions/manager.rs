@@ -9,7 +9,7 @@
 
 use crate::adapters::registry::builtin_registry;
 use crate::adapters::{
-    AdapterDeps, AdapterError, HarnessAdapter, HarnessSession, StartContext, UserInput,
+    AdapterDeps, AdapterError, Detection, HarnessAdapter, HarnessSession, StartContext, UserInput,
 };
 use crate::ipc::{
     CreateSessionRequest, EventEnvelope, HarnessInfo, IpcError, Session, SessionDetail,
@@ -145,6 +145,15 @@ impl SessionManager {
                 id: adapter.id().as_str().to_string(),
                 capabilities: adapter.capabilities(),
             })
+            .collect()
+    }
+
+    /// Ask every registered adapter whether its harness is installed. The doctor consumes this: it
+    /// reports what the adapters themselves believe, in the same order as [`Self::harnesses`].
+    pub fn detect_all(&self) -> Vec<Detection> {
+        self.adapters
+            .iter()
+            .map(|adapter| adapter.detect(&self.deps))
             .collect()
     }
 
@@ -526,6 +535,15 @@ mod tests {
             .expect("session is created")
             .session
             .id
+    }
+
+    #[test]
+    fn detect_all_asks_every_adapter_in_registry_order() {
+        let (manager, _peak) = slow();
+        let harnesses = manager.harnesses();
+        let detections = manager.detect_all();
+        assert_eq!(harnesses.len(), detections.len());
+        assert_eq!(detections[0], Detection::installed("0.0.0", "builtin:slow"));
     }
 
     #[tokio::test]

@@ -1,11 +1,15 @@
 import type {
+  DoctorReport,
   EventEnvelope,
   HarnessInfo,
   Plan,
   PlanUpdate,
+  SecretStatus,
   Session,
   SessionDetail,
   SessionSummary,
+  Settings,
+  SettingsPatch,
 } from "@grove/contract";
 import type { GroveBridge, GroveEventName, UnlistenFn } from "../ipc/bridge";
 import type { CommandArgs, CommandMap, CommandName } from "../ipc/commands";
@@ -21,6 +25,10 @@ export interface FakeBridgeSeed {
   sessions?: SessionSummary[];
   details?: Record<string, SessionDetail>;
   plans?: Record<string, Plan>;
+  settings?: Settings;
+  /** Secret key → status. A key that is absent from the map reports `absent`. */
+  secretStatuses?: Record<string, SecretStatus>;
+  doctor?: DoctorReport;
 }
 
 export interface FakeBridge extends GroveBridge {
@@ -60,6 +68,52 @@ export const MOCK_CAPABILITIES = {
 } satisfies HarnessInfo["capabilities"];
 
 export const DEFAULT_HARNESSES: HarnessInfo[] = [{ id: "mock", capabilities: MOCK_CAPABILITIES }];
+
+export const DEFAULT_SETTINGS: Settings = {
+  harnessPaths: {},
+  catalogSources: ["anthropics/skills", "mattpocock/skills"],
+  theme: "system",
+};
+
+export const DEFAULT_DOCTOR: DoctorReport = {
+  harnesses: [
+    {
+      id: "mock",
+      label: "Mock (builtin)",
+      installed: true,
+      version: "0.1.0",
+      path: "builtin:mock",
+      detail: null,
+    },
+  ],
+  tools: [
+    {
+      id: "node",
+      label: "Node.js",
+      installed: true,
+      version: "v20.11.1",
+      path: "C:/Program Files/nodejs/node.exe",
+      detail: null,
+    },
+    {
+      id: "git",
+      label: "Git",
+      installed: true,
+      version: "git version 2.43.0",
+      path: "C:/Program Files/Git/cmd/git.exe",
+      detail: null,
+    },
+    {
+      id: "gh",
+      label: "GitHub CLI",
+      installed: false,
+      version: null,
+      path: null,
+      detail: "gh is not installed or not on PATH",
+    },
+  ],
+  checkedAt: "2025-01-01T00:00:00.000Z",
+};
 
 export function fakeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -107,6 +161,11 @@ export function createFakeBridge(
     version: 0,
     mirrorPath: `C:/projects/grove/.grove/sessions/${sessionId}/plan.md`,
   });
+  const settings: Settings = structuredClone(seed.settings ?? DEFAULT_SETTINGS);
+  const secretStatuses = new Map<string, SecretStatus>(
+    Object.entries(seed.secretStatuses ?? {}),
+  );
+  const doctor = () => structuredClone(seed.doctor ?? DEFAULT_DOCTOR);
 
   const setStatus = (id: string, status: Session["status"]) => {
     const row = sessions.find((session) => session.id === id);
@@ -200,6 +259,38 @@ export function createFakeBridge(
         };
         plans[id] = next;
         return { ...next } as CommandMap[K]["result"];
+      }
+      if (command === "settings_get") {
+        return structuredClone(settings) as CommandMap[K]["result"];
+      }
+      if (command === "settings_set") {
+        const { patch } = args as { patch: SettingsPatch };
+        const { harnessPaths, catalogSources, theme, ...extras } = patch;
+        if (harnessPaths) settings.harnessPaths = { ...harnessPaths };
+        if (catalogSources) settings.catalogSources = [...catalogSources];
+        if (theme) settings.theme = theme;
+        Object.assign(settings, extras);
+        return structuredClone(settings) as CommandMap[K]["result"];
+      }
+      if (command === "secret_status") {
+        const { key } = args as { key: string };
+        return {
+          key,
+          status: secretStatuses.get(key) ?? "absent",
+        } as CommandMap[K]["result"];
+      }
+      if (command === "secret_set") {
+        const { key } = args as { key: string; value: string };
+        secretStatuses.set(key, "present");
+        return { key, status: "present" } as CommandMap[K]["result"];
+      }
+      if (command === "secret_delete") {
+        const { key } = args as { key: string };
+        secretStatuses.set(key, "absent");
+        return { key, status: "absent" } as CommandMap[K]["result"];
+      }
+      if (command === "doctor_report") {
+        return doctor() as CommandMap[K]["result"];
       }
 
       throw new Error(`FakeBridge has no handler for command: ${command}`);

@@ -8,6 +8,7 @@ pub mod git;
 pub mod mcp;
 pub mod plan;
 pub mod sessions;
+pub mod settings;
 pub mod skills;
 pub mod specs;
 
@@ -34,6 +35,12 @@ pub fn handlers<R: tauri::Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync
         sessions::session_cancel,
         sessions::session_close,
         sessions::session_resume,
+        settings::settings_get,
+        settings::settings_set,
+        settings::secret_status,
+        settings::secret_set,
+        settings::secret_delete,
+        settings::doctor_report,
         skills::skill_catalog,
         skills::skill_preview,
         skills::skill_targets,
