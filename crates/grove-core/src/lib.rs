@@ -6,8 +6,11 @@
 
 pub mod ipc;
 pub mod paths;
+pub mod secrets;
+pub mod skills;
 
 use paths::AppPaths;
+use std::sync::Arc;
 
 pub const APP_NAME: &str = "Grove";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -19,11 +22,16 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone)]
 pub struct GroveCore {
     pub paths: AppPaths,
+    pub skills: Arc<skills::SkillService>,
 }
 
 impl GroveCore {
     pub fn new(paths: AppPaths) -> Self {
-        Self { paths }
+        let secrets: Arc<dyn secrets::SecretStore> = Arc::new(secrets::MemorySecretStore::new());
+        Self {
+            skills: Arc::new(skills::SkillService::new(paths.clone(), secrets)),
+            paths,
+        }
     }
 
     /// Create the directories the app writes to.
