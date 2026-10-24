@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "id": "anthropics/skills::skills/pdf",
+      "name": "pdf",
+      "source": "anthropics/skills",
+      "path": "skills/pdf"
+    },
+    {
+      "id": "anthropics/skills::skills/slides",
+      "name": "slides",
+      "source": "anthropics/skills",
+      "path": "skills/slides"
+    }
+  ],
+  "fetchedAt": "2026-10-24T18:00:00Z",
+  "fromCache": false,
+  "offline": false
+}

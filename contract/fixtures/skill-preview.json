@@ -1,0 +1,13 @@
+{
+  "entry": {
+    "id": "anthropics/skills::skills/pdf",
+    "name": "pdf",
+    "source": "anthropics/skills",
+    "path": "skills/pdf"
+  },
+  "frontmatter": {
+    "name": "pdf",
+    "description": "Create and inspect PDF files"
+  },
+  "body": "# PDF\n\nUse this skill to work with PDF files.\n"
+}
