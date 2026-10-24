@@ -1,0 +1,39 @@
+{
+  "createdAt": "2025-01-01T00:00:00.000Z",
+  "cwd": "C:/projects/grove",
+  "events": [
+    {
+      "at": "2025-01-01T00:00:00.500Z",
+      "harness": "mock",
+      "kind": "session_started",
+      "model": "mock-1",
+      "resumed": false
+    },
+    {
+      "at": "2025-01-01T00:00:01.500Z",
+      "blocks": [
+        {
+          "text": "Mock reply: hello",
+          "type": "text"
+        },
+        {
+          "text": "the mock has nothing to think about",
+          "type": "thinking"
+        },
+        {
+          "language": "rust",
+          "text": "fn main() {}",
+          "type": "code"
+        }
+      ],
+      "kind": "message",
+      "role": "assistant"
+    }
+  ],
+  "harness": "mock",
+  "id": "session-1",
+  "model": "mock-1",
+  "status": "idle",
+  "title": "Refactor the store",
+  "updatedAt": "2025-01-01T00:00:05.000Z"
+}

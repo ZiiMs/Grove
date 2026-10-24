@@ -18,8 +18,19 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let paths = AppPaths::new(data_dir);
-            paths.ensure()?;
-            app.manage(AppState::new(grove_core::GroveCore::new(paths)));
+            let core = grove_core::GroveCore::init(paths)?;
+
+            // Forward the session bus to the webview. `grove-core` never imports tauri: it publishes
+            // every persisted event on a broadcast channel and this loop is the only fan-out.
+            let mut session_events = core.sessions.subscribe();
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while let Ok(envelope) = session_events.recv().await {
+                    events::emit_session_event(&handle, envelope);
+                }
+            });
+
+            app.manage(AppState::new(core));
             Ok(())
         })
         .invoke_handler(commands::handlers())
