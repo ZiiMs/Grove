@@ -1,4 +1,5 @@
 import type { AppCommands } from "./app";
+import type { McpCommands } from "./mcp";
 import type { SkillCommands } from "./skills";
 
 /**
@@ -6,7 +7,7 @@ import type { SkillCommands } from "./skills";
  *
  * Adding a domain: declare `<Domain>Commands` beside this file, then add it to the intersection below.
  */
-export type CommandMap = AppCommands & SkillCommands;
+export type CommandMap = AppCommands & McpCommands & SkillCommands;
 
 export type CommandName = keyof CommandMap;
 export type CommandArgs<K extends CommandName> = CommandMap[K]["args"];

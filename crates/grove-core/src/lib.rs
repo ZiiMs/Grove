@@ -5,6 +5,7 @@
 //! headlessly, and so the UI shell can be replaced without touching behaviour.
 
 pub mod ipc;
+pub mod mcp;
 pub mod paths;
 pub mod secrets;
 pub mod skills;
@@ -23,6 +24,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct GroveCore {
     pub paths: AppPaths,
     pub skills: Arc<skills::SkillService>,
+    pub mcp: Arc<mcp::McpService>,
 }
 
 impl GroveCore {
@@ -30,6 +32,7 @@ impl GroveCore {
         let secrets: Arc<dyn secrets::SecretStore> = Arc::new(secrets::MemorySecretStore::new());
         Self {
             skills: Arc::new(skills::SkillService::new(paths.clone(), secrets)),
+            mcp: Arc::new(mcp::McpService::new(mcp::McpConfig::default())),
             paths,
         }
     }

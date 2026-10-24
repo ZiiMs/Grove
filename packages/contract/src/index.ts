@@ -7,4 +7,5 @@
  */
 
 export * from "./core";
+export * from "./mcp";
 export * from "./skills";

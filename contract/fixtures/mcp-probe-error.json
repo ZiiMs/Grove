@@ -1,0 +1,9 @@
+{
+  "name": "sleeper",
+  "source": "~/.codex/config.toml",
+  "transport": "http",
+  "state": "error",
+  "tools": [],
+  "error": "timed out after 10s",
+  "stderrTail": "fake mcp server: sleeping"
+}

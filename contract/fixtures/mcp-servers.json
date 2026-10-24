@@ -1,0 +1,28 @@
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "source": ".mcp.json",
+      "sources": [".mcp.json", "~/.claude.json"],
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "url": null
+    },
+    {
+      "name": "linear",
+      "source": "~/.codex/config.toml",
+      "sources": ["~/.codex/config.toml"],
+      "transport": "http",
+      "command": null,
+      "args": [],
+      "url": "https://mcp.example.com/linear"
+    }
+  ],
+  "warnings": [
+    {
+      "source": "opencode.json",
+      "message": "invalid JSON: expected value at line 2 column 1"
+    }
+  ]
+}

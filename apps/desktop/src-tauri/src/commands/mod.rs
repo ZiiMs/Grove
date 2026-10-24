@@ -4,6 +4,7 @@
 //! one line per domain so parallel work merges cleanly (see `architecture.md` §Extension seams).
 
 pub mod app;
+pub mod mcp;
 pub mod skills;
 
 use tauri::ipc::Invoke;
@@ -11,6 +12,8 @@ use tauri::ipc::Invoke;
 pub fn handlers<R: tauri::Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         app::app_info,
+        mcp::mcp_servers,
+        mcp::mcp_probe,
         skills::skill_catalog,
         skills::skill_preview,
         skills::skill_targets,
