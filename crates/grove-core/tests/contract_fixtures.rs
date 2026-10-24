@@ -4,6 +4,7 @@ use grove_core::gitops::{
 use grove_core::ipc::{
     AppInfo, ErrorCode, EventEnvelope, IpcError, Session, SessionDetail, SessionSummary,
 };
+use grove_core::plan::{Plan, PlanUpdate};
 use grove_core::sessions::event::{
     Block, Decision, EventKind, HarnessEvent, Role, SessionState, ToolStatus,
 };
@@ -459,4 +460,42 @@ fn every_harness_event_variant_matches_the_fixture() {
     ] {
         assert!(tags.contains(&required), "fixture misses {required}");
     }
+}
+
+fn sample_plan() -> Plan {
+    Plan {
+        session_id: "session-1".into(),
+        markdown: "# Plan\n\n- ship ticket 09\n".into(),
+        version: 3,
+        mirror_path: "C:/projects/grove/.grove/sessions/session-1/plan.md".into(),
+    }
+}
+
+#[test]
+fn plan_matches_fixture() {
+    assert_eq!(
+        serde_json::to_value(sample_plan()).unwrap(),
+        fixture("plan.json")
+    );
+}
+
+#[test]
+fn plan_update_matches_fixture() {
+    let sample = PlanUpdate {
+        markdown: "# Plan\n\n- ship ticket 09\n".into(),
+        expected_version: 3,
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("plan-update.json")
+    );
+}
+
+#[test]
+fn plan_changed_envelope_matches_fixture() {
+    let sample = EventEnvelope::session("session-1", sample_plan());
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("plan-changed.json")
+    );
 }

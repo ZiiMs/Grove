@@ -8,6 +8,7 @@ pub mod adapters;
 pub mod gitops;
 pub mod ipc;
 pub mod paths;
+pub mod plan;
 pub mod secrets;
 pub mod sessions;
 pub mod skills;
@@ -35,6 +36,8 @@ pub struct GroveCore {
     pub project_root: PathBuf,
     pub skills: Arc<skills::SkillService>,
     pub git: gitops::Git,
+    /// One versioned TODO plan per session, mirrored into the session's project for the agent.
+    pub plan: Arc<plan::PlanService>,
     /// The session runtime: adapters, live sessions, and the SQLite transcript.
     pub sessions: Arc<SessionManager>,
 }
@@ -68,6 +71,10 @@ impl GroveCore {
         Self {
             skills: Arc::new(skills::SkillService::new(paths.clone(), secrets)),
             git: gitops::Git::system(),
+            plan: Arc::new(plan::PlanService::new(
+                sessions.store(),
+                project_root.clone(),
+            )),
             paths,
             project_root,
             sessions,
