@@ -8,6 +8,7 @@
 
 export * from "./core";
 export * from "./git";
+export * from "./mcp";
 export * from "./sessions";
 export * from "./skills";
 export * from "./specs";

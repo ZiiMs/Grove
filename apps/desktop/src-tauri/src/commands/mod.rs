@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod git;
+pub mod mcp;
 pub mod sessions;
 pub mod skills;
 pub mod specs;
@@ -20,6 +21,8 @@ pub fn handlers<R: tauri::Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync
         git::git_diff,
         git::git_commit,
         git::git_open_pr,
+        mcp::mcp_servers,
+        mcp::mcp_probe,
         sessions::harness_list,
         sessions::session_list,
         sessions::session_get,

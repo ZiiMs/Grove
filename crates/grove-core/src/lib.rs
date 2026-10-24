@@ -7,6 +7,7 @@
 pub mod adapters;
 pub mod gitops;
 pub mod ipc;
+pub mod mcp;
 pub mod paths;
 pub mod secrets;
 pub mod sessions;
@@ -37,6 +38,7 @@ pub struct GroveCore {
     pub git: gitops::Git,
     /// The session runtime: adapters, live sessions, and the SQLite transcript.
     pub sessions: Arc<SessionManager>,
+    pub mcp: Arc<mcp::McpService>,
 }
 
 impl GroveCore {
@@ -51,16 +53,33 @@ impl GroveCore {
     pub fn init(paths: AppPaths) -> Result<Self, SessionError> {
         paths.ensure()?;
         let sessions = SessionManager::open(paths.clone())?;
-        Ok(Self::assemble(paths, Arc::new(sessions)))
+        Ok(Self::assemble_durable(paths, Arc::new(sessions)))
     }
 
     pub fn with_project_root(mut self, project_root: impl Into<PathBuf>) -> Self {
         self.project_root = project_root.into();
+        self.mcp = Arc::new(mcp::McpService::new(mcp::McpConfig {
+            project_root: Some(self.project_root.clone()),
+            ..Default::default()
+        }));
         self
     }
 
     fn assemble(paths: AppPaths, sessions: Arc<SessionManager>) -> Self {
-        let secrets: Arc<dyn secrets::SecretStore> = Arc::new(secrets::MemorySecretStore::new());
+        Self::build(paths, sessions, Arc::new(secrets::MemorySecretStore::new()))
+    }
+
+    fn assemble_durable(paths: AppPaths, sessions: Arc<SessionManager>) -> Self {
+        // Ticket 07 swaps the OS keychain in here; until then the durable app still uses the
+        // in-memory store so no host keychain is required to start.
+        Self::build(paths, sessions, Arc::new(secrets::MemorySecretStore::new()))
+    }
+
+    fn build(
+        paths: AppPaths,
+        sessions: Arc<SessionManager>,
+        secrets: Arc<dyn secrets::SecretStore>,
+    ) -> Self {
         let project_root = std::env::var_os("GROVE_PROJECT_ROOT")
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
@@ -68,6 +87,10 @@ impl GroveCore {
         Self {
             skills: Arc::new(skills::SkillService::new(paths.clone(), secrets)),
             git: gitops::Git::system(),
+            mcp: Arc::new(mcp::McpService::new(mcp::McpConfig {
+                project_root: Some(project_root.clone()),
+                ..Default::default()
+            })),
             paths,
             project_root,
             sessions,
