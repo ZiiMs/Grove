@@ -8,8 +8,10 @@ pub mod ipc;
 pub mod paths;
 pub mod secrets;
 pub mod skills;
+pub mod specgraph;
 
 use paths::AppPaths;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub const APP_NAME: &str = "Grove";
@@ -22,16 +24,30 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone)]
 pub struct GroveCore {
     pub paths: AppPaths,
+    /// The project whose specs, git state and plan Grove is looking at. Tickets that need a project
+    /// root read it here instead of guessing from the UI. Defaults to `$GROVE_PROJECT_ROOT`, else the
+    /// process working directory; [`GroveCore::with_project_root`] lets the shell or a test pin it.
+    pub project_root: PathBuf,
     pub skills: Arc<skills::SkillService>,
 }
 
 impl GroveCore {
     pub fn new(paths: AppPaths) -> Self {
         let secrets: Arc<dyn secrets::SecretStore> = Arc::new(secrets::MemorySecretStore::new());
+        let project_root = std::env::var_os("GROVE_PROJECT_ROOT")
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
         Self {
             skills: Arc::new(skills::SkillService::new(paths.clone(), secrets)),
             paths,
+            project_root,
         }
+    }
+
+    pub fn with_project_root(mut self, project_root: impl Into<PathBuf>) -> Self {
+        self.project_root = project_root.into();
+        self
     }
 
     /// Create the directories the app writes to.

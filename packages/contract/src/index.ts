@@ -8,3 +8,4 @@
 
 export * from "./core";
 export * from "./skills";
+export * from "./specs";

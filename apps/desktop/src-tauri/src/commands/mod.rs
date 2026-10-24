@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod skills;
+pub mod specs;
 
 use tauri::ipc::Invoke;
 
@@ -14,6 +15,9 @@ pub fn handlers<R: tauri::Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync
         skills::skill_catalog,
         skills::skill_preview,
         skills::skill_targets,
-        skills::skill_install
+        skills::skill_install,
+        specs::spec_index,
+        specs::spec_read,
+        specs::spec_write
     ]
 }
