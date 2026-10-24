@@ -1,0 +1,46 @@
+# Grove — agent guide
+
+Grove is a Tauri 2 desktop app (Rust core + React/TS webview) that runs AI coding harnesses behind
+one interface and keeps the project's specs, skill catalog, TODO plan, and git/PR state in view.
+
+Read `architecture.md` before changing anything structural; it is the authoritative design and names
+the extension seams. `goal-and-requirements.md` is the intent of record.
+
+## Agent skills
+
+### Issue tracker
+
+Work is tracked as local markdown tickets under `.scratch/<feature>/issues/`, one file per ticket, with
+blocking edges as text. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, default label strings. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` and ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+
+## Build and verify
+
+```
+npm ci                 # workspace install (apps/desktop, packages/contract, sidecar)
+npm run typecheck      # tsc --noEmit across workspaces
+npm test               # vitest (UI, contract, sidecar)
+npm run build          # vite production build
+cargo test -p grove-core
+cargo check -p grove-desktop
+cargo fmt --check && cargo clippy --workspace -- -D warnings
+```
+
+Never add a network call to a session path: only the skill catalog fetches, and it falls back to its
+cache. Secrets go through `SecretStore` (OS keychain) — never into `settings`, fixtures, or logs.
+
+## Conventions
+
+- One adapter per harness, isolated behind `adapters::HarnessAdapter`; no adapter imports another
+  adapter, `tauri`, or UI code.
+- Rust owns the wire shape; TS validates with zod from `packages/contract`. Add a contract fixture when
+  you add a DTO.
+- Keep shared-file edits to one line per seam (see `architecture.md` §Extension seams) so parallel
+  tickets merge cheaply.
