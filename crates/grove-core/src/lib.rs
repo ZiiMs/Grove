@@ -4,6 +4,7 @@
 //! `tauri` (asserted by `tests/architecture.rs`) so that the whole product surface stays testable
 //! headlessly, and so the UI shell can be replaced without touching behaviour.
 
+pub mod gitops;
 pub mod ipc;
 pub mod paths;
 
@@ -19,11 +20,15 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone)]
 pub struct GroveCore {
     pub paths: AppPaths,
+    pub git: gitops::Git,
 }
 
 impl GroveCore {
     pub fn new(paths: AppPaths) -> Self {
-        Self { paths }
+        Self {
+            paths,
+            git: gitops::Git::system(),
+        }
     }
 
     /// Create the directories the app writes to.
