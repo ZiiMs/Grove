@@ -4,10 +4,12 @@
 //! never on another adapter, `tauri`, or UI code. Adding a harness is one module plus one line in
 //! [`registry::builtin_registry`]; nothing else in Grove changes.
 
+pub mod acp;
 pub mod claude;
 pub mod mock;
 pub mod registry;
 
+pub use acp::AcpAdapter;
 pub use claude::ClaudeAdapter;
 
 use crate::paths::AppPaths;

@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+pub mod acp_fixture;
 pub mod claude_fixture;
 pub mod conformance;
 pub mod runtime;
