@@ -1,0 +1,41 @@
+{
+  "repoRoot": "C:/work/grove",
+  "branch": "ticket/04-git-panel",
+  "head": "9f2c1b7d4e5a6c8b0d1e2f3a4b5c6d7e8f901234",
+  "clean": false,
+  "truncated": false,
+  "files": [
+    {
+      "path": "src/main.ts",
+      "from": null,
+      "index": "M",
+      "worktree": " ",
+      "staged": true,
+      "untracked": false
+    },
+    {
+      "path": "docs/notes.md",
+      "from": null,
+      "index": " ",
+      "worktree": "M",
+      "staged": false,
+      "untracked": false
+    },
+    {
+      "path": "src/renamed.ts",
+      "from": "src/old.ts",
+      "index": "R",
+      "worktree": " ",
+      "staged": true,
+      "untracked": false
+    },
+    {
+      "path": "scratch.txt",
+      "from": null,
+      "index": "?",
+      "worktree": "?",
+      "staged": false,
+      "untracked": true
+    }
+  ]
+}

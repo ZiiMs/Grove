@@ -4,6 +4,7 @@
 //! `tauri` (asserted by `tests/architecture.rs`) so that the whole product surface stays testable
 //! headlessly, and so the UI shell can be replaced without touching behaviour.
 
+pub mod gitops;
 pub mod ipc;
 pub mod paths;
 pub mod secrets;
@@ -29,6 +30,7 @@ pub struct GroveCore {
     /// process working directory; [`GroveCore::with_project_root`] lets the shell or a test pin it.
     pub project_root: PathBuf,
     pub skills: Arc<skills::SkillService>,
+    pub git: gitops::Git,
 }
 
 impl GroveCore {
@@ -42,6 +44,7 @@ impl GroveCore {
             skills: Arc::new(skills::SkillService::new(paths.clone(), secrets)),
             paths,
             project_root,
+            git: gitops::Git::system(),
         }
     }
 

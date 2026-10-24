@@ -62,7 +62,7 @@ crates/grove-core/src/
   plan/{mod,service,mirror}.rs
   skills/{mod,catalog,targets,install}.rs
   mcp/{mod,discover,probe}.rs
-  gitops/{mod,repo,diff,pr}.rs
+  gitops/{mod,types,repo,diff,pr}.rs
   secrets/mod.rs  harness_doctor.rs  settings/mod.rs
   ipc/{mod,types,error}.rs       command DTOs + event envelope
 crates/grove-core/tests/         integration tests (spawn fake harnesses)

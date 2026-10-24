@@ -8,6 +8,11 @@ export interface FakeBridge extends GroveBridge {
   /** Emit a well-formed session event envelope to the session stream. */
   emitSessionEvent(envelope: EventEnvelope): void;
   listenerCount(event: GroveEventName): number;
+  /** Register a handler for one command; replaces the built-in defaults for that command. */
+  on<K extends CommandName>(
+    command: K,
+    handler: (args: CommandArgs<K>) => CommandMap[K]["result"] | Promise<CommandMap[K]["result"]>,
+  ): void;
   invocations: string[];
 }
 
@@ -24,14 +29,19 @@ const DEFAULT_APP_INFO = {
  */
 export function createFakeBridge(overrides: Partial<GroveBridge> = {}): FakeBridge {
   const handlers = new Map<string, Set<(payload: unknown) => void>>();
+  const commands = new Map<string, (args: unknown) => unknown>();
   const invocations: string[] = [];
 
   const bridge: FakeBridge = {
     async invoke<K extends CommandName>(
       command: K,
-      _args?: CommandArgs<K>,
+      args?: CommandArgs<K>,
     ): Promise<CommandMap[K]["result"]> {
       invocations.push(command);
+      const handler = commands.get(command);
+      if (handler) {
+        return (await handler(args)) as CommandMap[K]["result"];
+      }
       if (command === "app_info") {
         return DEFAULT_APP_INFO as CommandMap[K]["result"];
       }
@@ -53,6 +63,9 @@ export function createFakeBridge(overrides: Partial<GroveBridge> = {}): FakeBrid
     },
     listenerCount(event) {
       return handlers.get(event)?.size ?? 0;
+    },
+    on(command, handler) {
+      commands.set(command, handler as (args: unknown) => unknown);
     },
     invocations,
     ...overrides,

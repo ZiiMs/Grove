@@ -7,5 +7,6 @@
  */
 
 export * from "./core";
+export * from "./git";
 export * from "./skills";
 export * from "./specs";
