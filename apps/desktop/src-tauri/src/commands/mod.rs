@@ -17,6 +17,7 @@ use tauri::ipc::Invoke;
 pub fn handlers<R: tauri::Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         app::app_info,
+        app::app_set_project_root,
         git::git_status,
         git::git_branches,
         git::git_worktrees,
@@ -33,6 +34,7 @@ pub fn handlers<R: tauri::Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync
         sessions::session_create,
         sessions::session_send,
         sessions::session_cancel,
+        sessions::session_respond_permission,
         sessions::session_close,
         sessions::session_resume,
         sessions::session_context_get,

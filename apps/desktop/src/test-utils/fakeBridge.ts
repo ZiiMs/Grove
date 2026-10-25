@@ -1,4 +1,5 @@
 import type {
+  Decision,
   DoctorReport,
   EventEnvelope,
   HarnessEvent,
@@ -35,6 +36,8 @@ export interface FakeBridgeSeed {
   pins?: Record<string, string[]>;
   /** Spec id → title, so pinned specs read like the Specs panel shows them. */
   specTitles?: Record<string, string>;
+  /** The project root the fake core starts at; `app_set_project_root` moves it. */
+  projectRoot?: string;
 }
 
 export interface FakeBridge extends GroveBridge {
@@ -55,6 +58,8 @@ export interface FakeBridge extends GroveBridge {
   setPlan(plan: Plan): void;
   /** The pins the fake core currently holds for one session. */
   pinsOf(sessionId: string): string[];
+  /** The project root the fake core is looking at. */
+  projectRoot(): string;
 }
 
 const DEFAULT_APP_INFO = {
@@ -174,6 +179,8 @@ export function createFakeBridge(
     mirrorPath: `C:/projects/grove/.grove/sessions/${sessionId}/plan.md`,
   });
   const settings: Settings = structuredClone(seed.settings ?? DEFAULT_SETTINGS);
+  /** The project root the fake core is looking at (`app_set_project_root` moves it). */
+  let projectRoot = seed.projectRoot ?? "C:/projects/grove";
   const secretStatuses = new Map<string, SecretStatus>(
     Object.entries(seed.secretStatuses ?? {}),
   );
@@ -253,6 +260,14 @@ export function createFakeBridge(
       if (command === "app_info") {
         return DEFAULT_APP_INFO as CommandMap[K]["result"];
       }
+      if (command === "app_set_project_root") {
+        // The shell moves the core's root and announces it with `grove://spec-changed`, which is what
+        // makes the Specs panel re-index; the fake does the same so a test sees the same chain.
+        const { path } = args as { path: string };
+        projectRoot = path;
+        bridge.emit("grove://spec-changed", { payload: { paths: [] } });
+        return path as CommandMap[K]["result"];
+      }
       if (command === "harness_list") {
         return harnesses as CommandMap[K]["result"];
       }
@@ -289,6 +304,26 @@ export function createFakeBridge(
         return null as CommandMap[K]["result"];
       }
       if (command === "session_cancel") {
+        return null as CommandMap[K]["result"];
+      }
+      if (command === "session_respond_permission") {
+        // The real core answers the harness and the adapter emits `permission_resolved`; the fake
+        // does both, so a test sees exactly what the transcript sees.
+        const { id, requestId, decision } = args as {
+          id: string;
+          requestId: string;
+          decision: Decision;
+        };
+        const detail = details[id];
+        if (!detail) throw new Error(`FakeBridge has no session: ${id}`);
+        const event: HarnessEvent = {
+          at: "2025-01-01T00:00:04.000Z",
+          kind: "permission_resolved",
+          request_id: requestId,
+          decision,
+        };
+        detail.events = [...detail.events, event];
+        bridge.emitSessionEvent({ sessionId: id, payload: event });
         return null as CommandMap[K]["result"];
       }
       if (command === "session_close") {
@@ -445,6 +480,9 @@ export function createFakeBridge(
     },
     pinsOf(sessionId) {
       return [...(pins[sessionId] ?? [])];
+    },
+    projectRoot() {
+      return projectRoot;
     },
     invocations,
     calls,

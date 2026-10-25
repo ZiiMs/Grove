@@ -6,4 +6,10 @@ import type { AppInfo } from "@grove/contract";
  */
 export interface AppCommands {
   app_info: { args: Record<string, never>; result: AppInfo };
+  /**
+   * Point Grove at the project the user is working in. The session's `cwd` decides it, so the store
+   * calls this when a session is created or a tab is activated; the spec graph, the plan mirror, MCP
+   * discovery and the project-local skills target all follow. Returns the root now in force.
+   */
+  app_set_project_root: { args: { path: string }; result: string };
 }

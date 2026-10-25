@@ -58,7 +58,7 @@ scripts/check-bundle.mjs       bundle guard run after `npm run build`
 packages/contract/             zod schemas + TS types + fixture validator (UI ↔ core ↔ sidecar)
 contract/fixtures/             golden JSON, written by Rust tests, parsed by TS tests
 crates/grove-core/src/
-  adapters/{mod,registry,mock,claude,codex,acp,opencode,pi}.rs
+  adapters/{mod,registry,support,mock,claude,codex,acp,opencode,pi}.rs
   sessions/{mod,event,manager,pump,context}.rs
   store/{mod,db,repos,plans,pins}.rs
   specgraph/{mod,frontmatter,index,watch}.rs
@@ -113,6 +113,12 @@ pub struct AdapterDeps {
 #[async_trait::async_trait]
 pub trait HarnessAdapter: Send + Sync {
     fn id(&self) -> HarnessId;
+    /// Human name for the doctor and any list that would otherwise show an id. Defaulted to the id,
+    /// overridden per adapter: a sixth harness touches no label `match` anywhere.
+    fn display_name(&self) -> &'static str { self.id().as_str() }
+    /// The harness's own skills directory, home-relative; `None` when it has none (mock, ACP). The
+    /// Skills dropdown is built from the registry, so declaring one is all a new adapter does.
+    fn skills_dir(&self) -> Option<&'static str> { None }
     fn capabilities(&self) -> Capabilities;
     fn detect(&self, deps: &AdapterDeps) -> Detection;             // installed / version / path
     async fn start(&self, ctx: StartContext, deps: AdapterDeps)
@@ -143,8 +149,13 @@ Adapter rules that keep them isolated:
 - **No panics on the wire.** Every parse error becomes `HarnessEvent::Error` or `AdapterError`.
 - **Capability honesty.** A capability is `true` only when the adapter emits that event kind; the UI
   degrades from `Capabilities`, never from the harness name.
-- **Explicit command override.** Each adapter reads `config.command` (and `config.args`) so a user or a
-  test can point it at any binary; tests always do. Detection never blocks starting a session.
+- **Explicit command override.** Each adapter reads `config.command` (and `config.args`) through
+  `adapters::support::command_from_config`, so a user or a test can point it at any binary; tests always
+  do. A path configured in Settings reaches that field too (see §Session runtime → "Configured harness
+  paths"). Detection never blocks starting a session.
+- **One copy of each helper.** `adapters/support.rs` owns `find_on_path`, `render_prompt`, `truncate`,
+  `command_from_config`, `kill_tree_by_pid` and `kill_process_tree`. They were byte-identical copies in
+  five adapters, which is how a Windows `taskkill` fix silently misses four harnesses.
 
 ## Normalized event model (settled)
 
@@ -183,6 +194,24 @@ arrives on the first line) is persisted. Commands (`send`, `cancel`, `respond_pe
 the manager, which holds a `tokio::sync::Mutex` per session so no two commands interleave on one stdio
 pipe.
 
+**Configured harness paths (settings → session).** `StartContext.config` is "adapter-specific, from
+settings", and the one key every process-backed adapter reads is `config.command`. The manager resolves
+it through the `AdapterConfigSource` port (`GroveCore::assemble` wires the settings-backed
+`HarnessPathSource`), with **explicit precedence**: a `config.command` on the create request — which is
+also what the row stores — always wins; otherwise `Settings.harness_paths[harness]` fills it in; every
+other key is passed through untouched. The resolution runs on each launch (create, resume, harness
+switch), so changing a path in Settings applies to the next start of an existing conversation. That is
+also what makes the ACP adapter, which has no default binary, startable from the UI at all.
+
+**Answering a permission request.** Codex and ACP emit `PermissionRequest` and claim
+`capabilities.permissions`, so the request has to be answerable: it renders as a card in the transcript
+with Approve/Deny, and those buttons call `session_respond_permission(id, requestId, decision)` →
+`SessionManager::respond_permission` → the adapter's protocol (Codex's `accept`/`decline`, ACP's
+`selected`/`cancelled`). The answer travels under the session's command lock, like every other command.
+The buttons disappear when `permission_resolved` arrives, not when the click happens: what the UI shows
+is what the harness accepted. An adapter that does not claim `permissions` answers `Unsupported`, and
+the UI never offers buttons for a request the harness cannot hear.
+
 **Restart survival.** Sessions are rows, not processes. `session_resume(id)` restarts the adapter with
 the stored `resume_token` (Claude `--resume`, Codex `thread/resume`, OpenCode session id, ACP session id,
 pi's session file path). If an adapter has no resume capability, Grove replays the conversation tail as
@@ -207,6 +236,14 @@ The manager talks to knowledge through the `ContextSource` port, so it never imp
 plan service; `GroveCore::assemble` wires the real `SessionContextService` onto `GroveCore::context`. Pins
 live in the `pins` table, are toggled from the Specs panel for the session the Sessions panel has open,
 and survive a restart.
+
+**One notion of "the project".** `GroveCore::project_root` is a `ProjectRoot` — a shared
+`Arc<RwLock<PathBuf>>` — and a session's `cwd` decides it: the shell calls `app_set_project_root` (or
+`commands::app::adopt`, which also re-targets the spec watcher and emits `grove://spec-changed`) when a
+session is created, resumed, or its tab is activated. The spec graph, the plan mirror's fallback, MCP
+discovery and the project-local skills target all hold a clone of that one handle, so nothing caches a
+stale project and no service has to be rebuilt. `GROVE_PROJECT_ROOT` (else the process cwd) is only the
+*initial* value, which keeps headless runs and tests pinnable.
 
 ## Persistence (settled)
 
@@ -259,8 +296,10 @@ Two channels, both typed in `packages/contract`:
    `<domain>_<verb>` (`session_create`, `plan_set`, `spec_index`, `git_diff`, `skill_install`, …).
    Errors: `{ code: "conflict" | "not_found" | "invalid" | "unavailable" | "io", message, detail? }`.
 2. **Events** — Tauri events named `grove://<domain>` with envelope `{ sessionId?, payload }`:
-   `grove://session-event`, `grove://session-status`, `grove://plan-changed`,
-   `grove://spec-changed`, `grove://git-changed`.
+   `grove://session-event`, `grove://plan-changed`, `grove://spec-changed`, `grove://git-changed`.
+   There is deliberately no separate status channel: a session's state rides in the `status` event kind
+   inside `grove://session-event`, so there is one stream to persist, order and replay. Every channel
+   above has a subscriber in `apps/desktop/src/ipc/events.ts` — an event nobody listens to is a bug.
 
 **Drift control without codegen.** `contract/fixtures/<domain>.<case>.json` holds canonical payloads.
 A Rust test serialises a representative sample per DTO and asserts equality with the file; a TS test in
@@ -269,6 +308,11 @@ that side, so no build step and no generated file to conflict over. Add a fixtur
 
 Rust owns the wire shape (`serde`, `rename_all = "camelCase"` for DTOs). The webview validates incoming
 event payloads with zod before storing them — an unknown event kind is ignored, not fatal.
+
+Command rejections are normalised once, in `apps/desktop/src/ipc/errors.ts`: the wire
+`{ code, message, detail? }`, a plain `Error`, or an unknown value all become
+`{ code, message, detail }` with a message that is never empty. Panels print `errorText(error)` and Git
+renders the code beside the message; no panel formats a rejection itself.
 
 ## Sidecar protocol (settled)
 
@@ -308,14 +352,19 @@ work rather than a first-build requirement. The decision and the alternatives ar
 - **specgraph** — index repo `.md` files carrying frontmatter `id` + `type`; parse `parent`,
   `depends-on`, `references`, `implements`, `covers`; expose tree, ancestors, subtree, neighbours;
   validate dangling links / duplicate ids / cycles; `spec_write` is hash-guarded (optimistic
-  concurrency). `notify` watcher emits `grove://spec-changed`. The index root is
-  `GroveCore::project_root` (`GROVE_PROJECT_ROOT`, else the process working directory) and is returned
-  as `SpecGraph.root`, so later panels share one notion of "the project".
+  concurrency). `notify` watcher emits `grove://spec-changed`, which the Specs panel subscribes to and
+  answers with a debounced re-index (one save costs one pass, a burst costs one pass). The Git panel
+  reads a pinned spec beside the diff, so the change and the intent that asked for it are in one view.
+  The index root is `GroveCore::project_root` — the active session's directory, seeded by
+  `GROVE_PROJECT_ROOT`, else the process working directory — and is returned as `SpecGraph.root`, so
+  every panel shares one notion of "the project".
 - **plan** — see dual-edit above; `PlanService` owns version bumps and mirror writes.
 - **skills** — sources are GitHub repos (default `anthropics/skills`, `mattpocock/skills`); fetch the
   repo tree, keep entries with a `SKILL.md`, cache the manifest with a TTL and serve it offline.
-  `skill_targets()` lists per-harness directories (Claude `~/.claude/skills`, Codex `~/.codex/skills`,
-  pi `~/.pi/skills`, OpenCode `~/.config/opencode/skills`, plus project-local `.agents/skills`).
+  `skill_targets()` lists per-harness directories plus project-local `.agents/skills`; the harness rows
+  come from `builtin_registry()` (each adapter's `display_name()` and `skills_dir()`) and the local one
+  follows `GroveCore::project_root`, so a sixth harness appears in the dropdown by declaring its
+  directory and nothing else.
   Install copies the folder, refuses `..` traversal and symlink escapes, records the install in a JSON
   file under the app-data dir (behind `InstallStore`; the `installs` SQL shape is reserved for a later
   migration). A GitHub token is optional and lives in the keychain.
@@ -331,7 +380,8 @@ work rather than a first-build requirement. The decision and the alternatives ar
   Windows Credential Manager.
 - **harness_doctor** — resolve binaries (configured path, else `PATH`), `--version`, plus node presence
   for the sidecar. Powers the Settings panel and explains an `unavailable` adapter instead of failing
-  at session start.
+  at session start. Its harness rows and labels come from the adapter registry, never from a list of
+  names in the doctor.
 
 ## Extension seams (single-line conflicts, resolved at merge)
 

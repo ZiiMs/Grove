@@ -2,8 +2,10 @@ import type { GitBranch, GitDiff, GitStatus, GitWorktree } from "@grove/contract
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { SpecDoc, SpecGraph } from "@grove/contract";
 import { BridgeProvider } from "../../ipc/context";
-import { createFakeBridge, type FakeBridge } from "../../test-utils/fakeBridge";
+import { useSessionStore } from "../../state/sessionStore";
+import { createFakeBridge, fakeSession, type FakeBridge } from "../../test-utils/fakeBridge";
 import { GitPanel } from "./index";
 
 /**
@@ -104,8 +106,47 @@ const diff: GitDiff = {
   truncated: false,
 };
 
+const specGraph: SpecGraph = {
+  root: "C:/work/grove",
+  nodes: [
+    {
+      id: "grove-architecture",
+      type: "architecture-design",
+      title: "Grove architecture",
+      status: "active",
+      path: "architecture.md",
+      dependsOn: [],
+      references: [],
+      implements: [],
+      covers: [],
+    },
+  ],
+  validation: { danglingLinks: [], duplicateIds: [], parentCycles: [] },
+};
+
+const pinnedSpec: SpecDoc = {
+  node: specGraph.nodes[0],
+  body: ['# Grove architecture', '', 'A Tauri shell.', '', '<script>alert("x")</script>', ''].join("\n"),
+  hash: "hash-1",
+};
+
 function renderPanel(configure: (bridge: FakeBridge) => void) {
-  const bridge = createFakeBridge();
+  const bridge = createFakeBridge(
+    {},
+    {
+      // The pane reads the active session's context: one session has a pin, the other has none.
+      sessions: [
+        { ...fakeSession({ id: "session-1" }), eventCount: 0 },
+        { ...fakeSession({ id: "session-2", title: "second" }), eventCount: 0 },
+      ],
+      details: {
+        "session-1": { ...fakeSession({ id: "session-1" }), events: [] },
+        "session-2": { ...fakeSession({ id: "session-2", title: "second" }), events: [] },
+      },
+      pins: { "session-1": ["grove-architecture"] },
+      specTitles: { "grove-architecture": "Grove architecture" },
+    },
+  );
   bridge.on("git_status", () => dirtyStatus);
   bridge.on("git_branches", () => branches);
   bridge.on("git_worktrees", () => worktrees);
@@ -205,6 +246,43 @@ describe("GitPanel", () => {
 
     const link = await screen.findByRole("link", { name: "https://github.com/acme/grove/pull/42" });
     expect(link).toHaveAttribute("href", "https://github.com/acme/grove/pull/42");
+  });
+
+  it("shows the pinned spec beside the diff, rendered without executing HTML", async () => {
+    // The store is where an open session lives; the pane reads the active one, like every other panel.
+    useSessionStore.setState({ activeId: "session-1" });
+    try {
+      renderPanel((fake) => {
+        fake.on("git_diff", () => diff);
+        fake.on("spec_index", () => specGraph);
+        fake.on("spec_read", () => pinnedSpec);
+      });
+
+      expect(await screen.findByText(/2 changed/)).toBeInTheDocument();
+      const pane = await screen.findByTestId("git-spec-pane");
+      expect(within(pane).getByRole("button", { name: "Grove architecture" })).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: "View diff for scratch.txt" }));
+      expect(await screen.findByTestId("monaco-diff")).toHaveTextContent("+scratch");
+
+      const body = await screen.findByTestId("git-spec-body");
+      expect(body.querySelector("h1")).toHaveTextContent("Grove architecture");
+      expect(body.querySelector("script")).toBeNull();
+      expect(body.textContent).toContain('<script>alert("x")</script>');
+      expect(screen.getByTestId("git-diff-section")).toContainElement(pane);
+    } finally {
+      useSessionStore.getState().reset();
+    }
+  });
+
+  it("says so when the active session has no pinned specs", async () => {
+    useSessionStore.setState({ activeId: "session-2" });
+    try {
+      renderPanel(() => {});
+      expect(await screen.findByTestId("git-spec-empty")).toHaveTextContent("No specs pinned");
+    } finally {
+      useSessionStore.getState().reset();
+    }
   });
 
   it("refreshes the status when the core emits grove://git-changed", async () => {

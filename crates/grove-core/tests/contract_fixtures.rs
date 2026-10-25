@@ -3,7 +3,8 @@ use grove_core::gitops::{
     DiffTarget, GitBranch, GitDiff, GitStatus, GitStatusFile, GitWorktree, PrResult,
 };
 use grove_core::ipc::{
-    AppInfo, ErrorCode, EventEnvelope, IpcError, Session, SessionDetail, SessionSummary,
+    AppInfo, CreateSessionRequest, ErrorCode, EventEnvelope, HarnessInfo, IpcError, Session,
+    SessionDetail, SessionSummary,
 };
 use grove_core::plan::{Plan, PlanUpdate};
 use grove_core::sessions::context::{ContextLimits, ContextPin, SessionContext};
@@ -602,5 +603,47 @@ fn plan_changed_envelope_matches_fixture() {
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("plan-changed.json")
+    );
+}
+
+#[test]
+fn harness_info_matches_fixture() {
+    // The session picker's row: the harness id plus its honest capabilities.
+    let sample = HarnessInfo {
+        id: "claude".into(),
+        capabilities: Capabilities {
+            streaming_deltas: true,
+            tool_calls: true,
+            diffs: false,
+            permissions: false,
+            resume: true,
+            images: false,
+            mcp: false,
+            usage: true,
+        },
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("harness-info.json")
+    );
+}
+
+#[test]
+fn create_session_request_matches_fixture() {
+    // `config` is the adapter-specific JSON from settings; the zod schema had drifted without it, so
+    // this fixture is what keeps the two sides honest.
+    let sample = CreateSessionRequest {
+        harness: "claude".into(),
+        cwd: Some("C:/work/grove".into()),
+        model: Some("claude-sonnet-4".into()),
+        title: Some("Review the diff".into()),
+        config: Some(serde_json::json!({
+            "command": "C:/tools/claude.cmd",
+            "args": ["--permission-mode", "acceptEdits"],
+        })),
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("create-session-request.json")
     );
 }

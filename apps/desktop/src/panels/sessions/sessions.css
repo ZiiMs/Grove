@@ -248,6 +248,53 @@
   overflow-wrap: anywhere;
 }
 
+/* A permission request is a question the turn is waiting on, so it is a card with the answers in it
+   rather than a passive note. Once the harness resolves it the buttons go and the state stays. */
+.permission-card {
+  border: 1px solid var(--accent, var(--border-strong));
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: var(--space-3);
+}
+
+.permission-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.permission-title {
+  font-weight: 600;
+}
+
+.permission-state {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.permission-state.is-approve {
+  color: var(--accent);
+}
+
+.permission-state.is-deny {
+  color: var(--danger);
+}
+
+.permission-detail {
+  margin: var(--space-2) 0 0;
+  white-space: pre-wrap;
+  font-size: var(--text-sm);
+}
+
+.permission-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
 .notice {
   margin: 0;
   color: var(--text-faint);

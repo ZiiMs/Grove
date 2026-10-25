@@ -33,6 +33,7 @@
 //! reports `Unsupported`; the sidecar logs extension UI requests instead of half-answering them.
 //! `diffs` is `false` because pi sends no patch for edits.
 
+use super::support::{find_on_path, kill_process_tree, truncate};
 use super::{
     AdapterDeps, AdapterError, Capabilities, Detection, HarnessAdapter, HarnessId, HarnessSession,
     ResumeToken, StartContext, UserInput,
@@ -57,8 +58,6 @@ const PROTOCOL_VERSION: u64 = 1;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long the sidecar gets to release pi itself after `session.stop` before the tree is killed.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
-/// How long to wait for a killed child to be reaped.
-const REAP_TIMEOUT: Duration = Duration::from_secs(5);
 const EVENT_BUFFER: usize = 1024;
 
 pub struct PiAdapter {
@@ -98,6 +97,14 @@ impl PiAdapter {
 impl HarnessAdapter for PiAdapter {
     fn id(&self) -> HarnessId {
         HarnessId(HARNESS)
+    }
+
+    fn display_name(&self) -> &'static str {
+        "pi"
+    }
+
+    fn skills_dir(&self) -> Option<&'static str> {
+        Some(".pi/skills")
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -706,82 +713,6 @@ fn default_sidecar_entry() -> Option<PathBuf> {
         let candidate = root.join("sidecar").join("dist").join("main.js");
         if candidate.is_file() {
             return Some(candidate);
-        }
-    }
-    None
-}
-
-fn truncate(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_string();
-    }
-    let mut truncated: String = text.chars().take(limit).collect();
-    truncated.push('…');
-    truncated
-}
-
-async fn kill_process_tree(pid: Option<u32>, child: &mut Child) {
-    if let Some(pid) = pid {
-        kill_tree_by_pid(pid).await;
-    }
-    let _ = child.kill().await;
-    let _ = tokio::time::timeout(REAP_TIMEOUT, child.wait()).await;
-}
-
-#[cfg(windows)]
-async fn kill_tree_by_pid(pid: u32) {
-    // `Child::kill` reaches the direct child only, and the sidecar spawns `pi` itself. A failure is
-    // fine: the direct kill in `kill_process_tree` still runs.
-    let pid = pid.to_string();
-    let _ = Command::new("taskkill")
-        .args(["/PID", pid.as_str(), "/T", "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-}
-
-#[cfg(not(windows))]
-async fn kill_tree_by_pid(pid: u32) {
-    // The child is spawned as a process-group leader (see `start`), so the negative pid is the whole
-    // tree — the sidecar and the harness it launched.
-    let group = format!("-{pid}");
-    let _ = Command::new("kill")
-        .args(["-KILL", group.as_str()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-}
-
-/// Resolve a binary the way a shell would: an explicit path as given, otherwise `PATH` + `PATHEXT`.
-fn find_on_path(binary: &str) -> Option<PathBuf> {
-    if binary.contains('/') || binary.contains('\\') || Path::new(binary).is_absolute() {
-        let path = PathBuf::from(binary);
-        return path.is_file().then_some(path);
-    }
-    let search_path = std::env::var_os("PATH")?;
-    let extensions: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .ok()
-            .map(|raw| {
-                raw.split(';')
-                    .map(str::trim)
-                    .filter(|extension| !extension.is_empty())
-                    .map(str::to_ascii_lowercase)
-                    .collect()
-            })
-            .filter(|extensions: &Vec<String>| !extensions.is_empty())
-            .unwrap_or_else(|| vec![".exe".into(), ".cmd".into(), ".bat".into(), ".com".into()])
-    } else {
-        vec![String::new()]
-    };
-    for directory in std::env::split_paths(&search_path) {
-        for extension in &extensions {
-            let candidate = directory.join(format!("{binary}{extension}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
         }
     }
     None

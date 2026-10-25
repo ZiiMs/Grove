@@ -1,6 +1,7 @@
 import type { AppInfo } from "@grove/contract";
 import { useEffect, useState } from "react";
 import { useBridge } from "./ipc/context";
+import { errorText } from "./ipc/errors";
 import { panels } from "./panels/registry";
 import { useUiStore } from "./state/uiStore";
 
@@ -20,7 +21,7 @@ export default function App() {
         if (!cancelled) setInfo(next);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(errorText(err));
       });
     return () => {
       cancelled = true;

@@ -57,18 +57,14 @@ fn preview_matches_fixture() {
 
 #[test]
 fn targets_match_fixture() {
+    // Registry order: the dropdown is built from `builtin_registry()` and each adapter's own
+    // `skills_dir()`, so the golden file follows the adapter list rather than a list of its own.
     let sample = vec![
         SkillTarget {
             id: "claude".into(),
             label: "Claude Code".into(),
             path: "C:/Users/demo/.claude/skills".into(),
             exists: true,
-        },
-        SkillTarget {
-            id: "codex".into(),
-            label: "Codex".into(),
-            path: "C:/Users/demo/.codex/skills".into(),
-            exists: false,
         },
         SkillTarget {
             id: "pi".into(),
@@ -80,6 +76,12 @@ fn targets_match_fixture() {
             id: "opencode".into(),
             label: "OpenCode".into(),
             path: "C:/Users/demo/.config/opencode/skills".into(),
+            exists: false,
+        },
+        SkillTarget {
+            id: "codex".into(),
+            label: "Codex".into(),
+            path: "C:/Users/demo/.codex/skills".into(),
             exists: false,
         },
         SkillTarget {

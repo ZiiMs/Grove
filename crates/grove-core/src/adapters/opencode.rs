@@ -63,9 +63,10 @@
 //! pairs with a bare `StartContext.model` (`provider/model` needs no help), and
 //! `readyTimeoutMs` / `healthIntervalMs` / `reconnectDelayMs` / `reconnectAttempts` tune the timing.
 
+use super::support::{find_on_path, kill_tree_by_pid, render_prompt, truncate, REAP_TIMEOUT};
 use super::{
-    AdapterDeps, AdapterError, Capabilities, ContextDoc, Detection, HarnessAdapter, HarnessId,
-    HarnessSession, ResumeToken, StartContext, UserInput,
+    AdapterDeps, AdapterError, Capabilities, Detection, HarnessAdapter, HarnessId, HarnessSession,
+    ResumeToken, StartContext, UserInput,
 };
 use crate::sessions::event::{
     Block, Decision, EventKind, HarnessEvent, Role, SessionState, ToolStatus,
@@ -73,7 +74,7 @@ use crate::sessions::event::{
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -104,7 +105,6 @@ const DEFAULT_RECONNECT_ATTEMPTS: u32 = 5;
 const HEALTH_TIMEOUT: Duration = Duration::from_millis(1_000);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
-const REAP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct OpenCodeAdapter {
     /// The binary detection looks for. `config.command` can still override it per session.
@@ -148,6 +148,14 @@ impl OpenCodeAdapter {
 impl HarnessAdapter for OpenCodeAdapter {
     fn id(&self) -> HarnessId {
         HarnessId(HARNESS)
+    }
+
+    fn display_name(&self) -> &'static str {
+        "OpenCode"
+    }
+
+    fn skills_dir(&self) -> Option<&'static str> {
+        Some(".config/opencode/skills")
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -1654,101 +1662,10 @@ fn tail_text(tail: &Arc<Mutex<VecDeque<String>>>) -> String {
         .unwrap_or_default()
 }
 
-fn truncate(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_string();
-    }
-    let mut truncated: String = text.chars().take(limit).collect();
-    truncated.push('…');
-    truncated
-}
-
-/// Prepended context documents (pinned specs, the plan) become the head of the first prompt, in
-/// markdown, like every other adapter.
-fn render_prompt(prompt: Option<&str>, documents: &[ContextDoc]) -> Option<String> {
-    if documents.is_empty() {
-        return prompt.map(str::to_string);
-    }
-    let mut rendered = String::from("# Context\n\n");
-    for document in documents {
-        rendered.push_str(&format!(
-            "## {}\n\n<!-- id: {} -->\n\n",
-            document.title, document.id
-        ));
-        rendered.push_str(document.body.trim_end());
-        rendered.push_str("\n\n");
-    }
-    if let Some(prompt) = prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) {
-        rendered.push_str("---\n\n");
-        rendered.push_str(prompt);
-        rendered.push('\n');
-    }
-    Some(rendered)
-}
-
-async fn kill_tree_by_pid(pid: u32) {
-    #[cfg(windows)]
-    {
-        // `Child::kill` reaches the direct child only, and `opencode` may spawn tools of its own. A
-        // failure is fine: the direct kill still runs.
-        let pid = pid.to_string();
-        let _ = Command::new("taskkill")
-            .args(["/PID", pid.as_str(), "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-    }
-    #[cfg(not(windows))]
-    {
-        // The child is spawned as a process-group leader (see `spawn_server`), so the negative pid is
-        // the whole tree.
-        let group = format!("-{pid}");
-        let _ = Command::new("kill")
-            .args(["-KILL", group.as_str()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-    }
-}
-
-/// Resolve a binary the way a shell would: an explicit path as given, otherwise `PATH` + `PATHEXT`.
-fn find_on_path(binary: &str) -> Option<PathBuf> {
-    if binary.contains('/') || binary.contains('\\') || Path::new(binary).is_absolute() {
-        let path = PathBuf::from(binary);
-        return path.is_file().then_some(path);
-    }
-    let search_path = std::env::var_os("PATH")?;
-    let extensions: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .ok()
-            .map(|raw| {
-                raw.split(';')
-                    .map(str::trim)
-                    .filter(|extension| !extension.is_empty())
-                    .map(str::to_ascii_lowercase)
-                    .collect()
-            })
-            .filter(|extensions: &Vec<String>| !extensions.is_empty())
-            .unwrap_or_else(|| vec![".exe".into(), ".cmd".into(), ".bat".into(), ".com".into()])
-    } else {
-        vec![String::new()]
-    };
-    for directory in std::env::split_paths(&search_path) {
-        for extension in &extensions {
-            let candidate = directory.join(format!("{binary}{extension}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::ContextDoc;
 
     #[test]
     fn only_loopback_urls_are_accepted() {

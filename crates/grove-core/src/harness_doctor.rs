@@ -116,8 +116,14 @@ impl HarnessDoctor {
                 .get(&adapter.id)
                 .map(|path| path.trim())
                 .filter(|path| !path.is_empty());
+            // The label is the adapter's own: a sixth harness appears here by implementing the
+            // contract, not by editing a match arm in the doctor.
+            let label = self
+                .sessions
+                .label_for(&adapter.id)
+                .unwrap_or(adapter.id.as_str());
             harnesses.push(
-                self.harness_health(&adapter.id, detection, configured)
+                self.harness_health(&adapter.id, label, detection, configured)
                     .await,
             );
         }
@@ -137,10 +143,11 @@ impl HarnessDoctor {
     async fn harness_health(
         &self,
         id: &str,
+        label: &str,
         detection: &Detection,
         configured: Option<&str>,
     ) -> HarnessHealth {
-        let label = harness_label(id);
+        let label = label.to_string();
 
         // An explicit override is a promise: never silently fall back to PATH when it is wrong.
         if let Some(raw) = configured {
@@ -401,19 +408,6 @@ fn is_builtin(detection: &Detection) -> bool {
         .path
         .as_deref()
         .is_some_and(|path| path.starts_with("builtin:"))
-}
-
-fn harness_label(id: &str) -> String {
-    match id {
-        "claude" => "Claude Code",
-        "codex" => "Codex",
-        "acp" => "ACP",
-        "opencode" => "OpenCode",
-        "pi" => "pi",
-        "mock" => "Mock (builtin)",
-        other => other,
-    }
-    .to_string()
 }
 
 fn clean_path(raw: &str) -> String {

@@ -13,12 +13,12 @@
 
 use crate::adapters::ContextDoc;
 use crate::ipc::{IpcError, IpcResult};
+use crate::paths::ProjectRoot;
 use crate::plan::PlanService;
 use crate::sessions::event::ContextDocument;
 use crate::specgraph::{read_spec, SpecIndex};
 use crate::store::{Store, StoreError};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Character budget for one document. A pinned spec is a summary of the project, not the project.
@@ -102,12 +102,16 @@ pub struct SessionContextService {
     store: Arc<Store>,
     plan: Arc<PlanService>,
     /// The root the spec graph is indexed from — the same project the Specs panel shows.
-    spec_root: PathBuf,
+    spec_root: ProjectRoot,
     limits: ContextLimits,
 }
 
 impl SessionContextService {
-    pub fn new(store: Arc<Store>, plan: Arc<PlanService>, spec_root: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        store: Arc<Store>,
+        plan: Arc<PlanService>,
+        spec_root: impl Into<ProjectRoot>,
+    ) -> Self {
         Self {
             store,
             plan,
@@ -154,7 +158,7 @@ impl SessionContextService {
         if index.node(spec_id).is_none() {
             return Err(IpcError::invalid(format!(
                 "no spec with id {spec_id} under {}",
-                crate::paths::display_path(&self.spec_root)
+                crate::paths::display_path(&self.spec_root.path())
             )));
         }
         stored(self.store.add_pin(&session.id, spec_id))?;
@@ -244,13 +248,13 @@ impl SessionContextService {
     }
 
     fn load_index(&self) -> Option<SpecIndex> {
-        match SpecIndex::load(&self.spec_root) {
+        match SpecIndex::load(self.spec_root.path()) {
             Ok(index) => Some(index),
             Err(error) => {
                 tracing::warn!(
                     target: "grove::sessions",
                     "cannot index {} for session context: {}",
-                    crate::paths::display_path(&self.spec_root),
+                    crate::paths::display_path(&self.spec_root.path()),
                     error.message
                 );
                 None
@@ -259,10 +263,10 @@ impl SessionContextService {
     }
 
     fn index(&self) -> IpcResult<SpecIndex> {
-        SpecIndex::load(&self.spec_root).map_err(|_| {
+        SpecIndex::load(self.spec_root.path()).map_err(|_| {
             IpcError::io(format!(
                 "cannot index pinned specs under {}",
-                crate::paths::display_path(&self.spec_root)
+                crate::paths::display_path(&self.spec_root.path())
             ))
         })
     }

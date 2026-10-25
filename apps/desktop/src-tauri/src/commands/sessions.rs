@@ -1,11 +1,13 @@
 //! Session commands. Thin by design: every decision lives in `grove_core::sessions`, and the shell
 //! only maps arguments to manager calls. Events flow back over `grove://session-event`.
 
+use crate::commands::app::adopt;
 use crate::state::AppState;
 use grove_core::ipc::{
     CreateSessionRequest, HarnessInfo, IpcResult, Session, SessionDetail, SessionSummary,
 };
 use grove_core::sessions::context::SessionContext;
+use grove_core::sessions::event::Decision;
 
 /// Every registered harness, for the session picker.
 #[tauri::command]
@@ -28,7 +30,10 @@ pub async fn session_create(
     state: tauri::State<'_, AppState>,
     req: CreateSessionRequest,
 ) -> IpcResult<SessionDetail> {
-    Ok(state.core.sessions.create(req).await?)
+    let detail = state.core.sessions.create(req).await?;
+    // A session's working directory is the project the rest of the app should be looking at.
+    adopt(&state, detail.session.cwd.clone());
+    Ok(detail)
 }
 
 #[tauri::command]
@@ -45,6 +50,26 @@ pub async fn session_cancel(state: tauri::State<'_, AppState>, id: String) -> Ip
     Ok(state.core.sessions.cancel(&id).await?)
 }
 
+/// Answer a pending `permission_request` for one session.
+///
+/// The adapter owns the protocol (Codex's approval vocabulary, ACP's `session/request_permission`
+/// outcome); the manager serializes the answer under the session's command lock, so an approval can
+/// never interleave with a send. The resolution comes back as a `permission_resolved` event, which is
+/// what clears the buttons in the transcript — the command itself returns nothing.
+#[tauri::command]
+pub async fn session_respond_permission(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    request_id: String,
+    decision: Decision,
+) -> IpcResult<()> {
+    Ok(state
+        .core
+        .sessions
+        .respond_permission(&id, &request_id, decision)
+        .await?)
+}
+
 #[tauri::command]
 pub async fn session_close(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     Ok(state.core.sessions.close(&id).await?)
@@ -52,7 +77,9 @@ pub async fn session_close(state: tauri::State<'_, AppState>, id: String) -> Ipc
 
 #[tauri::command]
 pub async fn session_resume(state: tauri::State<'_, AppState>, id: String) -> IpcResult<Session> {
-    Ok(state.core.sessions.resume(&id).await?)
+    let session = state.core.sessions.resume(&id).await?;
+    adopt(&state, session.cwd.clone());
+    Ok(session)
 }
 
 /// A session's knowledge: what is pinned and what a start would send now. Reads the spec graph and the

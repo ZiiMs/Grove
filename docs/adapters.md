@@ -18,6 +18,7 @@ Authoritative context: `architecture.md` §The adapter contract, §Normalized ev
 |---|---|
 | `crates/grove-core/src/adapters/mod.rs` | The contract: `HarnessAdapter`, `HarnessSession`, `Capabilities`, `StartContext`, `AdapterDeps`, `Detection`, `AdapterError`, `HarnessId` |
 | `crates/grove-core/src/adapters/<harness>.rs` | One adapter, its process/actor, and its line-by-line mapping |
+| `crates/grove-core/src/adapters/support.rs` | The helpers every process-backed adapter shares: `find_on_path`, `render_prompt`, `truncate`, `command_from_config`, `kill_tree_by_pid`, `kill_process_tree`. An adapter calls these instead of carrying its own copy |
 | `crates/grove-core/src/adapters/registry.rs` | `builtin_registry()` — the one line that makes an adapter real |
 | `crates/grove-core/src/adapters/mock.rs` | The in-process reference adapter ("does Grove itself work?") |
 | `fixtures/harnesses/<harness>_fake.mjs` | A scripted stand-in for the real CLI, used by every test |
@@ -30,6 +31,8 @@ Authoritative context: `architecture.md` §The adapter contract, §Normalized ev
 ```rust
 pub trait HarnessAdapter: Send + Sync {
     fn id(&self) -> HarnessId;                                  // "claude" | "codex" | …
+    fn display_name(&self) -> &'static str { self.id().as_str() } // "Claude Code", "Codex", …
+    fn skills_dir(&self) -> Option<&'static str> { None }       // ".claude/skills", … or None
     fn capabilities(&self) -> Capabilities;                     // honest, never aspirational
     fn detect(&self, deps: &AdapterDeps) -> Detection;          // installed / version / path
     async fn start(&self, ctx: StartContext, deps: AdapterDeps)
@@ -53,6 +56,17 @@ pub trait HarnessSession: Send {
 the plan, already rendered to markdown). `AdapterDeps` exposes paths, an HTTP client, and the secret
 store; **a session must never call the network** — the harness inherits the user's own auth.
 
+`display_name()` and `skills_dir()` are the two facts about a harness that are not protocol:
+the doctor and the Skills dropdown are both built from `builtin_registry()`, so a new adapter shows up
+in them by overriding these (or by leaving the defaults, which is fine for a harness with no skills
+directory). No `match` on harness ids exists outside the adapters.
+
+**Where `config` comes from.** The session manager fills `config.command` from
+`Settings.harness_paths[harness]` when the request carries none, through the `AdapterConfigSource` port;
+an explicit request `config.command` always wins and every other key is passed through untouched. That
+is why an adapter must read the command with `support::command_from_config` and never hard-code its
+binary: a user's configured path, and the ACP adapter's only way to start at all, arrive that way.
+
 Rules that keep adapters isolated and Grove trustworthy:
 
 - **Forward compatible by default.** An unknown line, event type, or JSON-RPC method is logged and
@@ -61,14 +75,21 @@ Rules that keep adapters isolated and Grove trustworthy:
   `AdapterError` — never a panic.
 - **Capability honesty.** A flag is `true` only if the adapter really emits that event kind for the
   launch shape Grove uses. The UI degrades from `Capabilities`, never from the harness name.
-- **Explicit command override.** Read `config.command` and `config.args`. A user points Grove at a
-  wrapper; tests point it at a fixture.
+- **Explicit command override.** Read `config.command` and `config.args` with
+  `support::command_from_config`. A user points Grove at a wrapper (a path from Settings arrives here
+  too), and tests point it at a fixture.
 - **Detection never blocks starting.** `detect()` is side-effect free (resolve on `PATH`, no probes)
   and its result does not gate `start()`. A missing binary becomes an error *event* on the first
   turn, so the session row and transcript still exist; the doctor explains it in Settings.
 - **One writer per session.** The session manager serializes `send`/`cancel`/`respond_permission`
   behind a per-session mutex. An adapter's actor must still never run two harness processes against
   one conversation: queue prompts and run them in order.
+- **Answer every permission request.** A `PermissionRequest` reaches the transcript as a card with
+  Approve/Deny; the answer arrives as `respond_permission(request_id, decision)` from the
+  `session_respond_permission` command. Emit the matching `PermissionResolved` when the protocol
+  confirms it — that event is what removes the buttons — and never leave a request unanswered: an
+  agent waiting on one hangs the turn. An adapter that cannot answer must leave
+  `capabilities.permissions` false, and the UI then never offers the buttons.
 - **Isolation is enforced.** `tests/architecture.rs` fails if an adapter imports another adapter,
   `tauri`, or the session manager/pump.
 
@@ -288,11 +309,14 @@ registered in `builtin_registry()` without a target, so a new harness cannot shi
 
 1. **Write the adapter module** `crates/grove-core/src/adapters/<harness>.rs`. Implement
    `HarnessAdapter` + `HarnessSession`, map the wire format to `EventKind`, capture the resume token,
-   and read `config.command`/`config.args`. Use `claude.rs` as the shape: one actor task owning the
-   process, a bounded event channel, an unbounded command channel, `cancel` handled inside the turn's
-   `select!` so a kill cannot race a message.
+   and read `config.command`/`config.args` with `support::command_from_config`. Use `claude.rs` as the
+   shape: one actor task owning the process, a bounded event channel, an unbounded command channel,
+   `cancel` handled inside the turn's `select!` so a kill cannot race a message. Take `find_on_path`,
+   `render_prompt`, `truncate` and the kill helpers from `support` rather than copying them.
 2. **Declare capabilities honestly**, plus a side-effect-free `detect()` that resolves the binary
-   (honour a per-adapter command override). Leave `false` anything you do not actually emit.
+   (honour a per-adapter command override). Leave `false` anything you do not actually emit. Add
+   `display_name()` and — if the harness has one — `skills_dir()`; that is all the doctor and the
+   Skills dropdown need to pick the adapter up.
 3. **Write the fixture** `fixtures/harnesses/<harness>_fake.mjs` with the modes listed above, echoing
    the resume id and failing when Grove's own flags are wrong.
 4. **Test each mode** in `crates/grove-core/tests/adapters_<harness>.rs` (happy plus one test per
@@ -302,7 +326,9 @@ registered in `builtin_registry()` without a target, so a new harness cannot shi
    conformance is the definition of "contract-compliant".
 5. **Register it in one line**: `crates/grove-core/src/adapters/registry.rs` — add the
    `Arc::new(<Harness>Adapter::default())` entry. That is the only shared file the feature touches
-   besides `adapters/mod.rs` (`pub mod <harness>;`) if you re-export it.
+   besides `adapters/mod.rs` (`pub mod <harness>;`) if you re-export it. The picker, the doctor labels,
+   the skills dropdown, `/spec_index`'s session scoping and the settings harness-path resolution all
+   read the registry, so registration is what makes the harness real everywhere.
 6. **Document and pin**: add the launch form and line-mapping table to this file, and if you surface
    a new DTO (or change one), add `contract/fixtures/<domain>.<case>.json`, a Rust assertion in
    `tests/contract_fixtures.rs`, and a zod parse in `packages/contract/test/`. Never invent a

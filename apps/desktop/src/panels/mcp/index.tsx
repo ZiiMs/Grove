@@ -6,6 +6,7 @@ import type {
 } from "@grove/contract";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBridge } from "../../ipc/context";
+import { errorText } from "../../ipc/errors";
 import { PanelFrame } from "../PanelFrame";
 import "./mcp.css";
 
@@ -25,14 +26,6 @@ interface ProbeEntry {
   error: string | null;
 }
 
-function errorMessage(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
 
 function rowKey(server: McpServerView): string {
   return `${server.source}::${server.name}`;
@@ -61,7 +54,7 @@ export function McpPanel() {
     try {
       setDiscovery(await bridge.invoke("mcp_servers"));
     } catch (error) {
-      setListError(errorMessage(error));
+      setListError(errorText(error));
     } finally {
       setLoading(false);
     }
@@ -91,7 +84,7 @@ export function McpPanel() {
       } catch (error) {
         setProbes((current) => ({
           ...current,
-          [key]: { state: "error", probe: null, error: errorMessage(error) },
+          [key]: { state: "error", probe: null, error: errorText(error) },
         }));
       }
     },

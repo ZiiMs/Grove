@@ -3,8 +3,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   capabilitiesSchema,
+  createSessionRequestSchema,
   detectionSchema,
   harnessEventSchema,
+  harnessInfoSchema,
   sessionDetailSchema,
   sessionSchema,
   sessionSummarySchema,
@@ -94,6 +96,26 @@ describe("harness capabilities and detection", () => {
       mcp: false,
       usage: true,
     });
+  });
+
+  it("harness-info.json matches the zod schema", () => {
+    const parsed = harnessInfoSchema.parse(fixture("harness-info.json"));
+    expect(parsed.id).toBe("claude");
+    expect(parsed.capabilities.permissions).toBe(false);
+  });
+
+  it("create-session-request.json carries the adapter config", () => {
+    const parsed = createSessionRequestSchema.parse(fixture("create-session-request.json"));
+    expect(parsed.harness).toBe("claude");
+    expect(parsed.config).toEqual({
+      command: "C:/tools/claude.cmd",
+      args: ["--permission-mode", "acceptEdits"],
+    });
+  });
+
+  it("a create request without a config is still valid", () => {
+    const parsed = createSessionRequestSchema.parse({ harness: "mock" });
+    expect(parsed.config).toBeUndefined();
   });
 
   it("detection.json matches the zod schema", () => {

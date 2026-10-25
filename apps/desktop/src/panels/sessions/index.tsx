@@ -6,6 +6,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import type { Decision } from "@grove/contract";
 import { useBridge } from "../../ipc/context";
 import { subscribeToHarnessEvents } from "../../ipc/events";
 import { PanelFrame } from "../PanelFrame";
@@ -52,6 +53,7 @@ export function SessionsPanel() {
   const close = useSessionStore((state) => state.close);
   const refreshContext = useSessionStore((state) => state.refreshContext);
   const switchHarness = useSessionStore((state) => state.switchHarness);
+  const respondPermission = useSessionStore((state) => state.respondPermission);
 
   const [harness, setHarness] = useState("");
   const [cwd, setCwd] = useState("");
@@ -288,7 +290,10 @@ export function SessionsPanel() {
                 </span>
               </section>
 
-              <Conversation items={items} />
+              <Conversation
+                items={items}
+                onDecide={(requestId, decision) => void respondPermission(bridge, requestId, decision)}
+              />
               {items.length === 0 ? (
                 <p className="session-empty" data-testid="session-empty">
                   No messages yet. Say something to start the conversation.
@@ -343,8 +348,17 @@ export function SessionsPanel() {
   );
 }
 
+/** An answer to a pending permission request, bound to the session that asked for it. */
+type DecidePermission = (requestId: string, decision: Decision) => void;
+
 /** The virtualized conversation. Only the rows in view are mounted, so long transcripts stay cheap. */
-function Conversation({ items }: { items: TranscriptItem[] }) {
+function Conversation({
+  items,
+  onDecide,
+}: {
+  items: TranscriptItem[];
+  onDecide: DecidePermission;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -365,7 +379,7 @@ function Conversation({ items }: { items: TranscriptItem[] }) {
             className="conversation-row"
             style={{ transform: `translateY(${row.start}px)` }}
           >
-            <TranscriptRow item={items[row.index]} />
+            <TranscriptRow item={items[row.index]} onDecide={onDecide} />
           </div>
         ))}
       </div>
@@ -373,7 +387,15 @@ function Conversation({ items }: { items: TranscriptItem[] }) {
   );
 }
 
-function TranscriptRow({ item }: { item: TranscriptItem }) {
+function TranscriptRow({ item, onDecide }: { item: TranscriptItem; onDecide: DecidePermission }) {
+  // A click is not a resolution: the buttons stay until `permission_resolved` arrives, so this only
+  // stops a double submit from asking the same question twice.
+  const [answered, setAnswered] = useState<Decision | null>(null);
+  const decide = (decision: Decision) => {
+    setAnswered(decision);
+    onDecide(item.kind === "permission" ? item.requestId : "", decision);
+  };
+
   switch (item.kind) {
     case "message":
       return (
@@ -421,6 +443,43 @@ function TranscriptRow({ item }: { item: TranscriptItem }) {
             </span>
           </header>
           <pre className="bubble-code">{item.patch}</pre>
+        </article>
+      );
+    case "permission":
+      return (
+        <article className="permission-card" data-testid="transcript-permission">
+          <header className="permission-head">
+            <span className="permission-title">{item.title}</span>
+            <span
+              className={`permission-state ${item.decision ? `is-${item.decision}` : "is-pending"}`}
+              data-testid="transcript-permission-state"
+            >
+              {item.decision ?? "pending"}
+            </span>
+          </header>
+          {item.detail ? <p className="permission-detail">{item.detail}</p> : null}
+          {item.decision === null ? (
+            <div className="permission-actions">
+              <button
+                type="button"
+                className="input primary"
+                data-testid="permission-approve"
+                disabled={answered !== null}
+                onClick={() => decide("approve")}
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                className="input"
+                data-testid="permission-deny"
+                disabled={answered !== null}
+                onClick={() => decide("deny")}
+              >
+                Deny
+              </button>
+            </div>
+          ) : null}
         </article>
       );
     case "notice":

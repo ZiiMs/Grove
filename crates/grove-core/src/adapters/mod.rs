@@ -11,6 +11,7 @@ pub mod mock;
 pub mod opencode;
 pub mod pi;
 pub mod registry;
+pub mod support;
 
 pub use acp::AcpAdapter;
 pub use claude::ClaudeAdapter;
@@ -155,6 +156,24 @@ pub enum AdapterError {
 #[async_trait::async_trait]
 pub trait HarnessAdapter: Send + Sync {
     fn id(&self) -> HarnessId;
+
+    /// Human-readable name: the doctor's row, and anywhere a list would otherwise show a raw id.
+    ///
+    /// Defaulted to the id so a new adapter needs no label switch anywhere in Grove; every shipped
+    /// adapter overrides it. This is the one place a harness's name lives.
+    fn display_name(&self) -> &'static str {
+        self.id().as_str()
+    }
+
+    /// Where this harness keeps its own skills, relative to the user's home directory.
+    ///
+    /// `None` means "this harness has no skills directory of its own": the in-process mock, and ACP,
+    /// which is a protocol rather than a product. The skills dropdown is built from the registry, so
+    /// declaring one here is all a new adapter does to appear in it.
+    fn skills_dir(&self) -> Option<&'static str> {
+        None
+    }
+
     fn capabilities(&self) -> Capabilities;
     fn detect(&self, deps: &AdapterDeps) -> Detection;
     async fn start(

@@ -1,0 +1,10 @@
+{
+  "harness": "claude",
+  "cwd": "C:/work/grove",
+  "model": "claude-sonnet-4",
+  "title": "Review the diff",
+  "config": {
+    "command": "C:/tools/claude.cmd",
+    "args": ["--permission-mode", "acceptEdits"]
+  }
+}

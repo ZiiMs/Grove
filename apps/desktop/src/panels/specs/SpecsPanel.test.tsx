@@ -1,5 +1,5 @@
 import type { SpecDoc, SpecGraph, SpecNode } from "@grove/contract";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GroveBridge } from "../../ipc/bridge";
@@ -139,6 +139,38 @@ describe("SpecsPanel", () => {
 
     expect(screen.getByText("C:/demo/grove")).toBeInTheDocument();
     expect(invoke.mock.calls.some(([command]) => command === "spec_index")).toBe(true);
+  });
+
+  it("re-indexes when the core announces a spec change", async () => {
+    const { bridge, invoke } = createSpecBridge();
+    renderPanel(bridge);
+    await screen.findByRole("heading", { name: "goal-and-requirements" });
+    const indexed = invoke.mock.calls.filter(([command]) => command === "spec_index").length;
+
+    act(() => {
+      bridge.emit("grove://spec-changed", { payload: { paths: ["goal.md"] } });
+    });
+
+    await waitFor(() =>
+      expect(invoke.mock.calls.filter(([command]) => command === "spec_index").length).toBe(
+        indexed + 1,
+      ),
+    );
+  });
+
+  it("drops a malformed spec-changed payload instead of re-indexing", async () => {
+    const { bridge, invoke } = createSpecBridge();
+    renderPanel(bridge);
+    await screen.findByRole("heading", { name: "goal-and-requirements" });
+    const indexed = invoke.mock.calls.filter(([command]) => command === "spec_index").length;
+
+    act(() => {
+      bridge.emit("grove://spec-changed", { payload: { paths: "not-a-list" } });
+      bridge.emit("grove://spec-changed", null);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(invoke.mock.calls.filter(([command]) => command === "spec_index").length).toBe(indexed);
   });
 
   it("opens a doc, renders its markdown safely, and walks a link to another spec", async () => {

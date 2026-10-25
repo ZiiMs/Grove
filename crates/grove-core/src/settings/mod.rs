@@ -235,9 +235,50 @@ pub struct SettingsService {
     store: Arc<Store>,
 }
 
+/// The settings-backed command source the session manager resolves `config.command` from.
+///
+/// A harness path configured here is a promise: the next session of that harness launches it, unless
+/// the request itself named a command. See `sessions::manager::AdapterConfigSource` for the rule.
+pub struct HarnessPathSource {
+    settings: Arc<SettingsService>,
+}
+
+impl HarnessPathSource {
+    pub fn new(settings: Arc<SettingsService>) -> Self {
+        Self { settings }
+    }
+}
+
+impl crate::sessions::manager::AdapterConfigSource for HarnessPathSource {
+    fn command_for(&self, harness: &str) -> Option<String> {
+        self.settings.harness_command(harness)
+    }
+}
+
 impl SettingsService {
     pub fn new(store: Arc<Store>) -> Self {
         Self { store }
+    }
+
+    /// The configured binary for one harness, or `None` when nothing is configured.
+    ///
+    /// An unreadable settings row reads as "nothing configured": a broken document must not stop
+    /// every session from starting, and the doctor is where the problem is explained.
+    pub fn harness_command(&self, harness: &str) -> Option<String> {
+        match self.get() {
+            Ok(settings) => settings
+                .harness_paths
+                .get(harness)
+                .map(|path| path.trim().to_string())
+                .filter(|path| !path.is_empty()),
+            Err(error) => {
+                tracing::warn!(
+                    target: "grove::settings",
+                    "cannot read harness paths for {harness}: {error}"
+                );
+                None
+            }
+        }
     }
 
     /// The stored document, with defaults for missing keys and unknown keys preserved.
@@ -284,6 +325,33 @@ mod tests {
         );
         assert_eq!(current.theme, Theme::System);
         assert!(current.harness_paths.is_empty());
+    }
+
+    #[test]
+    fn a_configured_harness_path_is_the_command_a_session_launches() {
+        let (service, _store) = service();
+        assert_eq!(
+            service.harness_command("claude"),
+            None,
+            "nothing configured yet"
+        );
+
+        service
+            .set(patch(serde_json::json!({
+                "harnessPaths": { "claude": "  C:/tools/claude.cmd  " },
+            })))
+            .unwrap();
+
+        assert_eq!(
+            service.harness_command("claude").as_deref(),
+            Some("C:/tools/claude.cmd"),
+            "the path is trimmed and reaches the session's config.command"
+        );
+        assert_eq!(
+            service.harness_command("codex"),
+            None,
+            "another harness keeps its own default binary"
+        );
     }
 
     #[test]

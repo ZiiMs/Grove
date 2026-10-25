@@ -6,6 +6,7 @@ import type {
 } from "@grove/contract";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useBridge } from "../../ipc/context";
+import { errorText } from "../../ipc/errors";
 import { PanelFrame } from "../PanelFrame";
 import "./skills.css";
 
@@ -14,14 +15,6 @@ interface InstallState {
   message: string;
 }
 
-function errorMessage(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
 
 /**
  * Browse public GitHub skill catalogs, preview a skill, and install it into the harness you use.
@@ -49,7 +42,7 @@ export function SkillsPanel() {
       try {
         setCatalog(await bridge.invoke("skill_catalog", { refresh }));
       } catch (error) {
-        setCatalogError(errorMessage(error));
+        setCatalogError(errorText(error));
       } finally {
         setLoading(false);
       }
@@ -92,7 +85,7 @@ export function SkillsPanel() {
           }),
         );
       } catch (error) {
-        setPreviewError(errorMessage(error));
+        setPreviewError(errorText(error));
       }
     },
     [bridge],
@@ -117,7 +110,7 @@ export function SkillsPanel() {
     } catch (error) {
       setInstallState({
         kind: "error",
-        message: `Install failed: ${errorMessage(error)}`,
+        message: `Install failed: ${errorText(error)}`,
       });
     } finally {
       setInstalling(false);
