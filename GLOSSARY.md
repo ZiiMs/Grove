@@ -82,7 +82,8 @@ tool result. The card supports single- and multi-select options, per-choice note
 A row in `sessions` plus, while it is running, one in-process agent and one pump task
 (`sessions::manager`). Sessions are rows, not processes: the transcript is in SQLite, a restart marks a
 live row `exited`, and `session_resume` relaunches the agent with the stored resume token or a replay
-of the conversation tail. The conversation survives a quit.
+of the conversation tail. Sending the next message resumes a stopped session automatically; the
+conversation survives a quit.
 
 ## Spec graph
 

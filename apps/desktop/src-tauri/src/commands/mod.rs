@@ -13,12 +13,14 @@ pub mod settings;
 pub mod skills;
 pub mod specs;
 
-use tauri::ipc::Invoke;
-
-pub fn handlers<R: tauri::Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
+pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
         app::app_info,
         app::app_set_project_root,
+        app::app_window_minimize,
+        app::app_window_toggle_maximize,
+        app::app_window_is_maximized,
+        app::app_window_close,
         git::git_status,
         git::git_branches,
         git::git_worktrees,

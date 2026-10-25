@@ -174,9 +174,6 @@ export default function App() {
         awaitingCount={awaiting.length}
         onGit={onGit}
         onAwaiting={onAwaiting}
-        onNewSession={() =>
-          newSessionFor(activeProject?.id ?? null, activeWorktree?.path ?? null)
-        }
       />
 
       <nav className="mobile-nav" role="tablist" aria-label="Workspace pane">

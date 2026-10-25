@@ -254,6 +254,7 @@ export function createFakeBridge(
   const settings: Settings = structuredClone(seed.settings ?? DEFAULT_SETTINGS);
   /** The project root the fake core is looking at (`app_set_project_root` moves it). */
   let projectRoot = seed.projectRoot ?? "C:/projects/grove";
+  let windowMaximized = false;
   const secretStatuses = new Map<string, SecretStatus>(
     Object.entries(seed.secretStatuses ?? {}),
   );
@@ -353,6 +354,16 @@ export function createFakeBridge(
         projectRoot = path;
         bridge.emit("grove://spec-changed", { payload: { paths: [] } });
         return path as CommandMap[K]["result"];
+      }
+      if (command === "app_window_minimize" || command === "app_window_close") {
+        return null as CommandMap[K]["result"];
+      }
+      if (command === "app_window_is_maximized") {
+        return windowMaximized as CommandMap[K]["result"];
+      }
+      if (command === "app_window_toggle_maximize") {
+        windowMaximized = !windowMaximized;
+        return windowMaximized as CommandMap[K]["result"];
       }
       if (command === "provider_list") {
         return providers as CommandMap[K]["result"];

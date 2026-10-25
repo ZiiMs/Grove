@@ -12,4 +12,9 @@ export interface AppCommands {
    * discovery and the project-local skills target all follow. Returns the root now in force.
    */
   app_set_project_root: { args: { path: string }; result: string };
+  /** Custom window chrome: the native frame is removed, so the titlebar drives these. */
+  app_window_minimize: { args: Record<string, never>; result: null };
+  app_window_toggle_maximize: { args: Record<string, never>; result: boolean };
+  app_window_is_maximized: { args: Record<string, never>; result: boolean };
+  app_window_close: { args: Record<string, never>; result: null };
 }

@@ -9,6 +9,14 @@ const PATHS: Record<string, ReactNode> = {
   chevronRight: <path d="M6.5 4 10.5 8 6.5 12" />,
   chevronLeft: <path d="M9.5 4 5.5 8 9.5 12" />,
   plus: <path d="M8 3.5v9M3.5 8h9" />,
+  minimize: <path d="M3.5 8.5h9" />,
+  maximize: <rect x="3.5" y="3.5" width="9" height="9" />,
+  restore: (
+    <>
+      <path d="M5.4 5.4h7.2v7.2H5.4z" />
+      <path d="M3.4 3.4h7.2v7.2" />
+    </>
+  ),
   x: <path d="M4.6 4.6l6.8 6.8M11.4 4.6l-6.8 6.8" />,
   terminal: (
     <>

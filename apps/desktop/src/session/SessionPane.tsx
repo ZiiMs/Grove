@@ -66,10 +66,8 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
   const events = useSessionStore((state) => state.events);
   const context = useSessionStore((state) => state.context);
   const openSettings = useUiStore((state) => state.openSettings);
-  const resume = useSessionStore((state) => state.resume);
   const respondPermission = useSessionStore((state) => state.respondPermission);
   const respondQuestion = useSessionStore((state) => state.respondQuestion);
-  const busy = useSessionStore((state) => state.busy);
   const error = useSessionStore((state) => state.error);
   const applyContext = useSessionStore((state) => state.applyContext);
   const notify = useUiStore((state) => state.notify);
@@ -80,24 +78,12 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
     () => items.some((item) => item.kind === "question" && item.answers === null),
     [items],
   );
-  const live = detail ? detail.status !== "exited" && detail.status !== "error" : false;
   const working = turnInFlight(summary ?? detail);
   const visual = sessionVisual(summary ?? detail);
   const provider = detail ? providerMeta(detail.provider) : null;
 
   const headerActions = (
     <div className="sh-right">
-      {detail && !live ? (
-        <button
-          className="btn-ghost sm"
-          type="button"
-          disabled={busy}
-          onClick={() => void resume(bridge)}
-          title="Resume this session"
-        >
-          Resume
-        </button>
-      ) : null}
       <button
         className="icon-btn"
         type="button"
@@ -863,7 +849,6 @@ function Composer({
   const dequeue = useSessionStore((state) => state.dequeue);
   const cancel = useSessionStore((state) => state.cancel);
   const switchProvider = useSessionStore((state) => state.switchProvider);
-  const resume = useSessionStore((state) => state.resume);
   const setThinking = useSessionStore((state) => state.setThinking);
   const busy = useSessionStore((state) => state.busy);
   const prefs = useWorkspaceStore((state) => state.prefs);
@@ -901,7 +886,6 @@ function Composer({
       setDraft(sessionId, "");
       return;
     }
-    if (!live) return;
     if (await send(bridge, draft)) setDraft(sessionId, "");
   };
 
@@ -968,7 +952,7 @@ function Composer({
               locked
                 ? "Answer the question in the transcript to continue…"
                 : isStopped
-                  ? "Type a message, then resume this session to send…"
+                  ? "Continue where this session left off…"
                   : "Ask for the next change…"
             }
             value={draft}
@@ -990,7 +974,6 @@ function Composer({
               id="model-select"
               value={currentModel}
               disabled={busy}
-              title={isStopped ? "Pick an available model to resume this session" : undefined}
               onChange={(event) => void changeModel(event.target.value)}
             >
               {!known ? <option value={currentModel}>{currentModel}</option> : null}
@@ -1028,21 +1011,10 @@ function Composer({
                   Stop
                 </button>
               ) : null}
-              {isStopped ? (
-                <button
-                  className="btn-ghost sm"
-                  type="button"
-                  disabled={busy}
-                  aria-label="Resume session"
-                  onClick={() => void resume(bridge)}
-                >
-                  Resume
-                </button>
-              ) : null}
               <button
                 className="btn-send"
                 type="button"
-                disabled={!typed || isStopped || locked}
+                disabled={!typed || locked}
                 onClick={() => void submit()}
                 aria-label={working ? "Queue this message for the next turn" : "Send message"}
               >

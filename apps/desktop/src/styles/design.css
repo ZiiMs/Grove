@@ -119,8 +119,9 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 /* ---------- shell ---------- */
 .app{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;height:100dvh}
 
-.titlebar{display:flex;align-items:center;gap:14px;height:52px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--panel)}
-.brand{display:flex;align-items:center;gap:8px;flex:none}
+.titlebar{display:flex;align-items:center;gap:14px;height:46px;padding:0 0 0 12px;border-bottom:1px solid var(--line);background:var(--panel);user-select:none}
+.brand{display:flex;align-items:center;gap:8px;flex:none;align-self:stretch;cursor:default}
+.titlebar-drag{flex:1;align-self:stretch;min-width:24px}
 .brand-mark{
   width:26px;height:26px;border-radius:7px;display:grid;place-items:center;
   border:1px solid color-mix(in srgb, var(--t-accent) 36%, var(--line));background:var(--jade-soft);color:var(--jade);
@@ -141,7 +142,12 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .gc-diff .del{color:var(--red)}
 .gc-diff.clean{color:var(--fg-3)}
 .gc-ahead{flex:none;font-family:var(--mono);font-size:10px;color:var(--fg-3)}
-.titlebar-right{margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
+.titlebar-right{display:flex;align-items:center;gap:8px;flex:none;align-self:stretch;padding-left:4px}
+.window-controls{display:flex;align-items:stretch;flex:none;align-self:stretch;margin-left:2px}
+.window-btn{width:46px;display:grid;place-items:center;color:var(--fg-3);transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
+.window-btn:hover{background:var(--elev);color:var(--fg)}
+.window-btn:focus-visible{outline:1px solid var(--jade);outline-offset:-2px}
+.window-btn.close:hover{background:#c42b1c;color:#fff}
 .await-chip{
   display:inline-flex;align-items:center;gap:7px;padding:5px 10px;border-radius:99px;
   border:1px solid color-mix(in srgb, var(--t-warn) 38%, var(--line));background:var(--amber-soft);color:var(--amber);
@@ -815,7 +821,8 @@ dialog.settings-modal{
   .app[data-ctx="closed"] .workspace{grid-template-columns:minmax(0,1fr)}
   .panel{display:none;border:0}
   .panel.is-active{display:flex}
-  .titlebar{height:48px;gap:10px}
+  .titlebar{height:44px;gap:10px}
+  .window-btn{width:44px}
   .ctx-stub{display:none}
   .app[data-ctx="closed"] .session-head{padding-right:14px}
   .run-scroll{padding:16px 14px 26px}

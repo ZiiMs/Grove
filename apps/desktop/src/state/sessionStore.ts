@@ -86,7 +86,8 @@ export interface SessionStore extends SessionStoreData {
   respondPermission: (bridge: GroveBridge, requestId: string, decision: Decision) => Promise<void>;
   respondQuestion: (bridge: GroveBridge, requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
   setThinking: (bridge: GroveBridge, level: ThinkingLevel) => Promise<boolean>;
-  resume: (bridge: GroveBridge) => Promise<void>;
+  /** Restart a stopped session; `send` calls this automatically before the next message. */
+  resume: (bridge: GroveBridge) => Promise<boolean>;
   close: (bridge: GroveBridge) => Promise<void>;
   /** Adopt a snapshot another panel produced (the Specs panel pins and unpins). */
   applyContext: (context: SessionContext) => void;
@@ -329,6 +330,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const id = get().activeId;
     const message = text.trim();
     if (!id || !message) return false;
+    const detail = get().detail;
+    if (detail?.status === "exited" || detail?.status === "error") {
+      // The user asked to continue the conversation; starting the agent is an implementation
+      // detail, not a separate action they should have to remember.
+      if (!(await get().resume(bridge))) return false;
+    }
     set({ error: null });
     try {
       await bridge.invoke("session_send", { id, text: message });
@@ -390,15 +397,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   resume: async (bridge) => {
     const id = get().activeId;
-    if (!id) return;
+    if (!id) return false;
     set({ busy: true, error: null });
     try {
       const session = await bridge.invoke("session_resume", { id });
       await syncProjectRoot(bridge, session.cwd);
       set({ busy: false });
       await get().select(bridge, id);
+      return true;
     } catch (error) {
       set({ busy: false, error: errorText(error) });
+      return false;
     }
   },
 

@@ -33,8 +33,42 @@ pub async fn app_set_project_root(
     Ok(adopt(&state, path))
 }
 
-/// Move the project root and everything that watches it. Shared by the command above and the session
-/// commands, so creating a session and activating its tab cannot disagree.
+fn window_error(error: tauri::Error) -> IpcError {
+    IpcError::unavailable(format!("window control failed: {error}"))
+}
+
+/// Minimize the custom-titlebar window. The webview never imports Tauri's window API directly, so
+/// every window action stays behind the typed bridge and is fakeable in UI tests.
+#[tauri::command]
+pub fn app_window_minimize(window: tauri::WebviewWindow) -> IpcResult<()> {
+    window.minimize().map_err(window_error)
+}
+
+/// Toggle maximize/restore and return the state the window is in afterwards, so the titlebar can
+/// swap the maximize glyph without a second round trip.
+#[tauri::command]
+pub fn app_window_toggle_maximize(window: tauri::WebviewWindow) -> IpcResult<bool> {
+    let maximized = window.is_maximized().map_err(window_error)?;
+    if maximized {
+        window.unmaximize().map_err(window_error)?;
+    } else {
+        window.maximize().map_err(window_error)?;
+    }
+    // The resize event will confirm the platform's final state; the optimistic answer keeps the
+    // glyph responsive when Windows completes the transition asynchronously.
+    Ok(!maximized)
+}
+
+#[tauri::command]
+pub fn app_window_is_maximized(window: tauri::WebviewWindow) -> IpcResult<bool> {
+    window.is_maximized().map_err(window_error)
+}
+
+#[tauri::command]
+pub fn app_window_close(window: tauri::WebviewWindow) -> IpcResult<()> {
+    window.close().map_err(window_error)
+}
+
 pub(crate) fn adopt(state: &AppState, path: impl AsRef<Path>) -> String {
     let requested = path.as_ref();
     // A restored session can point at a worktree that has since been deleted. Moving the project

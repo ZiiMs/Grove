@@ -46,9 +46,10 @@ npm run tauri dev    # builds the Rust shell and opens the desktop window
 1. **Add a project.** `Add project` in the tree opens the folder picker; a git repository is detected
    and its default branch and remote are filled in. A plain folder is added as a workspace with no
    branches or diffs.
-2. **Create a session.** `New session` picks the project (or `Chat — no project`), an optional model
-   (the provider follows from it), and optionally creates a worktree on a new branch. Add a provider
-   key in Settings first; the offline provider is only registered in preview and test builds.
+2. **Create a session.** Use the `+` beside `Chats`, a project or a worktree. The dialog picks the
+   project (or `Chat - no project`), an optional model (the provider follows from it), and optionally
+   creates a worktree on a new branch. Add a provider key in Settings first; the offline provider is
+   only registered in preview and test builds.
 3. **Send a message.** Type into the composer. The normalized transcript streams deltas, tool calls,
    results and usage as the runtime emits them, and is written to SQLite as it arrives. A turn that
    asks permission appears as a card in the transcript; the tree and titlebar show that the session
@@ -63,8 +64,8 @@ npm run tauri dev    # builds the Rust shell and opens the desktop window
    stage/commit; a file opens the read-only diff. `Commit & open PR` runs `gh pr create` (an
    authenticated `gh` is required); the PR can be opened ready or as a draft.
 7. **Restart and resume.** Quit the window and launch it again. Sessions are rows, not processes: the
-   open session comes back marked `exited` with its transcript intact. Press `Resume` and continue the
-   same conversation — the runtime receives the resume token it stored, and the transcript keeps both
+   open session comes back marked `exited` with its transcript intact. Send the next message and it
+   resumes by itself - the runtime receives the resume token it stored, and the transcript keeps both
    turns.
 
 The tree footer shows the session and awaiting counts, and the status bar carries the version from the
@@ -134,8 +135,9 @@ The cross-cutting Rust suites that pin the release promise:
 
 Automated tests cover the core and the webview in isolation; the window itself needs a human:
 
-- [ ] `npm run tauri dev` opens the window with the titlebar (Grove, git chip, awaiting chip,
-      New session), the project tree, the centre conversation, the context column and the status bar.
+- [ ] `npm run tauri dev` opens a window with no native frame, a custom titlebar (Grove, git chip,
+      awaiting chip and minimize/maximize/close), the project tree, the centre conversation, the
+      context column and the status bar. Dragging the titlebar moves the window.
 - [ ] `Add project` detects a git folder's branches/remote and adds a plain folder without git.
 - [ ] A mock session can be created (with or without a new worktree), given a message, and streams a
       reply; the tree shows it under its project or `Chats`.
@@ -147,8 +149,8 @@ Automated tests cover the core and the webview in isolation; the window itself n
       pinned chip.
 - [ ] Settings switches all seven themes in dark and light, installs/removes a skill, adds or removes a
       provider key, and probes an MCP server.
-- [ ] Quitting and relaunching leaves the session `exited` with its transcript; `Resume` continues it
-      and the second turn appears after the first.
+- [ ] Quitting and relaunching leaves the session `exited` with its transcript; sending a message
+      resumes it and the second turn appears after the first.
 - [ ] At 390px wide the window shows Navigation · Session · Context tabs with no horizontal scroll.
 
 ## Performance notes

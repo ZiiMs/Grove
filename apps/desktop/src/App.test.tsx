@@ -213,7 +213,7 @@ describe("redesigned shell", () => {
 
   it("creates a session from the new-session dialog", async () => {
     const bridge = await ready();
-    await userEvent.click(screen.getByRole("button", { name: /^New session$/ }));
+    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
     const title = screen.getByLabelText("What should this session work on?");
     await userEvent.type(title, "Add the session tabs");
     await userEvent.click(screen.getByRole("button", { name: "Start session" }));
@@ -224,11 +224,11 @@ describe("redesigned shell", () => {
     });
   });
 
-  it("lets you draft while a stopped session waits for resume", async () => {
-    const stopped = { ...session, status: "exited" as const };
+  it("auto-resumes a stopped session when you send", async () => {
+    const stopped = { ...session, status: "exited" as const, awaiting: false };
     const bridge = renderApp({
       sessions: [fakeSummary(stopped, events.length)],
-      details: { [session.id]: { ...detail, status: "exited" } },
+      details: { [session.id]: { ...detail, status: "exited", awaiting: false } },
     });
     await screen.findByRole("heading", { name: "OAuth device flow" });
 
@@ -236,9 +236,27 @@ describe("redesigned shell", () => {
     expect(composer).toBeEnabled();
     await userEvent.type(composer, "Try the OpenCode models");
     expect(composer).toHaveValue("Try the OpenCode models");
+    expect(screen.queryByRole("button", { name: "Resume session" })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Resume session" }));
+    await userEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(bridge.invocations).toContain("session_resume"));
+    await waitFor(() => expect(bridge.invocations).toContain("session_send"));
+  });
+
+  it("drives the custom window controls", async () => {
+    const bridge = await ready();
+
+    await userEvent.click(screen.getByRole("button", { name: "Minimize window" }));
+    expect(bridge.invocations).toContain("app_window_minimize");
+
+    await userEvent.click(screen.getByRole("button", { name: "Maximize window" }));
+    await waitFor(() => expect(bridge.invocations).toContain("app_window_toggle_maximize"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Restore window" })).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Close window" }));
+    expect(bridge.invocations).toContain("app_window_close");
   });
 
   it("sends immediately from a ready session instead of queueing", async () => {

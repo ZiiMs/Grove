@@ -243,7 +243,9 @@ so the card cannot stay interactive after the agent has gone.
 
 **Restart survival.** Sessions are rows, not processes. `session_resume(id)` restarts the agent with
 the stored `resume_token` when the provider offers one, otherwise Grove replays the conversation tail
-as context — the log is already local, so the plan and history survive either way.
+as context — the log is already local, so the plan and history survive either way. A stopped session
+resumes implicitly when its next message is sent; the composer has no separate Resume action, so the
+user continues the conversation instead of managing its process state.
 
 **Session knowledge.** Start, resume and provider switch assemble `StartContext.context_files` from
 the session's pinned specs (in pin order) followed by its current plan, read fresh from the project's
@@ -339,6 +341,10 @@ Two channels, both typed in `packages/contract`:
    inside `grove://session-event`, so there is one stream to persist, order and replay. Every channel
    above has a subscriber in `apps/desktop/src/ipc/events.ts` — an event nobody listens to is a bug.
 
+**App/window commands.** `app_window_minimize`, `app_window_toggle_maximize`,
+`app_window_is_maximized` and `app_window_close` drive the custom titlebar; `app_info` and
+`app_set_project_root` carry the rest of the shell state.
+
 **Provider commands.** `provider_list` (catalogue), `provider_statuses` (credential readiness),
 `provider_key_set` / `provider_key_delete` (keychain writes; neither returns a value) and
 `provider_models` (asks the vendor which models the key can reach). `provider_models` powers both the
@@ -363,9 +369,13 @@ renders the code beside the message; no panel formats a rejection itself.
 The shipped shell is the three-column workspace from `design-reference/`; ADR 0002 records why the
 seven-panel shell and the spec/plan editors were retired.
 
-- **Shell:** titlebar · 272px project tree · always-mounted chat · 304px context column
+- **Shell:** custom titlebar · 272px project tree · always-mounted chat · 304px context column
   (Git · Plan · Spec) · status bar. Below 900px the three columns become Navigation · Session ·
   Context tabs. The centre never swaps for another product surface.
+- **Window chrome:** the native decorations are off. The titlebar's marked drag regions move the
+  window; its minimize, maximize/restore and close buttons call the typed `app_window_*` commands, so
+  the webview still never imports Tauri's window API and the controls remain fakeable. New sessions
+  start from the `+` actions in the tree, not from the titlebar.
 - **Transcript:** `@tanstack/react-virtual` mounts only the rows in view, so a 10 000-event session
   costs the same as a short one. Tool rows, diffs, permission cards, and inline question cards are
   transcript rows, not separate panels.
