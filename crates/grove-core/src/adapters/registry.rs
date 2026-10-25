@@ -4,12 +4,17 @@
 //! list is returned as trait objects so sessions never know a concrete type.
 
 use super::claude::ClaudeAdapter;
+use super::codex::CodexAdapter;
 use super::mock::MockAdapter;
 use super::HarnessAdapter;
 use std::sync::Arc;
 
 pub fn builtin_registry() -> Vec<Arc<dyn HarnessAdapter>> {
-    vec![Arc::new(MockAdapter), Arc::new(ClaudeAdapter::default())]
+    vec![
+        Arc::new(MockAdapter),
+        Arc::new(ClaudeAdapter::default()),
+        Arc::new(CodexAdapter::default()),
+    ]
 }
 
 #[cfg(test)]

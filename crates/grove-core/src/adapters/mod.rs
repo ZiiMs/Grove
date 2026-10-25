@@ -5,10 +5,12 @@
 //! [`registry::builtin_registry`]; nothing else in Grove changes.
 
 pub mod claude;
+pub mod codex;
 pub mod mock;
 pub mod registry;
 
 pub use claude::ClaudeAdapter;
+pub use codex::CodexAdapter;
 
 use crate::paths::AppPaths;
 use crate::secrets::SecretStore;

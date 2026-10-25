@@ -4,5 +4,6 @@
 #![allow(dead_code)]
 
 pub mod claude_fixture;
+pub mod codex_fixture;
 pub mod conformance;
 pub mod runtime;
