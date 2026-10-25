@@ -28,13 +28,16 @@ pub async fn skill_preview(
 }
 
 /// Per-harness skill directories plus project-local `.agents/skills`, each with an `exists` flag.
+///
+/// An absent `projectRoot` means "the project Grove is looking at": the local target follows the
+/// active session instead of resolving against the app's own directory.
 #[tauri::command]
 pub async fn skill_targets(
     state: tauri::State<'_, AppState>,
     project_root: Option<String>,
 ) -> IpcResult<Vec<SkillTarget>> {
     let project_root = project_root.as_deref().map(Path::new);
-    Ok(state.core.skills.targets(project_root))
+    Ok(state.core.skill_targets(project_root))
 }
 
 /// Copy a skill folder into the chosen target. Refuses traversal and symlink escapes in the core.
@@ -46,11 +49,16 @@ pub async fn skill_install(
     target: String,
     project_root: Option<String>,
 ) -> IpcResult<InstallResult> {
+    // Same default as `skill_targets`: without an explicit root the project-local destination is the
+    // one the dropdown just showed.
+    let project_root = project_root
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.core.project_root());
     let request = InstallRequest {
         source,
         path,
         target,
-        project_root: project_root.map(PathBuf::from),
+        project_root: Some(project_root),
     };
     Ok(state.core.skills.install(request).await?)
 }

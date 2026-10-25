@@ -2,6 +2,7 @@ import type { Plan, SessionSummary } from "@grove/contract";
 import MarkdownIt from "markdown-it";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useBridge } from "../../ipc/context";
+import { errorText } from "../../ipc/errors";
 import { subscribeToPlanChanged } from "../../ipc/events";
 import { useSessionStore } from "../../state/sessionStore";
 import { PanelFrame } from "../PanelFrame";
@@ -34,14 +35,6 @@ function isConflict(error: unknown): boolean {
   );
 }
 
-function messageOf(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null && "message" in error) {
-    return String((error as { message: unknown }).message);
-  }
-  return String(error);
-}
 
 export function PlanPanel() {
   const bridge = useBridge();
@@ -85,7 +78,7 @@ export function PlanPanel() {
         });
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(messageOf(err));
+        if (!cancelled) setError(errorText(err));
       });
     return () => {
       cancelled = true;
@@ -114,7 +107,7 @@ export function PlanPanel() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(messageOf(err));
+        setError(errorText(err));
         setLoading(false);
       });
     return () => {
@@ -193,8 +186,8 @@ export function PlanPanel() {
       setConflict(null);
       setCopyNote(null);
     } catch (err: unknown) {
-      if (isConflict(err)) setConflict(messageOf(err));
-      else setError(messageOf(err));
+      if (isConflict(err)) setConflict(errorText(err));
+      else setError(errorText(err));
     } finally {
       setSaving(false);
     }

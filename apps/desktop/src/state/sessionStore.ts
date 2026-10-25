@@ -1,4 +1,5 @@
 import type {
+  Decision,
   HarnessEvent,
   HarnessInfo,
   SessionContext,
@@ -7,6 +8,7 @@ import type {
 } from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
+import { errorText } from "../ipc/errors";
 
 /**
  * Session domain state: the list, the open tabs, the active transcript, and the commands that move
@@ -22,6 +24,12 @@ export interface CreateSessionInput {
   cwd?: string | null;
   model?: string | null;
   title?: string | null;
+  /**
+   * Adapter-specific config (`config.command`, `config.args`). No form field sets it yet, but the
+   * command carries it: it is how a caller — a test, or a future "ACP command" field — launches a
+   * harness other than its default binary. Omitted when undefined, so the request stays minimal.
+   */
+  config?: unknown;
 }
 
 interface SessionStoreData {
@@ -53,6 +61,12 @@ export interface SessionStore extends SessionStoreData {
   /** Returns whether the message was accepted, so the panel knows when to clear the compose box. */
   send: (bridge: GroveBridge, text: string) => Promise<boolean>;
   cancel: (bridge: GroveBridge) => Promise<void>;
+  /**
+   * Answer a pending permission request for the active session. The transcript does not change here:
+   * the buttons disappear when the harness's `permission_resolved` event arrives, so the UI shows
+   * what the harness actually accepted.
+   */
+  respondPermission: (bridge: GroveBridge, requestId: string, decision: Decision) => Promise<void>;
   resume: (bridge: GroveBridge) => Promise<void>;
   close: (bridge: GroveBridge) => Promise<void>;
   /** Adopt a snapshot another panel produced (the Specs panel pins and unpins). */
@@ -80,17 +94,25 @@ const initial: SessionStoreData = {
   error: null,
 };
 
-export function errorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error) {
-    return String((error as { message: unknown }).message);
-  }
-  return String(error);
-}
 
 function summaryOf(detail: SessionDetail): SessionSummary {
   const { events, ...session } = detail;
   return { ...session, eventCount: events.length };
+}
+
+/**
+ * A session's working directory *is* the project: tell the core so the spec graph, the plan mirror,
+ * MCP discovery and the project-local skills target follow the session the user is looking at instead
+ * of the app's own directory. Best-effort: a core that refuses must not block opening a session.
+ */
+async function syncProjectRoot(bridge: GroveBridge, cwd: string): Promise<void> {
+  const path = cwd.trim();
+  if (!path) return;
+  try {
+    await bridge.invoke("app_set_project_root", { path });
+  } catch {
+    // The session still opens; the panels keep indexing whatever the core last accepted.
+  }
 }
 
 /** The knowledge snapshot is a bonus for the header: a failure must not block opening a session. */
@@ -119,15 +141,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       ]);
       set({ harnesses, sessions, loading: false });
     } catch (error) {
-      set({ loading: false, error: errorMessage(error) });
+      set({ loading: false, error: errorText(error) });
     }
   },
 
   create: async (bridge, input) => {
     set({ busy: true, error: null });
     try {
-      const detail = await bridge.invoke("session_create", { req: input });
+      const { config, ...rest } = input;
+      const req = config === undefined ? rest : { ...rest, config };
+      const detail = await bridge.invoke("session_create", { req });
       const context = await contextOf(bridge, detail.id);
+      await syncProjectRoot(bridge, detail.cwd);
       set((state) => ({
         busy: false,
         detail,
@@ -138,7 +163,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         sessions: [summaryOf(detail), ...state.sessions.filter((row) => row.id !== detail.id)],
       }));
     } catch (error) {
-      set({ busy: false, error: errorMessage(error) });
+      set({ busy: false, error: errorText(error) });
     }
   },
 
@@ -147,6 +172,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     try {
       const detail = await bridge.invoke("session_get", { id });
       const context = await contextOf(bridge, id);
+      // Activating a tab is choosing that project: this is the call that keeps the Specs, MCP and
+      // Skills panels pointed at the session the user is actually looking at.
+      await syncProjectRoot(bridge, detail.cwd);
       set((state) => ({
         busy: false,
         activeId: id,
@@ -156,7 +184,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         context,
       }));
     } catch (error) {
-      set({ busy: false, error: errorMessage(error) });
+      set({ busy: false, error: errorText(error) });
     }
   },
 
@@ -194,7 +222,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       await bridge.invoke("session_send", { id, text: message });
       return true;
     } catch (error) {
-      set({ error: errorMessage(error) });
+      set({ error: errorText(error) });
       return false;
     }
   },
@@ -206,7 +234,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     try {
       await bridge.invoke("session_cancel", { id });
     } catch (error) {
-      set({ error: errorMessage(error) });
+      set({ error: errorText(error) });
+    }
+  },
+
+  respondPermission: async (bridge, requestId, decision) => {
+    const id = get().activeId;
+    if (!id) return;
+    set({ error: null });
+    try {
+      await bridge.invoke("session_respond_permission", { id, requestId, decision });
+    } catch (error) {
+      set({ error: errorText(error) });
     }
   },
 
@@ -215,11 +254,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (!id) return;
     set({ busy: true, error: null });
     try {
-      await bridge.invoke("session_resume", { id });
+      const session = await bridge.invoke("session_resume", { id });
+      await syncProjectRoot(bridge, session.cwd);
       set({ busy: false });
       await get().select(bridge, id);
     } catch (error) {
-      set({ busy: false, error: errorMessage(error) });
+      set({ busy: false, error: errorText(error) });
     }
   },
 
@@ -232,7 +272,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       set({ busy: false });
       await get().select(bridge, id);
     } catch (error) {
-      set({ busy: false, error: errorMessage(error) });
+      set({ busy: false, error: errorText(error) });
     }
   },
 
@@ -248,7 +288,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const context = await bridge.invoke("session_refresh_context", { id });
       set({ busy: false, context });
     } catch (error) {
-      set({ busy: false, error: errorMessage(error) });
+      set({ busy: false, error: errorText(error) });
     }
   },
 
@@ -269,7 +309,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ),
       }));
     } catch (error) {
-      set({ busy: false, error: errorMessage(error) });
+      set({ busy: false, error: errorText(error) });
     }
   },
 

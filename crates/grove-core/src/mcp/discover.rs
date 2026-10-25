@@ -30,7 +30,7 @@ struct SourceSpec {
 pub(crate) fn discover(service: &McpService) -> McpDiscovery {
     let config = service.config();
     let mut sources = Vec::new();
-    let project = super::project_root(config.project_root.as_deref());
+    let project = service.project_root();
     let home = super::home_dir(config.home.as_deref());
 
     if let Some(project) = &project {

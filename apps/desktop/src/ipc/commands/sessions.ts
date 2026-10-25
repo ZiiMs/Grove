@@ -1,5 +1,6 @@
 import type {
   CreateSessionRequest,
+  Decision,
   HarnessInfo,
   Session,
   SessionDetail,
@@ -19,6 +20,15 @@ export interface SessionsCommands {
   /** `null` is what a Rust `IpcResult<()>` serialises to. */
   session_send: { args: { id: string; text: string }; result: null };
   session_cancel: { args: { id: string }; result: null };
+  /**
+   * Answer a pending permission request. The adapter owns the protocol (Codex's approval vocabulary,
+   * ACP's permission outcome); the resolution arrives as a `permission_resolved` event, which is what
+   * removes the buttons — this command returns nothing to render.
+   */
+  session_respond_permission: {
+    args: { id: string; requestId: string; decision: Decision };
+    result: null;
+  };
   session_close: { args: { id: string }; result: null };
   session_resume: { args: { id: string }; result: Session };
 }

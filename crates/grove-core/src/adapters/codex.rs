@@ -41,9 +41,12 @@
 //! appended, which is how a user points Grove at a wrapper and how every test points it at
 //! `fixtures/harnesses/codex_fake.mjs`.
 
+use super::support::{
+    command_from_config, find_on_path, kill_process_tree, render_prompt, truncate,
+};
 use super::{
-    AdapterDeps, AdapterError, Capabilities, ContextDoc, Detection, HarnessAdapter, HarnessId,
-    HarnessSession, ResumeToken, StartContext, UserInput,
+    AdapterDeps, AdapterError, Capabilities, Detection, HarnessAdapter, HarnessId, HarnessSession,
+    ResumeToken, StartContext, UserInput,
 };
 use crate::sessions::event::{
     Block, Decision, EventKind, HarnessEvent, Role, SessionState, ToolStatus,
@@ -65,8 +68,6 @@ const HARNESS: &str = "codex";
 const SUMMARY_LIMIT: usize = 500;
 /// How much of an approval request's params the UI shows.
 const DETAIL_LIMIT: usize = 600;
-/// How long to wait for a child that closed stdin to also exit before killing it.
-const REAP_TIMEOUT: Duration = Duration::from_secs(5);
 /// Closing stdin is the documented way to end an app-server session; this is how long it gets.
 const GRACEFUL_EXIT: Duration = Duration::from_millis(300);
 /// A handshake that never answers is a failed launch, not a hung session.
@@ -113,6 +114,14 @@ impl CodexAdapter {
 impl HarnessAdapter for CodexAdapter {
     fn id(&self) -> HarnessId {
         HarnessId(HARNESS)
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Codex"
+    }
+
+    fn skills_dir(&self) -> Option<&'static str> {
+        Some(".codex/skills")
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -1491,129 +1500,10 @@ fn error_message(value: &Value) -> String {
     truncate(&raw, 300)
 }
 
-fn command_from_config(config: &Value, default_command: &str) -> (String, Vec<String>) {
-    let command = config
-        .get("command")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|command| !command.is_empty())
-        .unwrap_or(default_command)
-        .to_string();
-    let args = config
-        .get("args")
-        .and_then(Value::as_array)
-        .map(|args| {
-            args.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    (command, args)
-}
-
-/// Prepended context documents (pinned specs, the plan) become the head of the first turn's text, in
-/// markdown.
-fn render_prompt(prompt: Option<&str>, documents: &[ContextDoc]) -> Option<String> {
-    if documents.is_empty() {
-        return prompt.map(str::to_string);
-    }
-    let mut rendered = String::from("# Context\n\n");
-    for document in documents {
-        rendered.push_str(&format!(
-            "## {}\n\n<!-- id: {} -->\n\n",
-            document.title, document.id
-        ));
-        rendered.push_str(document.body.trim_end());
-        rendered.push_str("\n\n");
-    }
-    if let Some(prompt) = prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) {
-        rendered.push_str("---\n\n");
-        rendered.push_str(prompt);
-        rendered.push('\n');
-    }
-    Some(rendered)
-}
-
-fn truncate(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        return text.to_string();
-    }
-    let mut truncated: String = text.chars().take(limit).collect();
-    truncated.push('…');
-    truncated
-}
-
-async fn kill_process_tree(pid: Option<u32>, child: &mut Child) {
-    if let Some(pid) = pid {
-        kill_tree_by_pid(pid).await;
-    }
-    let _ = child.kill().await;
-    let _ = tokio::time::timeout(REAP_TIMEOUT, child.wait()).await;
-}
-
-#[cfg(windows)]
-async fn kill_tree_by_pid(pid: u32) {
-    // `Child::kill` reaches the direct child only, and `codex` spawns tools of its own. A failure is
-    // fine: the direct kill below still runs.
-    let pid = pid.to_string();
-    let _ = Command::new("taskkill")
-        .args(["/PID", pid.as_str(), "/T", "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-}
-
-#[cfg(not(windows))]
-async fn kill_tree_by_pid(pid: u32) {
-    // The child is spawned as a process-group leader (see `Runner::spawn_process`), so the negative
-    // pid is the whole tree.
-    let group = format!("-{pid}");
-    let _ = Command::new("kill")
-        .args(["-KILL", group.as_str()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-}
-
-/// Resolve a binary the way a shell would: an explicit path as given, otherwise `PATH` + `PATHEXT`.
-fn find_on_path(binary: &str) -> Option<PathBuf> {
-    if binary.contains('/') || binary.contains('\\') || Path::new(binary).is_absolute() {
-        let path = PathBuf::from(binary);
-        return path.is_file().then_some(path);
-    }
-    let search_path = std::env::var_os("PATH")?;
-    let extensions: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .ok()
-            .map(|raw| {
-                raw.split(';')
-                    .map(str::trim)
-                    .filter(|extension| !extension.is_empty())
-                    .map(str::to_ascii_lowercase)
-                    .collect()
-            })
-            .filter(|extensions: &Vec<String>| !extensions.is_empty())
-            .unwrap_or_else(|| vec![".exe".into(), ".cmd".into(), ".bat".into(), ".com".into()])
-    } else {
-        vec![String::new()]
-    };
-    for directory in std::env::split_paths(&search_path) {
-        for extension in &extensions {
-            let candidate = directory.join(format!("{binary}{extension}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::ContextDoc;
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()

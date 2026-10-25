@@ -28,6 +28,12 @@ impl HarnessAdapter for MockAdapter {
         HarnessId("mock")
     }
 
+    fn display_name(&self) -> &'static str {
+        "Mock (builtin)"
+    }
+
+    // In-process: there is no harness of its own to install skills into.
+
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             streaming_deltas: true,

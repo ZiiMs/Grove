@@ -3,20 +3,24 @@ import {
   parseEventEnvelope,
   parseGitChanged,
   parsePlanChanged,
+  parseSpecChanged,
   type EventEnvelope,
   type GitStatus,
   type HarnessEvent,
   type Plan,
+  type SpecChange,
 } from "@grove/contract";
 import type { GroveBridge, UnlistenFn } from "./bridge";
 
 export const SESSION_EVENT = "grove://session-event" as const;
 export const GIT_CHANGED = "grove://git-changed" as const;
 export const PLAN_CHANGED = "grove://plan-changed" as const;
+export const SPEC_CHANGED = "grove://spec-changed" as const;
 
 export type SessionEventHandler = (envelope: EventEnvelope) => void;
 export type GitChangedHandler = (status: GitStatus) => void;
 export type PlanChangedHandler = (sessionId: string | null, plan: Plan) => void;
+export type SpecChangedHandler = (change: SpecChange) => void;
 
 /**
  * Subscribe to the session event stream. Malformed payloads and unknown event kinds are dropped here,
@@ -54,6 +58,21 @@ export async function subscribeToPlanChanged(
   return bridge.listen(PLAN_CHANGED, (raw) => {
     const envelope = parsePlanChanged(raw);
     if (envelope) handler(envelope.sessionId ?? null, envelope.payload);
+  });
+}
+
+/**
+ * Subscribe to `grove://spec-changed`: the spec watcher coalesced file changes, or the shell moved
+ * the project root. The payload is the relative paths that changed, which is empty for a move — a
+ * panel that re-indexes on the event covers both, and never assumes the list is complete.
+ */
+export async function subscribeToSpecChanged(
+  bridge: GroveBridge,
+  handler: SpecChangedHandler,
+): Promise<UnlistenFn> {
+  return bridge.listen(SPEC_CHANGED, (raw) => {
+    const envelope = parseSpecChanged(raw);
+    if (envelope) handler(envelope.payload);
   });
 }
 

@@ -44,20 +44,22 @@ async fn targets_list_every_harness_directory_and_the_project_local_agents_dir()
     let targets = service.targets(Some(&project));
 
     let ids: Vec<&str> = targets.iter().map(|target| target.id.as_str()).collect();
-    assert_eq!(ids, ["claude", "codex", "pi", "opencode", "agents"]);
+    // Registry order: each adapter declares its own `skills_dir()`, so this list is not maintained
+    // here.
+    assert_eq!(ids, ["claude", "pi", "opencode", "codex", "agents"]);
     assert_eq!(targets[0].path, display_path(&home.join(".claude/skills")));
-    assert_eq!(targets[1].path, display_path(&home.join(".codex/skills")));
-    assert_eq!(targets[2].path, display_path(&home.join(".pi/skills")));
+    assert_eq!(targets[1].path, display_path(&home.join(".pi/skills")));
     assert_eq!(
-        targets[3].path,
+        targets[2].path,
         display_path(&home.join(".config/opencode/skills"))
     );
+    assert_eq!(targets[3].path, display_path(&home.join(".codex/skills")));
     assert_eq!(
         targets[4].path,
         display_path(&project.join(".agents/skills"))
     );
     let exists: Vec<bool> = targets.iter().map(|target| target.exists).collect();
-    assert_eq!(exists, [true, true, false, false, true]);
+    assert_eq!(exists, [true, false, false, true, true]);
 }
 
 #[tokio::test]

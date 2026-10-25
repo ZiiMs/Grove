@@ -41,30 +41,23 @@ pub(crate) fn home_dir(configured: Option<&Path>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// The per-harness directories, in the order the dropdown shows them, plus the project-local one.
+/// The per-harness directories, in registry order, plus the project-local one.
+///
+/// The harness rows come from `builtin_registry()` and each adapter declares its own `skills_dir()`,
+/// so a sixth harness appears in the dropdown by implementing the contract — no list to edit here and
+/// no label switch anywhere. A harness that declares no directory (the in-process mock, ACP) simply
+/// has no row of its own.
 pub(crate) fn target_dirs(home: &Path, project_root: Option<&Path>) -> Vec<TargetDir> {
-    let mut dirs = vec![
-        TargetDir {
-            id: "claude",
-            label: "Claude Code",
-            path: home.join(".claude").join("skills"),
-        },
-        TargetDir {
-            id: "codex",
-            label: "Codex",
-            path: home.join(".codex").join("skills"),
-        },
-        TargetDir {
-            id: "pi",
-            label: "pi",
-            path: home.join(".pi").join("skills"),
-        },
-        TargetDir {
-            id: "opencode",
-            label: "OpenCode",
-            path: home.join(".config").join("opencode").join("skills"),
-        },
-    ];
+    let mut dirs: Vec<TargetDir> = crate::adapters::registry::builtin_registry()
+        .iter()
+        .filter_map(|adapter| {
+            adapter.skills_dir().map(|relative| TargetDir {
+                id: adapter.id().as_str(),
+                label: adapter.display_name(),
+                path: home.join(relative),
+            })
+        })
+        .collect();
 
     let project = project_root
         .map(Path::to_path_buf)

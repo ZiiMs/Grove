@@ -134,6 +134,16 @@ async fn reports_builtin_harnesses_and_the_node_git_gh_tools() {
             .all(|row| !row.label.trim().is_empty()),
         "every harness row is labelled for the Settings table"
     );
+    // The label is the adapter's own `display_name()`, read from the registry: a sixth harness needs
+    // no new match arm here.
+    for row in &report.harnesses {
+        let expected = grove_core::adapters::registry::builtin_registry()
+            .iter()
+            .find(|adapter| adapter.id().as_str() == row.id)
+            .map(|adapter| adapter.display_name())
+            .unwrap_or(row.id.as_str());
+        assert_eq!(row.label, expected, "harness {} label", row.id);
+    }
     assert_eq!(harness.id, "mock");
     assert!(harness.installed, "the mock adapter is built in");
     assert_eq!(harness.path.as_deref(), Some("builtin:mock"));

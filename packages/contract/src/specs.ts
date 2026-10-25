@@ -69,3 +69,16 @@ export const specChangeSchema = z.object({
   paths: z.array(z.string()),
 });
 export type SpecChange = z.infer<typeof specChangeSchema>;
+
+/** `grove://spec-changed` is global: it announces a file change, or that the project itself moved. */
+export const specChangedSchema = z.object({
+  sessionId: z.string().optional(),
+  payload: specChangeSchema,
+});
+export type SpecChangedEvent = z.infer<typeof specChangedSchema>;
+
+/** Validate an incoming `grove://spec-changed` payload; malformed data is dropped, not thrown. */
+export function parseSpecChanged(raw: unknown): SpecChangedEvent | null {
+  const parsed = specChangedSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}

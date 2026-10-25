@@ -7,6 +7,7 @@ import type {
 } from "@grove/contract";
 import { useCallback, useEffect, useState } from "react";
 import { useBridge } from "../../ipc/context";
+import { errorText } from "../../ipc/errors";
 import { PanelFrame } from "../PanelFrame";
 import "./settings.css";
 
@@ -24,14 +25,6 @@ interface SaveState {
   message: string;
 }
 
-function errorMessage(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
 
 function secretStatusLabel(status: SecretStatusView["status"] | undefined): string {
   switch (status) {
@@ -89,7 +82,7 @@ export function SettingsPanel() {
       setHarnessIds(harnesses.map((harness: HarnessInfo) => harness.id));
       setLoaded(true);
     } catch (error) {
-      setLoadError(errorMessage(error));
+      setLoadError(errorText(error));
     }
   }, [applySettings, bridge]);
 
@@ -98,7 +91,7 @@ export function SettingsPanel() {
     try {
       setSecret(await bridge.invoke("secret_status", { key: GITHUB_TOKEN_KEY }));
     } catch (error) {
-      setSecretError(errorMessage(error));
+      setSecretError(errorText(error));
     }
   }, [bridge]);
 
@@ -108,7 +101,7 @@ export function SettingsPanel() {
     try {
       setReport(await bridge.invoke("doctor_report"));
     } catch (error) {
-      setDoctorError(errorMessage(error));
+      setDoctorError(errorText(error));
     } finally {
       setDoctorBusy(false);
     }
@@ -141,7 +134,7 @@ export function SettingsPanel() {
       // Paths may have changed; the doctor table is stale now.
       void loadDoctor();
     } catch (error) {
-      setSaveState({ kind: "error", message: errorMessage(error) });
+      setSaveState({ kind: "error", message: errorText(error) });
     } finally {
       setSaving(false);
     }
@@ -157,7 +150,7 @@ export function SettingsPanel() {
       // Never keep the value around after it is in the keychain.
       setToken("");
     } catch (error) {
-      setSecretError(errorMessage(error));
+      setSecretError(errorText(error));
     } finally {
       setSecretBusy(false);
     }
@@ -169,7 +162,7 @@ export function SettingsPanel() {
     try {
       setSecret(await bridge.invoke("secret_delete", { key: GITHUB_TOKEN_KEY }));
     } catch (error) {
-      setSecretError(errorMessage(error));
+      setSecretError(errorText(error));
     } finally {
       setSecretBusy(false);
     }

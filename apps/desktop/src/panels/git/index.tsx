@@ -5,12 +5,16 @@ import type {
   GitWorktree,
   IpcError,
   PrResult,
+  SpecDoc,
 } from "@grove/contract";
+import MarkdownIt from "markdown-it";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import type { UnlistenFn } from "../../ipc/bridge";
+import type { GroveBridge, UnlistenFn } from "../../ipc/bridge";
 import { useBridge } from "../../ipc/context";
+import { toIpcError } from "../../ipc/errors";
 import { subscribeToGitChanged } from "../../ipc/events";
 import type { GitCommitArgs, GitDiffArgs, GitOpenPrArgs, GitStatusArgs } from "../../ipc/commands/git";
+import { useSessionStore } from "../../state/sessionStore";
 import { PanelFrame } from "../PanelFrame";
 import "./git.css";
 
@@ -23,23 +27,141 @@ const DiffViewer = lazy(async () => {
   return { default: Editor };
 });
 
-/** Command rejections cross the bridge as plain `{ code, message, detail }` values, not `Error`s. */
-function asIpcError(error: unknown): IpcError {
-  if (typeof error === "object" && error !== null) {
-    const candidate = error as { code?: unknown; message?: unknown; detail?: unknown };
-    if (typeof candidate.code === "string" && typeof candidate.message === "string") {
-      return {
-        code: candidate.code as IpcError["code"],
-        message: candidate.message,
-        ...(typeof candidate.detail === "string" ? { detail: candidate.detail } : {}),
-      };
-    }
-  }
-  return { code: "io", message: error instanceof Error ? error.message : String(error) };
-}
+/** Spec bodies are rendered, not executed: HTML in a spec is text, exactly as the Specs panel does it. */
+const markdown = new MarkdownIt({ html: false, linkify: false, typographer: false });
 
 function shortHead(head: string | null): string {
   return head ? head.slice(0, 7) : "—";
+}
+
+/**
+ * The other half of the review loop: the spec the change was meant to satisfy, beside the diff.
+ *
+ * Titles come from the active session's context (`session_context_get`), which is the same snapshot the
+ * Sessions header shows, so the two can never disagree about what is pinned. The body is read with
+ * `spec_read` — the graph owns where a spec id lives — and rendered with HTML disabled, because a spec
+ * is text and Grove renders rather than executes.
+ *
+ * It is a pane rather than a second panel because a session can only be watched from one panel at a
+ * time; this is how the goal spec's "see the spec it was meant to satisfy beside the diff" is reachable.
+ */
+function SpecBesideDiff({ bridge }: { bridge: GroveBridge }) {
+  const activeId = useSessionStore((state) => state.activeId);
+  const [pins, setPins] = useState<Array<{ specId: string; title: string }>>([]);
+  const [paths, setPaths] = useState<Record<string, string>>({});
+  const [selected, setSelected] = useState<string | null>(null);
+  const [doc, setDoc] = useState<SpecDoc | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    if (!activeId) {
+      setPins([]);
+      setSelected(null);
+      setDoc(null);
+      return;
+    }
+    let cancelled = false;
+    setError(null);
+    void (async () => {
+      try {
+        const context = await bridge.invoke("session_context_get", { id: activeId });
+        if (cancelled) return;
+        setPins(context.pins);
+        setSelected(context.pins[0]?.specId ?? null);
+        if (context.pins.length === 0) return;
+        // A pin stores the spec id; the graph knows which file that is.
+        const graph = await bridge.invoke("spec_index");
+        if (cancelled) return;
+        setPaths(Object.fromEntries(graph.nodes.map((node) => [node.id, node.path])));
+      } catch (err) {
+        if (!cancelled) setError(toIpcError(err).message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, activeId]);
+
+  const path = selected ? (paths[selected] ?? null) : null;
+
+  useEffect(() => {
+    if (!path) {
+      setDoc(null);
+      return;
+    }
+    let cancelled = false;
+    bridge
+      .invoke("spec_read", { path })
+      .then((next) => {
+        if (!cancelled) setDoc(next);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(toIpcError(err).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, path]);
+
+  const rendered = useMemo(() => (doc ? markdown.render(doc.body) : ""), [doc]);
+
+  if (!activeId) return null;
+
+  return (
+    <aside className="git-spec-pane" aria-label="Spec beside the diff" data-testid="git-spec-pane">
+      <header className="git-spec-head">
+        <h2>Spec beside the diff</h2>
+        <button
+          type="button"
+          className="input"
+          data-testid="git-spec-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? "Hide" : "Show"}
+        </button>
+      </header>
+      {open ? (
+        <>
+          {error ? (
+            <p className="git-empty" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {pins.length === 0 && !error ? (
+            <p className="git-empty" data-testid="git-spec-empty">
+              No specs pinned to this session. Pin one from the Specs panel to read it here.
+            </p>
+          ) : null}
+          {pins.length > 0 ? (
+            <ul className="git-spec-pins" aria-label="Pinned specs">
+              {pins.map((pin) => (
+                <li key={pin.specId}>
+                  <button
+                    type="button"
+                    className={pin.specId === selected ? "git-spec-pin is-active" : "git-spec-pin"}
+                    aria-current={pin.specId === selected ? "true" : undefined}
+                    onClick={() => setSelected(pin.specId)}
+                  >
+                    {pin.title}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {doc ? (
+            <article
+              className="git-spec-body"
+              data-testid="git-spec-body"
+              // markdown-it runs with `html: false`, so a `<script>` in a spec is text.
+              dangerouslySetInnerHTML={{ __html: rendered }}
+            />
+          ) : null}
+        </>
+      ) : null}
+    </aside>
+  );
 }
 
 export function GitPanel() {
@@ -79,7 +201,7 @@ export function GitPanel() {
       setSelected([]);
     } catch (err) {
       setStatus(null);
-      setError(asIpcError(err));
+      setError(toIpcError(err));
     } finally {
       setLoading(false);
     }
@@ -112,7 +234,7 @@ export function GitPanel() {
       const args: GitDiffArgs = { ...locationArgs, path };
       setDiff(await bridge.invoke("git_diff", args));
     } catch (err) {
-      setError(asIpcError(err));
+      setError(toIpcError(err));
     }
   }
 
@@ -136,7 +258,7 @@ export function GitPanel() {
       setNote(`Committed ${shortHead(next.head)} on ${next.branch ?? "detached HEAD"}`);
       setBranches(await bridge.invoke("git_branches", locationArgs));
     } catch (err) {
-      setError(asIpcError(err));
+      setError(toIpcError(err));
     }
   }
 
@@ -150,7 +272,7 @@ export function GitPanel() {
       if (prBase.trim()) args.base = prBase.trim();
       setPr(await bridge.invoke("git_open_pr", args));
     } catch (err) {
-      setError(asIpcError(err));
+      setError(toIpcError(err));
     }
   }
 
@@ -268,28 +390,37 @@ export function GitPanel() {
             </ul>
           </section>
 
-          <section className="git-section git-section-diff" aria-label="Diff">
+          <section className="git-section git-section-diff" aria-label="Diff" data-testid="git-diff-section">
             <h2>Diff</h2>
-            {diff ? (
-              <>
-                <p className="git-diff-meta">
-                  {diff.target}
-                  {diff.path ? ` · ${diff.path}` : ""}
-                  {diff.truncated ? " · truncated" : ""}
-                </p>
-                <Suspense fallback={<p className="git-empty">Loading diff viewer…</p>}>
-                  <DiffViewer
-                    height="360px"
-                    language="diff"
-                    value={diff.patch}
-                    theme="vs-dark"
-                    options={{ readOnly: true, minimap: { enabled: false }, scrollBeyondLastLine: false }}
-                  />
-                </Suspense>
-              </>
-            ) : (
-              <p className="git-empty">Choose a changed file to view its diff.</p>
-            )}
+            <div className="git-diff-row">
+              <div className="git-diff-main">
+                {diff ? (
+                  <>
+                    <p className="git-diff-meta">
+                      {diff.target}
+                      {diff.path ? ` · ${diff.path}` : ""}
+                      {diff.truncated ? " · truncated" : ""}
+                    </p>
+                    <Suspense fallback={<p className="git-empty">Loading diff viewer…</p>}>
+                      <DiffViewer
+                        height="360px"
+                        language="diff"
+                        value={diff.patch}
+                        theme="vs-dark"
+                        options={{
+                          readOnly: true,
+                          minimap: { enabled: false },
+                          scrollBeyondLastLine: false,
+                        }}
+                      />
+                    </Suspense>
+                  </>
+                ) : (
+                  <p className="git-empty">Choose a changed file to view its diff.</p>
+                )}
+              </div>
+              <SpecBesideDiff bridge={bridge} />
+            </div>
           </section>
 
           <section className="git-section" aria-label="Commit">

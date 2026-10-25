@@ -1,7 +1,10 @@
 import type { IpcError, SpecDoc, SpecGraph, SpecNode, SpecValidation } from "@grove/contract";
 import MarkdownIt from "markdown-it";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import type { UnlistenFn } from "../../ipc/bridge";
 import { useBridge } from "../../ipc/context";
+import { errorText } from "../../ipc/errors";
+import { subscribeToSpecChanged } from "../../ipc/events";
 import { useSessionStore } from "../../state/sessionStore";
 import { PanelFrame } from "../PanelFrame";
 import "./specs.css";
@@ -23,6 +26,12 @@ import "./specs.css";
 const MonacoEditor = lazy(() => import("@monaco-editor/react"));
 
 const markdown = new MarkdownIt({ html: false, linkify: false, typographer: false });
+
+/**
+ * How long a burst of `grove://spec-changed` events is coalesced for. An agent writing five files
+ * produces five events; one index is enough, and one index is what the panel gets.
+ */
+export const SPEC_CHANGED_DEBOUNCE_MS = 150;
 
 type Relation = {
   label: string;
@@ -85,11 +94,6 @@ function isIpcError(error: unknown): error is IpcError {
   );
 }
 
-function messageOf(error: unknown): string {
-  if (isIpcError(error)) return error.message;
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
 
 function validationCount(validation: SpecValidation): number {
   return (
@@ -155,7 +159,7 @@ export function SpecsPanel() {
         if (!cancelled) setGraph(next);
       })
       .catch((error: unknown) => {
-        if (!cancelled) setGraphError(messageOf(error));
+        if (!cancelled) setGraphError(errorText(error));
       })
       .finally(() => {
         if (!cancelled) setIndexing(false);
@@ -164,6 +168,27 @@ export function SpecsPanel() {
       cancelled = true;
     };
   }, [bridge, indexToken]);
+
+  // The core announces spec changes (`grove://spec-changed`) from its watcher, and also when the
+  // project root moves with the active session. Either way the graph on screen is now stale: re-index,
+  // debounced so a burst of writes costs one pass.
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: UnlistenFn | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    void subscribeToSpecChanged(bridge, () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => setIndexToken((token) => token + 1), SPEC_CHANGED_DEBOUNCE_MS);
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      unlisten?.();
+    };
+  }, [bridge]);
 
   useEffect(() => {
     if (!selectedPath) {
@@ -185,7 +210,7 @@ export function SpecsPanel() {
       .catch((error: unknown) => {
         if (!cancelled) {
           setDoc(null);
-          setDocError(messageOf(error));
+          setDocError(errorText(error));
         }
       })
       .finally(() => {
@@ -229,7 +254,7 @@ export function SpecsPanel() {
       if (isIpcError(error) && error.code === "conflict") {
         setConflict(error);
       } else {
-        setSaveError(messageOf(error));
+        setSaveError(errorText(error));
       }
     } finally {
       setSaving(false);
@@ -251,7 +276,7 @@ export function SpecsPanel() {
       // The session header shows the same snapshot: adopt it so pinning here is visible there.
       useSessionStore.getState().applyContext(context);
     } catch (error: unknown) {
-      setPinError(messageOf(error));
+      setPinError(errorText(error));
     } finally {
       setPinning(false);
     }

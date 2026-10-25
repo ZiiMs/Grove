@@ -66,6 +66,48 @@ describe("SessionsPanel", () => {
     expect(await screen.findByTestId("session-item-session-1")).toBeInTheDocument();
   });
 
+  it("forwards an adapter config on create when one is set", async () => {
+    const bridge = createFakeBridge();
+    renderPanel(bridge);
+    await screen.findByTestId("harness-picker");
+
+    await act(async () => {
+      await useSessionStore.getState().create(bridge, {
+        harness: "mock",
+        cwd: "C:/work/grove",
+        config: { command: "C:/tools/mock.exe", args: ["--fast"] },
+      });
+    });
+
+    // `config` is the adapter-specific escape hatch (`config.command`/`config.args`); the form does
+    // not set it yet, but the command has to carry it so a caller can.
+    expect(bridge.calls).toContainEqual({
+      command: "session_create",
+      args: {
+        req: {
+          harness: "mock",
+          cwd: "C:/work/grove",
+          config: { command: "C:/tools/mock.exe", args: ["--fast"] },
+        },
+      },
+    });
+  });
+
+  it("omits an unset adapter config so the request stays minimal", async () => {
+    const bridge = createFakeBridge();
+    renderPanel(bridge);
+    await screen.findByTestId("harness-picker");
+
+    await act(async () => {
+      await useSessionStore.getState().create(bridge, { harness: "mock" });
+    });
+
+    expect(bridge.calls).toContainEqual({
+      command: "session_create",
+      args: { req: { harness: "mock" } },
+    });
+  });
+
   it("streams live events into the open conversation", async () => {
     const row = detail("ready");
     const bridge = createFakeBridge({}, { sessions: [fakeSummary(row)], details: { [row.id]: row } });
@@ -117,6 +159,78 @@ describe("SessionsPanel", () => {
     expect(cards[0]).toHaveTextContent("echo hello");
     expect(cards[0]).toHaveTextContent("ok");
     expect(cards[0]).toHaveTextContent("echoed 5 chars");
+  });
+
+  it("makes the active session's directory the project root", async () => {
+    const row = detail("idle");
+    row.cwd = "C:/work/grove";
+    const bridge = createFakeBridge({}, { sessions: [fakeSummary(row)], details: { [row.id]: row } });
+    renderPanel(bridge);
+    await userEvent.click(await screen.findByTestId("session-item-session-1"));
+
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({
+        command: "app_set_project_root",
+        args: { path: "C:/work/grove" },
+      }),
+    );
+    expect(bridge.projectRoot()).toBe("C:/work/grove");
+  });
+
+  it("answers a permission request and drops the buttons once it resolves", async () => {
+    const row = detail("busy", [
+      { at: AT, kind: "permission_request", request_id: "req-1", title: "Run tests", detail: "npm test" },
+    ]);
+    const bridge = createFakeBridge({}, {
+      sessions: [fakeSummary(row, 1)],
+      details: { [row.id]: row },
+    });
+    renderPanel(bridge);
+    await userEvent.click(await screen.findByTestId("session-item-session-1"));
+
+    const card = await screen.findByTestId("transcript-permission");
+    expect(card).toHaveTextContent("Run tests");
+    expect(card).toHaveTextContent("npm test");
+    expect(screen.getByTestId("transcript-permission-state")).toHaveTextContent("pending");
+
+    await userEvent.click(screen.getByTestId("permission-approve"));
+
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({
+        command: "session_respond_permission",
+        args: { id: row.id, requestId: "req-1", decision: "approve" },
+      }),
+    );
+    // The fake answers the request exactly like an adapter does: the resolution is the event that
+    // removes the buttons, not the click.
+    await waitFor(() =>
+      expect(screen.queryByTestId("permission-approve")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByTestId("transcript-permission")).toHaveTextContent("approve");
+  });
+
+  it("denies a permission request", async () => {
+    const row = detail("busy", [
+      { at: AT, kind: "permission_request", request_id: "req-2", title: "Delete files", detail: "" },
+    ]);
+    const bridge = createFakeBridge({}, {
+      sessions: [fakeSummary(row, 1)],
+      details: { [row.id]: row },
+    });
+    renderPanel(bridge);
+    await userEvent.click(await screen.findByTestId("session-item-session-1"));
+
+    await userEvent.click(await screen.findByTestId("permission-deny"));
+
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({
+        command: "session_respond_permission",
+        args: { id: row.id, requestId: "req-2", decision: "deny" },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("permission-deny")).not.toBeInTheDocument(),
+    );
   });
 
   it("sends the compose text and cancels the run", async () => {

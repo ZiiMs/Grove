@@ -197,11 +197,19 @@ export const detectionSchema = z.object({
 });
 export type Detection = z.infer<typeof detectionSchema>;
 
-/** Arguments to `session_create`. */
+/**
+ * Arguments to `session_create`.
+ *
+ * `config` is adapter-specific JSON from settings — the documented keys are `command` and `args`
+ * (`docs/adapters.md` §Explicit command override) — so it stays untyped here rather than inventing a
+ * second shape per harness. It mirrors Rust's `CreateSessionRequest.config: Option<Value>` exactly,
+ * which is what `contract/fixtures/create-session-request.json` pins.
+ */
 export const createSessionRequestSchema = z.object({
   harness: z.string(),
   cwd: z.string().nullish(),
   model: z.string().nullish(),
   title: z.string().nullish(),
+  config: z.unknown().nullish(),
 });
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;

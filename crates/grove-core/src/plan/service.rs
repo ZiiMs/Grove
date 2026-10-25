@@ -13,7 +13,7 @@
 use super::mirror::{self, ImportDecision};
 use super::{Plan, PlanUpdate};
 use crate::ipc::{EventEnvelope, IpcError, IpcResult};
-use crate::paths::display_path;
+use crate::paths::{display_path, ProjectRoot};
 use crate::store::{PlanRow, Store, StoreError};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -25,14 +25,14 @@ pub type PlanBus = broadcast::Sender<EventEnvelope<Plan>>;
 pub struct PlanService {
     store: Arc<Store>,
     /// Project used when a session row has no usable `cwd` (never for a normal session).
-    project_root: PathBuf,
+    project_root: ProjectRoot,
     bus: PlanBus,
     /// Serializes read/import/write sequences; SQLite supplies the cross-process guard.
     gate: Mutex<()>,
 }
 
 impl PlanService {
-    pub fn new(store: Arc<Store>, project_root: impl Into<PathBuf>) -> Self {
+    pub fn new(store: Arc<Store>, project_root: impl Into<ProjectRoot>) -> Self {
         let (bus, _) = broadcast::channel(64);
         Self {
             store,
@@ -129,7 +129,7 @@ impl PlanService {
             .ok_or_else(|| IpcError::not_found(format!("no session: {session_id}")))?;
         let project = PathBuf::from(session.cwd.trim());
         let project = if project.as_os_str().is_empty() {
-            self.project_root.clone()
+            self.project_root.path()
         } else {
             project
         };

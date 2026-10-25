@@ -18,9 +18,11 @@ pub mod skills;
 pub mod specgraph;
 pub mod store;
 
-use paths::AppPaths;
+use ipc::IpcResult;
+use paths::{AppPaths, ProjectRoot};
 use sessions::manager::{SessionError, SessionManager};
-use std::path::PathBuf;
+use specgraph::SpecGraph;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const APP_NAME: &str = "Grove";
@@ -33,10 +35,13 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Clone)]
 pub struct GroveCore {
     pub paths: AppPaths,
-    /// The project whose specs, git state and plan Grove is looking at. Tickets that need a project
-    /// root read it here instead of guessing from the UI. Defaults to `$GROVE_PROJECT_ROOT`, else the
-    /// process working directory; [`GroveCore::with_project_root`] lets the shell or a test pin it.
-    pub project_root: PathBuf,
+    /// The project whose specs, plan, MCP configs and project-local skills Grove is looking at.
+    ///
+    /// Shared (`Arc<RwLock<_>>`) with the services that consume it, so moving it moves all of them.
+    /// It starts at `$GROVE_PROJECT_ROOT`, else the process working directory, and the shell then
+    /// follows the active session with [`GroveCore::set_project_root`]. Nothing else may cache a
+    /// project path: two notions of "the project" is exactly the bug this replaced.
+    project_root: ProjectRoot,
     pub skills: Arc<skills::SkillService>,
     pub git: gitops::Git,
     /// One versioned TODO plan per session, mirrored into the session's project for the agent.
@@ -76,23 +81,44 @@ impl GroveCore {
         Ok(Self::assemble(paths, Arc::new(sessions), secrets))
     }
 
-    pub fn with_project_root(mut self, project_root: impl Into<PathBuf>) -> Self {
-        self.project_root = project_root.into();
-        self.mcp = Arc::new(mcp::McpService::new(mcp::McpConfig {
-            project_root: Some(self.project_root.clone()),
-            ..Default::default()
-        }));
-        // Pinned specs are read from the project root, so pointing Grove at another project has to
-        // move the knowledge source with it.
-        self.context = Arc::new(sessions::context::SessionContextService::new(
-            self.sessions.store(),
-            Arc::clone(&self.plan),
-            self.project_root.clone(),
-        ));
-        self.sessions.set_context_source(
-            Arc::clone(&self.context) as Arc<dyn sessions::context::ContextSource>
-        );
+    /// The project Grove is looking at right now: the spec graph's root, the plan mirror's fallback,
+    /// MCP discovery's project files, and the project-local skills target all read this.
+    pub fn project_root(&self) -> PathBuf {
+        self.project_root.path()
+    }
+
+    /// Point every project-scoped subsystem at `root` and return the path now in force.
+    ///
+    /// The shell calls this when a session is created, resumed or its tab is activated, so a session
+    /// on `C:/work/grove` indexes that repository instead of the app's own directory. Because each
+    /// service holds a clone of the same [`ProjectRoot`], nothing has to be rebuilt.
+    pub fn set_project_root(&self, root: impl Into<PathBuf>) -> PathBuf {
+        self.project_root.set(root);
+        self.project_root()
+    }
+
+    /// Pin the initial project root (tests and previews). Same effect as
+    /// [`GroveCore::set_project_root`]; kept as a builder so a fixture reads in one expression.
+    pub fn with_project_root(self, project_root: impl Into<PathBuf>) -> Self {
+        self.set_project_root(project_root);
         self
+    }
+
+    /// Index the project Grove is looking at. The graph carries its root, so the Specs panel can show
+    /// which project it is reading and re-index when that changes.
+    pub fn spec_index(&self) -> IpcResult<SpecGraph> {
+        Ok(specgraph::SpecIndex::load(self.project_root())?.graph())
+    }
+
+    /// The skill destinations: each harness's own directory plus the project-local `.agents/skills`.
+    ///
+    /// An explicit `project_root` wins (the UI may pass one); otherwise the local target follows the
+    /// active session like every other project-scoped thing, instead of resolving against the
+    /// executable's directory.
+    pub fn skill_targets(&self, project_root: Option<&Path>) -> Vec<skills::SkillTarget> {
+        let explicit = project_root.map(Path::to_path_buf);
+        let root = explicit.unwrap_or_else(|| self.project_root());
+        self.skills.targets(Some(root.as_path()))
     }
 
     fn assemble(
@@ -100,10 +126,14 @@ impl GroveCore {
         sessions: Arc<SessionManager>,
         secrets: Arc<dyn secrets::SecretStore>,
     ) -> Self {
-        let project_root = std::env::var_os("GROVE_PROJECT_ROOT")
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("."));
+        // The starting point only: `GROVE_PROJECT_ROOT` keeps headless runs and tests pinnable, and
+        // the shell moves the root to the active session from here on.
+        let project_root = ProjectRoot::new(
+            std::env::var_os("GROVE_PROJECT_ROOT")
+                .map(PathBuf::from)
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_else(|| PathBuf::from(".")),
+        );
         let settings = Arc::new(settings::SettingsService::new(sessions.store()));
         let doctor = Arc::new(harness_doctor::HarnessDoctor::new(
             Arc::clone(&settings),
@@ -123,6 +153,12 @@ impl GroveCore {
         ));
         sessions
             .set_context_source(Arc::clone(&context) as Arc<dyn sessions::context::ContextSource>);
+        // `StartContext.config` is "adapter-specific, from settings": a harness path configured in
+        // the Settings panel is the command the next session of that harness launches. The manager
+        // sees the port, not the settings store.
+        sessions.set_config_source(Arc::new(settings::HarnessPathSource::new(Arc::clone(
+            &settings,
+        ))));
         // Settings own the catalog sources; apply them at startup so the Skills panel agrees. A bad
         // settings row keeps the built-in defaults instead of blocking the app.
         if let Ok(current) = settings.get() {
@@ -137,10 +173,13 @@ impl GroveCore {
         Self {
             skills: Arc::new(skills),
             git: gitops::Git::system(),
-            mcp: Arc::new(mcp::McpService::new(mcp::McpConfig {
-                project_root: Some(project_root.clone()),
-                ..Default::default()
-            })),
+            mcp: Arc::new(mcp::McpService::with_project_root(
+                mcp::McpConfig {
+                    project_root: Some(project_root.path()),
+                    ..Default::default()
+                },
+                project_root.clone(),
+            )),
             plan,
             context,
             paths,

@@ -33,9 +33,9 @@ describe("skill contract fixtures", () => {
     const parsed = skillTargetsSchema.parse(fixture("skill-targets.json"));
     expect(parsed.map((target) => target.id)).toEqual([
       "claude",
-      "codex",
       "pi",
       "opencode",
+      "codex",
       "agents",
     ]);
     expect(parsed[4].exists).toBe(true);

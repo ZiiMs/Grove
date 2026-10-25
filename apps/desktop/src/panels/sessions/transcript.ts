@@ -1,4 +1,4 @@
-import type { Block, HarnessEvent, Role, ToolStatus } from "@grove/contract";
+import type { Block, Decision, HarnessEvent, Role, ToolStatus } from "@grove/contract";
 
 /**
  * What the conversation renders. Built by folding the persisted event list, so a reload rebuilds the
@@ -18,6 +18,18 @@ export type TranscriptItem =
       summary: string | null;
     }
   | { id: string; kind: "diff"; path: string; patch: string; added: number; removed: number }
+  /**
+   * A permission request and, once the harness answered, its resolution. One item rather than two
+   * notes: the buttons belong to the request they answer, and `decision` is what removes them.
+   */
+  | {
+      id: string;
+      kind: "permission";
+      requestId: string;
+      title: string;
+      detail: string;
+      decision: Decision | null;
+    }
   | { id: string; kind: "notice"; tone: "info" | "error"; text: string }
   | { id: string; kind: "usage"; inputTokens: number; outputTokens: number };
 
@@ -93,19 +105,36 @@ export function foldEvents(events: HarnessEvent[]): TranscriptItem[] {
       case "permission_request":
         items.push({
           id,
-          kind: "notice",
-          tone: "info",
-          text: `Permission requested: ${event.title} — ${event.detail}`,
+          kind: "permission",
+          requestId: event.request_id,
+          title: event.title,
+          detail: event.detail,
+          decision: null,
         });
         break;
-      case "permission_resolved":
-        items.push({
-          id,
-          kind: "notice",
-          tone: "info",
-          text: `Permission ${event.decision}: ${event.request_id}`,
-        });
+      case "permission_resolved": {
+        // The adapter answers a request it asked for, so the matching item is already in the list.
+        // A resolution with no request (a replayed log that lost one) stays a note rather than a
+        // phantom button-less card.
+        let matched = false;
+        for (let i = items.length - 1; i >= 0; i -= 1) {
+          const item = items[i];
+          if (item.kind === "permission" && item.requestId === event.request_id) {
+            items[i] = { ...item, decision: event.decision };
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) {
+          items.push({
+            id,
+            kind: "notice",
+            tone: "info",
+            text: `Permission ${event.decision}: ${event.request_id}`,
+          });
+        }
         break;
+      }
       case "usage":
         items.push({
           id,

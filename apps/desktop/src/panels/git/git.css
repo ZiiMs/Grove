@@ -38,6 +38,74 @@
   grid-row: span 2;
 }
 
+/* The diff and the spec that asked for it, in one view (the goal spec's key story). The pane is a
+   column beside the diff on a wide window and stacks under it when narrow. */
+.git-diff-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.git-diff-main {
+  min-width: 0;
+}
+
+.git-spec-pane {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: var(--space-3);
+  min-width: 0;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.git-spec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.git-spec-head h2 {
+  margin: 0;
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+.git-spec-pins {
+  list-style: none;
+  margin: var(--space-2) 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.git-spec-pin {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--text-muted, inherit);
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+}
+
+.git-spec-pin.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.git-spec-body {
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
 .git-file-list,
 .git-branch-list,
 .git-worktree-list {
@@ -154,6 +222,10 @@
 
   .git-section-diff {
     grid-row: auto;
+  }
+
+  .git-diff-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .git-repo-form .input {

@@ -15,6 +15,7 @@ pub mod discover;
 pub mod probe;
 
 use crate::ipc::{ErrorCode, IpcError};
+use crate::paths::ProjectRoot;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -169,14 +170,31 @@ impl From<McpError> for IpcError {
 /// The MCP subsystem as the rest of the app sees it: discover, then probe one server on request.
 pub struct McpService {
     config: McpConfig,
+    /// The project whose `.mcp.json` / `opencode.json` are read. Shared with the rest of the core, so
+    /// switching sessions moves discovery too instead of leaving it on the app's own directory.
+    project_root: ProjectRoot,
     http: reqwest::Client,
 }
 
 impl McpService {
     /// Cheap: no I/O and no process starts. Constructing the service must never spawn a server.
     pub fn new(config: McpConfig) -> Self {
+        let project_root = ProjectRoot::new(
+            config
+                .project_root
+                .clone()
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_else(|| PathBuf::from(".")),
+        );
+        Self::with_project_root(config, project_root)
+    }
+
+    /// Share the core's project root, so discovery follows the active session instead of caching the
+    /// directory the app happened to start in.
+    pub fn with_project_root(config: McpConfig, project_root: ProjectRoot) -> Self {
         Self {
             config,
+            project_root,
             http: reqwest::Client::builder()
                 .user_agent(format!("Grove/{}", crate::VERSION))
                 .build()
@@ -186,6 +204,11 @@ impl McpService {
 
     pub fn config(&self) -> &McpConfig {
         &self.config
+    }
+
+    /// The project the config files are read from: the shared one, unless a config names its own.
+    pub fn project_root(&self) -> Option<PathBuf> {
+        Some(self.project_root.path())
     }
 
     /// Every definition the configured files declare. Reads files; never spawns or fetches.
@@ -231,13 +254,6 @@ fn home_dir(configured: Option<&Path>) -> PathBuf {
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
-}
-
-/// Project root from the injected config (tests) or the process working directory.
-fn project_root(configured: Option<&Path>) -> Option<PathBuf> {
-    configured
-        .map(Path::to_path_buf)
-        .or_else(|| std::env::current_dir().ok())
 }
 
 #[cfg(test)]

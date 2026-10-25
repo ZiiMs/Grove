@@ -77,6 +77,22 @@ impl From<SessionError> for IpcError {
 /// How many transcript lines a harness switch replays as the new harness's opening prompt.
 pub const TRANSCRIPT_SUMMARY_LINES: usize = 24;
 
+/// Where a session's adapter config comes from besides the request itself.
+///
+/// `StartContext.config` is "adapter-specific, from settings" (see `docs/adapters.md`), and the one
+/// setting every process-backed adapter reads is `config.command`. The manager resolves it through
+/// this port so it never imports `SettingsService` — exactly like [`ContextSource`] for knowledge.
+///
+/// **Merge precedence is explicit and only two levels deep:** a `config.command` the caller passed on
+/// the request (and which is stored on the row) always wins, because it is the more specific
+/// instruction; otherwise the configured harness path in Settings fills it in; every other key in
+/// `config` is passed through untouched. Nothing is merged key-by-key beyond `command`, so an
+/// adapter's own defaults are never silently overwritten.
+pub trait AdapterConfigSource: Send + Sync {
+    /// The command a harness should launch, when the user configured one in Settings.
+    fn command_for(&self, harness: &str) -> Option<String>;
+}
+
 /// Owns every live session and the store they persist into. One instance per application.
 pub struct SessionManager {
     store: Arc<Store>,
@@ -85,6 +101,9 @@ pub struct SessionManager {
     /// Pinned specs and the plan. Absent in tests and previews that never assemble knowledge: a
     /// session then starts with an empty context rather than failing.
     context: std::sync::Mutex<Option<Arc<dyn ContextSource>>>,
+    /// Configured harness binaries from settings. Absent in tests and previews: a session then
+    /// launches the adapter's own default command.
+    config_source: std::sync::Mutex<Option<Arc<dyn AdapterConfigSource>>>,
     live: Mutex<HashMap<String, Arc<LiveSession>>>,
     bus: SessionBus,
 }
@@ -101,6 +120,7 @@ impl SessionManager {
             deps,
             adapters,
             context: std::sync::Mutex::new(None),
+            config_source: std::sync::Mutex::new(None),
             live: Mutex::new(HashMap::new()),
             bus,
         }
@@ -114,6 +134,48 @@ impl SessionManager {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *slot = Some(source);
+    }
+
+    /// Attach the settings-backed command source. `GroveCore::assemble` wires it, so a harness path
+    /// configured in the Settings panel reaches the next session of that harness; tests attach a
+    /// stub, or nothing at all.
+    pub fn set_config_source(&self, source: Arc<dyn AdapterConfigSource>) {
+        let mut slot = self
+            .config_source
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = Some(source);
+    }
+
+    /// The config a session of `harness` launches with: the caller's config, plus the configured
+    /// harness path as `command` when the caller named none (see [`AdapterConfigSource`] for the
+    /// precedence rule).
+    fn start_config(&self, harness: &str, config: serde_json::Value) -> serde_json::Value {
+        let mut config = if config.is_object() {
+            config
+        } else {
+            serde_json::json!({})
+        };
+        let explicit = config
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .is_some_and(|command| !command.is_empty());
+        if !explicit {
+            if let Some(configured) = self.configured_command(harness) {
+                config["command"] = serde_json::Value::String(configured);
+            }
+        }
+        config
+    }
+
+    fn configured_command(&self, harness: &str) -> Option<String> {
+        let source = self
+            .config_source
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()?;
+        source.command_for(harness)
     }
 
     /// Open the durable store at `paths.database` and wire the built-in adapters. Sessions left live
@@ -175,6 +237,16 @@ impl SessionManager {
             .collect()
     }
 
+    /// The display name an adapter advertises (`Claude Code`, `Codex`, …), or `None` for a harness
+    /// this build does not register. The doctor reads it from the registry rather than keeping a
+    /// second list of harness names.
+    pub fn label_for(&self, harness: &str) -> Option<&'static str> {
+        self.adapters
+            .iter()
+            .find(|adapter| adapter.id().as_str() == harness)
+            .map(|adapter| adapter.display_name())
+    }
+
     pub fn list(&self) -> Result<Vec<SessionSummary>, SessionError> {
         Ok(self.store.list_sessions()?)
     }
@@ -197,7 +269,10 @@ impl SessionManager {
         let model = non_empty(request.model);
         let title =
             non_empty(request.title).unwrap_or_else(|| format!("{} session", request.harness));
+        // The request's own config is what the row keeps; the launch config additionally resolves a
+        // configured harness path (see [`AdapterConfigSource`]).
         let config = request.config.unwrap_or_else(|| serde_json::json!({}));
+        let launch_config = self.start_config(&request.harness, config.clone());
 
         let session = Session {
             id: id.clone(),
@@ -219,7 +294,7 @@ impl SessionManager {
             model,
             prompt: None,
             resume_token: None,
-            config,
+            config: launch_config,
             context_files: assembly.docs.clone(),
         };
         self.publish_context(&session, ContextReason::Start, &assembly, None);
@@ -298,7 +373,9 @@ impl SessionManager {
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
         let adapter = self.adapter(&session.harness)?;
         let token = self.store.resume_token(id)?;
-        let config = self.store.adapter_config(id)?;
+        // Re-resolve on every resume, so a harness path changed in Settings applies to the next
+        // start of an existing conversation instead of only to brand-new sessions.
+        let config = self.start_config(&session.harness, self.store.adapter_config(id)?);
         let events = self.store.session_events(id)?;
         self.stop(id).await;
 
@@ -372,7 +449,7 @@ impl SessionManager {
         }
         let adapter = self.adapter(harness)?;
         let previous = session.harness.clone();
-        let config = self.store.adapter_config(id)?;
+        let config = self.start_config(harness, self.store.adapter_config(id)?);
         let events = self.store.session_events(id)?;
         let assembly = self.context_assembly(id);
         let summary = render_tail(&events, TRANSCRIPT_SUMMARY_LINES);
@@ -718,6 +795,260 @@ mod tests {
         fn resume_token(&self) -> Option<String> {
             None
         }
+    }
+
+    /// An adapter that records the `StartContext` of every launch, so a test can see exactly what a
+    /// session was started with.
+    struct RecordingAdapter {
+        contexts: Arc<std::sync::Mutex<Vec<StartContext>>>,
+        permissions: Arc<std::sync::Mutex<Vec<(String, Decision)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl HarnessAdapter for RecordingAdapter {
+        fn id(&self) -> HarnessId {
+            HarnessId("record")
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                streaming_deltas: false,
+                tool_calls: false,
+                diffs: false,
+                permissions: false,
+                resume: true,
+                images: false,
+                mcp: false,
+                usage: false,
+            }
+        }
+
+        fn detect(&self, _deps: &AdapterDeps) -> Detection {
+            Detection::installed("0.0.0", "builtin:record")
+        }
+
+        async fn start(
+            &self,
+            ctx: StartContext,
+            _deps: AdapterDeps,
+        ) -> Result<Box<dyn HarnessSession>, AdapterError> {
+            self.contexts
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(ctx);
+            let (keepalive, events) = mpsc::channel(4);
+            Ok(Box::new(QuietSession {
+                events: Some(events),
+                _keepalive: keepalive,
+                permissions: Arc::clone(&self.permissions),
+            }))
+        }
+    }
+
+    /// Starts and does nothing: enough to observe the launch without noise in the transcript.
+    struct QuietSession {
+        events: Option<mpsc::Receiver<HarnessEvent>>,
+        _keepalive: mpsc::Sender<HarnessEvent>,
+        permissions: Arc<std::sync::Mutex<Vec<(String, Decision)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl HarnessSession for QuietSession {
+        fn take_events(&mut self) -> mpsc::Receiver<HarnessEvent> {
+            self.events.take().unwrap()
+        }
+
+        async fn send(&mut self, _input: UserInput) -> Result<(), AdapterError> {
+            Ok(())
+        }
+
+        async fn respond_permission(
+            &mut self,
+            request_id: &str,
+            decision: Decision,
+        ) -> Result<(), AdapterError> {
+            self.permissions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((request_id.to_string(), decision));
+            Ok(())
+        }
+
+        async fn cancel(&mut self) -> Result<(), AdapterError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), AdapterError> {
+            Ok(())
+        }
+
+        fn resume_token(&self) -> Option<String> {
+            None
+        }
+    }
+
+    /// Settings stand-in: one harness has a configured binary.
+    struct StubPaths {
+        harness: &'static str,
+        command: &'static str,
+    }
+
+    impl AdapterConfigSource for StubPaths {
+        fn command_for(&self, harness: &str) -> Option<String> {
+            (harness == self.harness).then(|| self.command.to_string())
+        }
+    }
+
+    fn recording() -> (SessionManager, Arc<std::sync::Mutex<Vec<StartContext>>>) {
+        let (manager, contexts, _permissions) = recording_with_permissions();
+        (manager, contexts)
+    }
+
+    /// What a recording adapter captured: the launch contexts, and every permission answer.
+    type Recorded = (
+        SessionManager,
+        Arc<std::sync::Mutex<Vec<StartContext>>>,
+        Arc<std::sync::Mutex<Vec<(String, Decision)>>>,
+    );
+
+    fn recording_with_permissions() -> Recorded {
+        let contexts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let permissions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let adapter = Arc::new(RecordingAdapter {
+            contexts: Arc::clone(&contexts),
+            permissions: Arc::clone(&permissions),
+        });
+        (manager(adapter), contexts, permissions)
+    }
+
+    fn recorded(contexts: &Arc<std::sync::Mutex<Vec<StartContext>>>) -> Vec<StartContext> {
+        contexts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn a_permission_answer_reaches_the_live_session() {
+        // The Tauri command is a one-line forward to this call, so proving the manager delivers the
+        // answer to the adapter is what proves the button in the transcript can unblock a turn.
+        let (manager, _contexts, permissions) = recording_with_permissions();
+        let id = manager
+            .create(CreateSessionRequest {
+                harness: "record".into(),
+                ..Default::default()
+            })
+            .await
+            .expect("session is created")
+            .session
+            .id;
+
+        manager
+            .respond_permission(&id, "req-1", Decision::Approve)
+            .await
+            .expect("the answer is delivered");
+        manager
+            .respond_permission(&id, "req-2", Decision::Deny)
+            .await
+            .expect("the answer is delivered");
+
+        assert_eq!(
+            *permissions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![
+                ("req-1".to_string(), Decision::Approve),
+                ("req-2".to_string(), Decision::Deny),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_configured_harness_path_reaches_the_session_on_create_and_resume() {
+        let (manager, contexts) = recording();
+        manager.set_config_source(Arc::new(StubPaths {
+            harness: "record",
+            command: "C:/configured/record.exe",
+        }));
+
+        let id = manager
+            .create(CreateSessionRequest {
+                harness: "record".into(),
+                ..Default::default()
+            })
+            .await
+            .expect("session is created")
+            .session
+            .id;
+
+        let launched = recorded(&contexts);
+        assert_eq!(
+            launched[0].config["command"], "C:/configured/record.exe",
+            "a path configured in Settings is the command the session launches"
+        );
+
+        manager.close(&id).await.unwrap();
+        manager.resume(&id).await.unwrap();
+
+        let launched = recorded(&contexts);
+        assert_eq!(
+            launched.len(),
+            2,
+            "create and resume both launch the adapter"
+        );
+        assert_eq!(
+            launched[1].config["command"], "C:/configured/record.exe",
+            "a resume re-resolves the configured path instead of using a stale one"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_explicit_request_config_beats_the_configured_harness_path() {
+        let (manager, contexts) = recording();
+        manager.set_config_source(Arc::new(StubPaths {
+            harness: "record",
+            command: "C:/configured/record.exe",
+        }));
+
+        manager
+            .create(CreateSessionRequest {
+                harness: "record".into(),
+                config: Some(serde_json::json!({
+                    "command": "C:/fixtures/node.exe",
+                    "args": ["fixture.mjs"],
+                })),
+                ..Default::default()
+            })
+            .await
+            .expect("session is created");
+
+        let launched = recorded(&contexts);
+        assert_eq!(
+            launched[0].config["command"], "C:/fixtures/node.exe",
+            "the more specific request config wins"
+        );
+        assert_eq!(launched[0].config["args"][0], "fixture.mjs");
+    }
+
+    #[tokio::test]
+    async fn without_a_configured_path_the_request_config_is_passed_through_untouched() {
+        let (manager, contexts) = recording();
+
+        manager
+            .create(CreateSessionRequest {
+                harness: "record".into(),
+                config: Some(serde_json::json!({ "chunkDelayMs": 5 })),
+                ..Default::default()
+            })
+            .await
+            .expect("session is created");
+
+        let launched = recorded(&contexts);
+        assert_eq!(
+            launched[0].config,
+            serde_json::json!({ "chunkDelayMs": 5 }),
+            "no settings, no injected keys: the adapter keeps its own defaults"
+        );
     }
 
     fn manager(adapter: Arc<dyn HarnessAdapter>) -> SessionManager {

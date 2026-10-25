@@ -6,7 +6,6 @@ pub mod events;
 pub mod state;
 
 use grove_core::paths::AppPaths;
-use grove_core::specgraph::SpecWatcher;
 use state::AppState;
 use tauri::Manager;
 
@@ -21,6 +20,7 @@ pub fn run() {
             let paths = AppPaths::new(data_dir);
             let core = grove_core::GroveCore::init(paths)?;
             let state = AppState::new(core);
+            state.set_app_handle(app.handle().clone());
 
             // Forward the session bus to the webview. `grove-core` never imports tauri: it publishes
             // every persisted event on a broadcast channel and this loop is the only fan-out.
@@ -44,17 +44,11 @@ pub fn run() {
 
             // Watching is an enhancement: a missing/unwatchable project root must not stop the window
             // from opening. The panel still indexes on demand.
-            let watcher_handle = app.handle().clone();
-            match SpecWatcher::start(&state.core.project_root, move |change| {
-                events::emit_spec_changed(&watcher_handle, change);
-            }) {
-                Ok(watcher) => state.keep_spec_watcher(watcher),
-                Err(err) => tracing::warn!(
-                    target: "grove::specgraph",
-                    "spec watcher unavailable for {}: {err}",
-                    state.core.project_root.display()
-                ),
-            }
+            //
+            // The root is the startup one; `app_set_project_root` (and every session create/resume)
+            // moves it and re-targets this watcher through the same helper.
+            let project_root = state.core.project_root();
+            commands::app::adopt(&state, project_root);
 
             app.manage(state);
             Ok(())

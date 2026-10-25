@@ -6,12 +6,6 @@
     "exists": true
   },
   {
-    "id": "codex",
-    "label": "Codex",
-    "path": "C:/Users/demo/.codex/skills",
-    "exists": false
-  },
-  {
     "id": "pi",
     "label": "pi",
     "path": "C:/Users/demo/.pi/skills",
@@ -21,6 +15,12 @@
     "id": "opencode",
     "label": "OpenCode",
     "path": "C:/Users/demo/.config/opencode/skills",
+    "exists": false
+  },
+  {
+    "id": "codex",
+    "label": "Codex",
+    "path": "C:/Users/demo/.codex/skills",
     "exists": false
   },
   {
