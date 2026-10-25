@@ -250,7 +250,6 @@ export function ProvidersPane() {
   function card(row: ProviderStatus) {
     const probe = probeFor(row.id);
     const state = providerState(row, probe.rejected);
-    const modelCount = probe.models ?? row.models.length;
     return (
       <button
         className="provider-card"
@@ -270,7 +269,7 @@ export function ProvidersPane() {
             {state.label}
           </span>
           <span className="pc-models">
-            <b>{modelCount}</b> models
+            <b>{row.models.length}</b> models
           </span>
         </span>
       </button>
@@ -296,6 +295,7 @@ export function ProvidersPane() {
             id="provider-search"
             type="search"
             autoFocus
+            data-autofocus
             autoComplete="off"
             placeholder="Search providers, models, env vars"
             value={query}
@@ -373,6 +373,7 @@ export function ProvidersPane() {
               className="mono-input"
               type="password"
               autoFocus
+              data-autofocus
               autoComplete="off"
               spellCheck={false}
               placeholder="Paste the key"
@@ -427,14 +428,13 @@ export function ProvidersPane() {
   function manageStep(row: ProviderStatus) {
     const probe = probeFor(row.id);
     const state = providerState(row, probe.rejected);
-    const modelCount = probe.models ?? row.models.length;
     return (
       <div className="pd-shell">
         <ProviderDialogHead
           row={row}
           large
           title={`Manage ${row.name}`}
-          subtitle={`${modelCount} models · API key${
+          subtitle={`${row.models.length} models · API key${
             prefs.defaultProvider === row.id ? " · default" : ""
           }`}
           closeDisabled={saving}
@@ -455,7 +455,7 @@ export function ProvidersPane() {
 
           <div className="pd-kv">
             <span>Models</span>
-            <b>{modelCount}</b>
+            <b>{row.models.length}</b>
           </div>
           <div className="pd-kv">
             <span>Default model</span>
@@ -480,7 +480,10 @@ export function ProvidersPane() {
             </p>
           ) : probe.models !== null ? (
             <p className="pd-note" data-tone="ok">
-              {probe.models} models reachable
+              {probe.models} models available through this key
+              {probe.models !== row.models.length
+                ? ` · ${row.models.length} in this build`
+                : ""}
             </p>
           ) : (
             <p className="pd-note">Test the key to ask the vendor which models it can reach.</p>

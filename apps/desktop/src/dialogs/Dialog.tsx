@@ -32,6 +32,9 @@ export function Dialog({
       } else {
         node.setAttribute("open", "");
       }
+      // showModal() focuses the first focusable control (our close button). The design points the
+      // dialog at the field the user came to fill, so move focus there after the modal is up.
+      node.querySelector<HTMLElement>("[data-autofocus]")?.focus();
     } else if (!open && node.open) {
       if (typeof node.close === "function") node.close();
       else node.removeAttribute("open");

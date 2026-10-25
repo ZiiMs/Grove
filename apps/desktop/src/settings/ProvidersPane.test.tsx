@@ -143,7 +143,7 @@ describe("ProvidersPane", () => {
     );
 
     await userEvent.click(manage.getByRole("button", { name: "Test key" }));
-    expect(await manage.findByText("3 models reachable")).toBeInTheDocument();
+    expect(await manage.findByText("3 models available through this key")).toBeInTheDocument();
 
     await userEvent.click(manage.getByRole("button", { name: "Make default" }));
     await waitFor(() =>
