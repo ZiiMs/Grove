@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useUiStore } from "../state/uiStore";
 import { Icon } from "../workspace/Icon";
 
-/** One status line, bottom-centre. Replaces itself rather than stacking. */
+/** One status line, bottom-right. Replaces itself rather than stacking. */
 export function Toast() {
   const toast = useUiStore((state) => state.toast);
   const clear = useUiStore((state) => state.clearToast);

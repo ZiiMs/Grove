@@ -368,11 +368,57 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .composer-box textarea:focus{outline:none}
 .composer-box textarea::placeholder{color:var(--fg-3)}
 .composer-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.model-select{
-  background:var(--elev);border:1px solid var(--line-2);border-radius:var(--r);
-  padding:4px 6px 4px 8px;font-size:12px;font-family:var(--mono);color:var(--fg-2);cursor:pointer;max-width:100%;
+/* ---------- searchable combo ---------- */
+.combo{position:relative;min-width:0}
+.combo-trigger{
+  width:100%;display:flex;align-items:center;gap:6px;text-align:left;
+  background:var(--sunken);border:1px solid var(--line-2);border-radius:var(--r);
+  padding:8px 10px;font-size:13px;color:var(--fg);
+  transition:border-color var(--dur) var(--ease),background var(--dur) var(--ease),color var(--dur) var(--ease);
 }
-.model-select:hover{border-color:var(--line-2);color:var(--fg)}
+.combo-trigger:hover{border-color:var(--line-2);color:var(--fg)}
+.combo-trigger[aria-expanded="true"]{border-color:color-mix(in srgb, var(--t-accent) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb, var(--t-accent) 12%, transparent)}
+.combo-trigger:disabled{cursor:default;opacity:.8}
+.combo-value{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.combo-chevron{display:flex;margin-left:auto;color:var(--fg-3);transition:transform var(--dur) var(--ease)}
+.combo-trigger[aria-expanded="true"] .combo-chevron{transform:rotate(180deg)}
+.combo-pop{
+  position:absolute;left:0;z-index:60;min-width:100%;overflow:hidden;
+  background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r-lg);
+  box-shadow:0 18px 42px rgba(0,0,0,.5);
+}
+.combo-pop-down{top:calc(100% + 5px)}
+.combo-pop-up{bottom:calc(100% + 5px)}
+.combo-search{display:flex;align-items:center;gap:7px;padding:8px 10px;border-bottom:1px solid var(--line);color:var(--fg-3)}
+.combo-search input{width:100%;background:none;border:0;padding:0;font-size:12.5px;color:var(--fg)}
+.combo-search input:focus{outline:none}
+.combo-search input::placeholder{color:var(--fg-3)}
+.combo-list{max-height:280px;overflow-y:auto;padding:4px;outline:none}
+.combo-group + .combo-group{margin-top:3px}
+.combo-group-label{padding:7px 8px 4px;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
+.combo-option{
+  width:100%;display:flex;align-items:center;gap:8px;text-align:left;border-radius:var(--r-sm);
+  padding:7px 8px;font-size:12.5px;color:var(--fg-2);
+}
+.combo-option:hover,.combo-option[data-active="true"]{background:var(--elev);color:var(--fg)}
+.combo-option[aria-selected="true"]{color:var(--fg)}
+.combo-option .od-icon{margin-left:auto;color:var(--jade);flex:none}
+.combo-option-copy{display:grid;gap:1px;min-width:0}
+.combo-option-copy > span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.combo-option-hint{font-family:var(--mono);font-size:10px;color:var(--fg-3)}
+.combo-empty{padding:12px 9px;font-size:12px;color:var(--fg-3)}
+.field .combo{width:100%}
+.field .combo-pop{width:100%;min-width:100%}
+.field .combo-list{max-height:240px}
+.combo-dialog .combo-list{max-height:160px}
+.composer-foot .combo{flex:none;max-width:260px}
+.composer-foot .combo-trigger{
+  width:auto;max-width:260px;background:var(--elev);
+  padding:4px 6px 4px 8px;font-size:12px;font-family:var(--mono);color:var(--fg-2);
+}
+.composer-foot .combo-thinking{max-width:190px}
+.composer-foot .combo-pop{width:min(360px,calc(100vw - 32px));min-width:0}
+.composer-foot .combo-thinking .combo-pop{width:190px}
 .btn-send{
   display:inline-flex;align-items:center;gap:6px;
   background:var(--jade);color:var(--jade-ink);font-weight:600;font-size:12.5px;
@@ -793,14 +839,14 @@ dialog.settings-modal{
 
 /* ---------- toast ---------- */
 .toast{
-  position:fixed;left:50%;bottom:44px;z-index:40;max-width:min(520px,calc(100vw - 32px));
+  position:fixed;right:18px;bottom:44px;z-index:40;max-width:min(420px,calc(100vw - 32px));
   display:flex;align-items:center;gap:8px;padding:9px 14px;
   background:var(--elev);border:1px solid var(--line-2);border-radius:var(--r-lg);
   font-size:12.5px;color:var(--fg);box-shadow:0 14px 36px rgba(0,0,0,.55);
-  opacity:0;transform:translate(-50%,10px);pointer-events:none;
+  opacity:0;transform:translate(12px,10px);pointer-events:none;
   transition:opacity var(--dur) var(--ease),transform var(--dur) var(--ease);
 }
-.toast[data-open="true"]{opacity:1;transform:translate(-50%,0)}
+.toast[data-open="true"]{opacity:1;transform:translate(0,0)}
 .toast .t-ico{display:flex;color:var(--jade);flex:none}
 
 /* ---------- responsive ---------- */
@@ -828,7 +874,7 @@ dialog.settings-modal{
   .run-scroll{padding:16px 14px 26px}
   .composer{padding:9px 14px 12px}
   .session-head{padding:0 12px;height:42px}
-  .toast{bottom:38px}
+  .toast{bottom:38px;right:12px}
   .sb-right .sb-item.tidy{display:none}
 }
 @media (max-width:640px){
@@ -1015,7 +1061,7 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .session .composer-box{border-color:transparent;background:transparent;padding:6px 8px;border-radius:var(--r);box-shadow:none;transition:border-color var(--dur) var(--ease),background var(--dur) var(--ease)}
 .session .composer-box:focus-within{border-color:var(--line-2);background:var(--sunken);box-shadow:none}
 .session .composer-box textarea{font-size:14px;line-height:1.6;max-height:96px}
-.session .model-select{font-size:10px;background:transparent;border-color:var(--line-2);color:var(--fg-3);padding:3px 6px}
+.session .composer-foot .combo-trigger{font-size:10px;background:transparent;border-color:var(--line-2);color:var(--fg-3);padding:3px 6px}
 .session .typing{font-family:var(--mono);font-size:10.5px}
 .session .empty{border:0;background:transparent;padding:24px 0}
 

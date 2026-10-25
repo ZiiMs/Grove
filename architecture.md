@@ -383,6 +383,11 @@ seven-panel shell and the spec/plan editors were retired.
   There is no in-app spec or plan editor and therefore no code editor in the webview.
 - **Dialogs:** native `<dialog>` with `showModal()` for the settings sheet, new session, add project,
   diff and pull request, so focus trapping and Escape come from the platform.
+- **Pickers:** `shell/Combo.tsx` is the one listbox control. Model pickers search across grouped
+  provider lists; thinking pickers use the same control with search disabled. The popup supports
+  arrow keys, Enter, Escape and focus-out dismissal.
+- **Notifications:** one status line in the bottom-right, above the status bar; a newer message
+  replaces the current one.
 - **Build guard:** `scripts/check-bundle.mjs` runs after `npm run build`, fails if Monaco reappears in
   the entry chunk or the entry chunk exceeds 600 kB, and reports the largest lazy chunks.
 - **State:** `zustand` stores per domain (`sessionStore` for the transcript, `workspaceStore` for

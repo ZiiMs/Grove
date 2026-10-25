@@ -12,6 +12,7 @@ import {
   modelGroupsFor,
   providerForModel,
 } from "../workspace/models";
+import { Combo } from "../shell/Combo";
 
 const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
   { value: "ask", label: "Ask before running" },
@@ -59,7 +60,6 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
   const fallbackProvider = firstAvailableProvider(prefs.enabledProviders, available, prefs.defaultProvider);
 
   const previewRoot = root.trim().replace(/\/+$/, "") || "~/code";
-  const modelKnown = groups.some((group) => group.models.includes(model));
 
   const save = async () => {
     const trimmed = root.trim();
@@ -99,35 +99,30 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
         <div className="sm-form">
           <div className="field">
             <label htmlFor="set-model">Default model</label>
-            <select id="set-model" value={model} onChange={(event) => setModel(event.target.value)}>
-              {!modelKnown ? <option value={model}>{model}</option> : null}
-              {groups.map(({ provider, models }) => (
-                <optgroup label={provider.name} key={provider.id}>
-                  {models.map((value) => (
-                    <option value={value} key={value}>
-                      {value}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+            <Combo
+              id="set-model"
+              label="Default model"
+              value={model}
+              groups={groups.map(({ provider, models }) => ({
+                label: provider.name,
+                options: models.map((value) => ({ value })),
+              }))}
+              searchable
+              onChange={setModel}
+            />
             <p className="field-hint">
               Runs on {providerMeta(providerForModel(model, groups) ?? fallbackProvider).name}.
             </p>
           </div>
           <div className="field">
             <label htmlFor="set-thinking">Thinking level</label>
-            <select
+            <Combo
               id="set-thinking"
+              label="Thinking level"
               value={thinking}
-              onChange={(event) => setThinking(event.target.value as ThinkingLevel)}
-            >
-              {THINKING_OPTIONS.map((option) => (
-                <option value={option.value} key={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              groups={[{ options: THINKING_OPTIONS }]}
+              onChange={(value) => setThinking(value as ThinkingLevel)}
+            />
             <p className="field-hint">
               How much hidden reasoning to ask for on models that support it.
             </p>

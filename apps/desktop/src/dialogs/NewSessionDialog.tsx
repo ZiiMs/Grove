@@ -14,6 +14,7 @@ import {
   providerForModel,
 } from "../workspace/models";
 import { Icon } from "../workspace/Icon";
+import { Combo } from "../shell/Combo";
 import { basename, dirname } from "../workspace/tree";
 import { Dialog } from "./Dialog";
 
@@ -243,7 +244,6 @@ export function NewSessionDialog() {
     return Array.from(new Set(values));
   }, [project?.defaultBranch, projectWorktrees]);
 
-  const currentModelKnown = modelGroups.some((group) => group.models.includes(model));
   const noProvider = modelGroups.length === 0;
 
   return (
@@ -375,18 +375,19 @@ export function NewSessionDialog() {
 
       <div className="field">
         <label htmlFor="nd-model">Model</label>
-        <select id="nd-model" value={model} onChange={(event) => setModel(event.target.value)}>
-          {!currentModelKnown ? <option value={model}>{model}</option> : null}
-          {modelGroups.map(({ provider, models }) => (
-            <optgroup label={provider.name} key={provider.id}>
-              {models.map((value) => (
-                <option value={value} key={value}>
-                  {value}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
+        <Combo
+          className="combo-dialog"
+          id="nd-model"
+          label="Model"
+          value={model}
+          groups={modelGroups.map(({ provider, models }) => ({
+            label: provider.name,
+            options: models.map((value) => ({ value })),
+          }))}
+          searchable
+          placement="up"
+          onChange={setModel}
+        />
         <p className="field-hint" id="nd-model-hint">
           {noProvider
             ? "Add a provider in Settings and paste its API key first."

@@ -196,10 +196,30 @@ describe("redesigned shell", () => {
 
   it("changes the thinking level for the active session", async () => {
     const bridge = await ready();
-    const select = screen.getByLabelText("Thinking level for this session");
-    await userEvent.selectOptions(select, "high");
+    const trigger = screen.getByRole("combobox", { name: "Thinking level for this session" });
+    await userEvent.click(trigger);
+    const listbox = screen.getByRole("listbox", { name: "Thinking level for this session" });
+    expect(within(listbox.parentElement as HTMLElement).queryByRole("searchbox")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("option", { name: "Think high" }));
     await waitFor(() => expect(bridge.invocations).toContain("session_set_thinking"));
-    await waitFor(() => expect(select).toHaveValue("high"));
+    await waitFor(() => expect(trigger).toHaveTextContent("Think high"));
+  });
+
+  it("searches the model combo before switching models", async () => {
+    const bridge = await ready();
+    await userEvent.click(screen.getByRole("combobox", { name: "Model for this session" }));
+    const search = screen.getByRole("searchbox", { name: "Search Model for this session" });
+    await userEvent.type(search, "mock");
+    expect(screen.getByRole("option", { name: "mock-1" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "claude-sonnet-4-5" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("option", { name: "mock-1" }));
+    await waitFor(() => expect(bridge.invocations).toContain("session_switch_provider"));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model for this session" })).toHaveTextContent(
+        "mock-1",
+      ),
+    );
   });
 
   it("opens settings on the requested tab and applies a theme", async () => {

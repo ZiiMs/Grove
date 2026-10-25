@@ -33,6 +33,7 @@ import {
   SESSION_UI_STATE,
 } from "../workspace/models";
 import { Icon } from "../workspace/Icon";
+import { Combo } from "../shell/Combo";
 import {
   clockLabel,
   durationLabel,
@@ -870,7 +871,6 @@ function Composer({
   const currentProvider = detail?.provider ?? fallbackProvider;
   const currentModel = model ?? defaultModelFor(currentProvider, modelsByProvider[currentProvider]);
   const currentThinking = detail?.thinkingLevel ?? "off";
-  const known = modelGroups.some((group) => group.models.includes(currentModel));
 
   useEffect(() => {
     const node = inputRef.current;
@@ -966,44 +966,31 @@ function Composer({
             }}
           />
           <div className="composer-foot">
-            <label className="sr-only" htmlFor="model-select">
-              Model for this session
-            </label>
-            <select
-              className="model-select"
+            <Combo
+              className="combo-model"
               id="model-select"
+              label="Model for this session"
               value={currentModel}
+              groups={modelGroups.map(({ provider: entry, models }) => ({
+                label: entry.name,
+                options: models.map((value) => ({ value })),
+              }))}
               disabled={busy}
-              onChange={(event) => void changeModel(event.target.value)}
-            >
-              {!known ? <option value={currentModel}>{currentModel}</option> : null}
-              {modelGroups.map(({ provider: entry, models }) => (
-                <optgroup label={entry.name} key={entry.id}>
-                  {models.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            <label className="sr-only" htmlFor="thinking-select">
-              Thinking level for this session
-            </label>
-            <select
-              className="model-select"
+              searchable
+              placement="up"
+              onChange={(value) => void changeModel(value)}
+            />
+            <Combo
+              className="combo-thinking"
               id="thinking-select"
+              label="Thinking level for this session"
               value={currentThinking}
+              groups={[{ options: THINKING_LEVELS }]}
               disabled={busy}
+              placement="up"
               title="Thinking level for the next turn"
-              onChange={(event) => void setThinking(bridge, event.target.value as typeof currentThinking)}
-            >
-              {THINKING_LEVELS.map((level) => (
-                <option value={level.value} key={level.value}>
-                  {level.label}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => void setThinking(bridge, value as ThinkingLevel)}
+            />
             <div className="foot-actions">
               {working ? (
                 <button className="btn-stop" type="button" onClick={() => void cancel(bridge)}>
