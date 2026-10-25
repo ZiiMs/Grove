@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Performance guard for the production webview bundle.
 //
-// Monaco is large and only needed when a diff or a spec is open. It must stay in a lazy chunk, never
-// in the entry chunk the window parses at launch; otherwise a cold start pays for an editor nobody
-// asked for. `vite build` cannot express that, so this runs after the build and fails loudly.
+// The redesigned shell has no in-app code editor, so the original Monaco rule became a size budget:
+// the entry chunk must stay small enough to parse at window launch, and Monaco must not quietly come
+// back into it. Lazy feature chunks are still allowed for the parts that need them.
 //
 // Run it directly (`npm run check:bundle`, or as the last step of `npm run build`).
 
@@ -14,11 +14,12 @@ import path from "node:path";
 const dist = fileURLToPath(new URL("../apps/desktop/dist", import.meta.url));
 const indexHtml = path.join(dist, "index.html");
 const MARKER = "monaco-editor";
+const ENTRY_BUDGET_KB = 600;
 
 function fail(message) {
   console.error(`\nBundle guard failed: ${message}`);
   console.error(
-    "Monaco must be reached through React.lazy/import() from the panel that needs it " +
+    "Keep the entry chunk free of editors and hold it under the budget " +
       "(see architecture.md §Rendering and README §Performance notes).",
   );
   process.exit(1);
@@ -39,34 +40,26 @@ if (!entryMatch) {
 const entryName = path.basename(entryMatch[1]);
 const entryPath = path.join(dist, entryMatch[1].replace(/^\//, ""));
 const entry = readFileSync(entryPath, "utf8");
-const sizeKb = (text) => (Buffer.byteLength(text) / 1024).toFixed(1);
+const sizeKb = (text) => Buffer.byteLength(text) / 1024;
 
 if (entry.toLowerCase().includes(MARKER)) {
+  fail(`${entryName} contains ${MARKER}; an editor is back in the entry chunk`);
+}
+if (sizeKb(entry) > ENTRY_BUDGET_KB) {
   fail(
-    `${entryName} (${sizeKb(entry)} kB) contains ${MARKER}: it is in the entry chunk, so every ` +
-      "window launch parses the editor",
+    `${entryName} is ${sizeKb(entry).toFixed(1)} kB, over the ${ENTRY_BUDGET_KB} kB entry budget`,
   );
 }
 
 const assetsDir = path.join(dist, "assets");
 const chunks = readdirSync(assetsDir).filter((name) => name.endsWith(".js"));
-const monacoChunks = [];
-for (const name of chunks) {
-  if (name === entryName) continue;
-  const source = readFileSync(path.join(assetsDir, name), "utf8");
-  if (source.toLowerCase().includes(MARKER)) {
-    monacoChunks.push({ name, size: sizeKb(source) });
-  }
-}
-
-if (monacoChunks.length === 0) {
-  fail(
-    `no lazy chunk contains ${MARKER}: either the editor was dropped from the panels or the ` +
-      "imports stopped being dynamic",
-  );
-}
+const heavy = chunks
+  .filter((name) => name !== entryName)
+  .map((name) => ({ name, kb: sizeKb(readFileSync(path.join(assetsDir, name), "utf8")) }))
+  .sort((left, right) => right.kb - left.kb)
+  .slice(0, 3);
 
 console.log(
-  `Bundle guard: entry ${entryName} ${sizeKb(entry)} kB (no Monaco); ` +
-    `lazy ${monacoChunks.map((chunk) => `${chunk.name} ${chunk.size} kB`).join(", ")}`,
+  `Bundle guard: entry ${entryName} ${sizeKb(entry).toFixed(1)} kB (budget ${ENTRY_BUDGET_KB} kB); ` +
+    `lazy ${heavy.map((chunk) => `${chunk.name} ${chunk.kb.toFixed(1)} kB`).join(", ") || "none"}`,
 );
