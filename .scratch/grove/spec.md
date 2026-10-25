@@ -1,10 +1,14 @@
-# Grove — spec pointer
+# Grove - spec pointer
 
 The spec of record for this effort lives at the repo root:
 
-- `goal-and-requirements.md` — intent, users, goals, non-goals, success conditions
-- `architecture.md` — repository shape, adapter contract, event model, persistence, IPC, sidecar
-  protocol, rendering, testing, extension seams
+- `goal-and-requirements.md` - intent, users, goals, non-goals, success conditions (amended: ADR 0003)
+- `architecture.md` - repository shape, provider contract, agent runtime, event model, persistence,
+  IPC, rendering, testing, extension seams
+
+> **History.** The tickets below describe the first build, which wrapped external agent CLIs behind
+> adapters with a Node sidecar. ADR 0003 replaced that with in-process providers: read
+> `architecture.md` for what exists, and this graph for why the earlier pieces were built.
 
 This directory holds the implementation tickets for the first build:
 `.scratch/grove/issues/NN-<slug>.md`, one ticket per file, blockers numbered first.

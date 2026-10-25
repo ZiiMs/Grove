@@ -230,10 +230,25 @@ mod tests {
     }
 
     #[test]
+    fn frozen_migrations_are_never_edited() {
+        // The shipped DDL is history: a database in the field was built from exactly these bytes.
+        // Editing one of them changes what a new install gets without ever changing what an existing
+        // install has, which is how a rename quietly became a no-op and the app died on startup.
+        // Adding migration 7 does not touch this assertion; rewriting 1..5 does.
+        let frozen = include_str!("../../tests/fixtures/schema_v5.sql");
+        let current: Vec<&str> = MIGRATIONS[..5].to_vec();
+        assert_eq!(
+            frozen.replace("\r\n", "\n"),
+            current.join("\n-- ---- 8< ----\n"),
+            "migrations 1..=5 are frozen; append a new one instead of editing them"
+        );
+    }
+
+    #[test]
     fn migration_six_turns_a_legacy_harness_row_into_a_provider_row() {
         // The rename is the one migration that rewrites an existing column, so it is pinned by effect
-        // rather than by count: an install from the harness era must keep its conversations, under the
-        // new column name.
+        // on a database built from the frozen history, not from the current array: an install from
+        // the harness era must keep its conversations, under the new column name.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("grove.db");
         {
@@ -242,11 +257,12 @@ mod tests {
                 "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
             )
             .unwrap();
-            for (index, sql) in MIGRATIONS[..5].iter().enumerate() {
-                conn.execute_batch(sql).unwrap();
+            conn.execute_batch(include_str!("../../tests/fixtures/schema_v5.sql"))
+                .unwrap();
+            for version in 1..=5 {
                 conn.execute(
                     "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                    rusqlite::params![(index + 1) as i64, "2026-10-24T00:00:00Z"],
+                    rusqlite::params![version, "2026-10-24T00:00:00Z"],
                 )
                 .unwrap();
             }

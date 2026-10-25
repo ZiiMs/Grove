@@ -3,7 +3,8 @@
 > **Superseded (second build).** The design in `design-reference/` is now the production UI: the
 > project tree, always-chat centre, Git · Plan · Spec context column and the settings sheet described
 > in `docs/adr/0002-workspace-projects-and-the-redesigned-shell.md`. This file is kept as the brief the
-> first build was designed against; its "current state" section describes the retired prototype.
+> first build was designed against; its "current state" section describes the retired prototype. Its
+> references to harnesses are historical: ADR 0003 replaced them with in-process model providers.
 
 Two things in one file: a **condensed prompt** (paste this into a design chat), and the **full brief**
 underneath (send this to a designer, or attach it). Everything below describes the interface that

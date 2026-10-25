@@ -1,0 +1,22 @@
+# Normalise line endings at the index, so a file's bytes do not depend on which machine or which
+# tool last touched it. Without this, `core.autocrlf=true` rewrites LF on checkout and every commit
+# prints "LF will be replaced by CRLF" for files nobody edited, which buries real output and makes
+# exact-match edits fail against content that was silently converted.
+* text=auto eol=lf
+
+# Binary formats must never be normalised.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.db binary
+*.sqlite binary
+*.exe binary
+*.dll binary
+*.node binary

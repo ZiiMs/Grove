@@ -14,6 +14,13 @@ the extension seams. `goal-and-requirements.md` is the intent of record.
 Work is tracked as local markdown tickets under `.scratch/<feature>/issues/`, one file per ticket, with
 blocking edges as text. See `docs/agents/issue-tracker.md`.
 
+A feature-sized request gets a ticket before code is written. The ticket is the spec the review stage
+reads, so a change reviewed only against a chat message has no spec axis at all.
+
+### Review
+
+Standards live in `CODING_STANDARDS.md`; it is read at review, not while implementing.
+
 ### Triage labels
 
 The five canonical triage roles, default label strings. See `docs/agents/triage-labels.md`.
