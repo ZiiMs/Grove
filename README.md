@@ -18,8 +18,8 @@ First build, feature-complete and hardened. All fifteen tickets in `.scratch/gro
 `done`; the dependency graph is in `.scratch/grove/spec.md`. The redesigned shell from
 `design-reference/` is now the production UI: a project tree, an always-mounted conversation, a Git ·
 Plan · Spec context column, and a settings sheet with seven themes. The decision record is
-`docs/adr/0002-workspace-projects-and-the-redesigned-shell.md`. The automated gates below run on
-`windows-latest`, and the manual smoke checklist is the part no test can paint for you.
+`docs/adr/0002-workspace-projects-and-the-redesigned-shell.md`. The gates below are run locally —
+there is no CI — and the manual smoke checklist is the part no test can paint for you.
 
 ## Prerequisites
 
@@ -91,7 +91,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 `npm run build` ends with `scripts/check-bundle.mjs`: it fails if Monaco reappears in the entry
 chunk or the entry chunk exceeds its size budget.
-CI runs exactly these gates on `windows-latest` (`.github/workflows/ci.yml`), in this order: install,
+There is no CI. Run these gates yourself before landing a change, in this order: install,
 typecheck, vitest, build (with the bundle guard), rustfmt `--check`, clippy with `-D warnings`,
 `cargo test -p grove-core`, and `cargo check -p grove-desktop`.
 

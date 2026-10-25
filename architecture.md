@@ -76,7 +76,6 @@ apps/desktop/src/styles/         themes.css (token contract) · design.css (shel
 apps/desktop/tools/              visual screenshot harness (not part of `npm test`)
 apps/desktop/src-tauri/src/
   lib.rs main.rs state.rs events.rs commands/{mod,app,projects,sessions,plan,specs,skills,mcp,git,settings}.rs
-.github/workflows/ci.yml
 .scratch/grove/issues/           the ticket files
 ```
 
@@ -410,10 +409,10 @@ models) so a row renders before the catalogue has loaded; an unknown id degrades
 - **TS:** `vitest` + `@testing-library/react` against a `FakeBridge` implementing the same typed bridge
   the app uses. `apps/desktop/tools/visual.test.tsx` (not in `npm test`) renders the built shell into
   `dist/visual-*.html` for screenshot comparison across the viewport matrix.
-- **CI:** `.github/workflows/ci.yml`, `windows-latest`: `npm ci`, `npm run typecheck`, `npm test`,
-  `npm run build` (which ends with the bundle guard), `cargo fmt --all -- --check`,
-  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p grove-core`,
-  `cargo check -p grove-desktop`.
+- **No CI.** The gates are `npm ci`, `npm run typecheck`, `npm test`, `npm run build` (which ends with
+  the bundle guard), `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo test -p grove-core` and `cargo check -p grove-desktop`. Nothing runs them
+  automatically, so the change that lands is responsible for having run them.
 - **Not automatable here:** launching the GUI and observing webview paint. `cargo check` + `vite build`
   are the gate; a human smoke run is listed in the README.
 
