@@ -72,6 +72,25 @@ Rules that keep adapters isolated and Grove trustworthy:
 - **Isolation is enforced.** `tests/architecture.rs` fails if an adapter imports another adapter,
   `tauri`, or the session manager/pump.
 
+### Detection
+
+`detect()` is a report, not a gate. It resolves the configured command (or the adapter's default)
+without running anything, and `start()` is always allowed to try anyway: for a process-backed
+adapter a missing binary becomes a retryable `error` event on the first turn, so the session row and
+the transcript still exist.
+
+- **Adapters with a default binary** (`claude`, `codex`, `opencode`, `pi`) resolve the configured
+  override first, then `PATH`. `pi` also has to find its sidecar build (`sidecar/dist/main.js`) and
+  Node; its detail explains which one is missing.
+- **An adapter with no default binary reports `unavailable` until it is configured.** ACP is a
+  protocol, not a product, so `AcpAdapter::detect` answers `installed: false` with the setting to
+  change ("no ACP agent command is configured…"), and `start()` fails `AdapterError::Unavailable`
+  rather than guessing a binary. `AcpAdapter::with_command` is the detection hint; a session's
+  `config.command` is what actually launches. The App always shows the harness in the picker; the
+  doctor explains the missing command instead of letting the first turn fail mysteriously.
+- **Attach-mode OpenCode** detects the configured `baseUrl` rather than a binary: there is nothing
+  to spawn when Grove is told to join a server that is already running.
+
 ### `resume_token`
 
 The harness's own conversation id, mirrored into `sessions.resume_token` by the manager after every
@@ -83,6 +102,10 @@ A process-backed adapter usually learns the id from the harness's *first line*, 
 post-command mirror has run. Return the `Arc<Mutex<Option<String>>>` you write from
 `resume_token_slot()` and the session pump mirrors it into the row as soon as it changes — no second
 command needed. In-process adapters can ignore the slot (the default is `None`).
+
+The token is whatever the harness itself uses: Claude's `session_id`, Codex's thread id, the OpenCode
+or ACP session id, and pi's session **file path**. Do not assume it is a UUID — persist the string you
+were given and hand it back unchanged.
 
 ## The Claude Code adapter, as a worked example
 
@@ -125,6 +148,62 @@ adapter does not depend on it. The trade-off is honest:
 Every event that the adapter claims in `Capabilities` appears here. Adding a mapping means updating
 both the code and this table.
 
+## The ACP adapter, as a generic example
+
+ACP is a protocol, not a product, so `acp.rs` knows no harness name: the command line comes entirely
+from `config.command` and `config.args`. With no command configured there is nothing to detect and
+nothing to launch (see §Detection above).
+
+Launch sequence (ACP v1, `protocolVersion: 1` — v2 is a draft with renames, so the adapter never
+negotiates up):
+
+1. `initialize` with `protocolVersion: 1`, honest `clientCapabilities` and `clientInfo`. A version
+the agent answers with that Grove does not speak ends the session as an `error`.
+2. `session/new` with the session `cwd` and the configured `mcpServers`, or `session/resume` with the
+   stored session id. `session/load` is never used: it **replays the whole conversation** as
+   `session/update` notifications, which would duplicate Grove's append-only transcript (the fixture
+   exits non-zero if a client uses it).
+3. `session/prompt` per user message — one long-lived request per turn, answered with a `stopReason`;
+   `session/cancel` (a notification) cuts it short.
+
+`session/update` mapping, and nothing more (`Capabilities` matches this table exactly):
+
+| `session/update` | Grove events |
+|---|---|
+| `agent_message_chunk` with text, same `messageId` | `Delta { text }` per chunk |
+| `agent_message_chunk`, `messageId` changes or the turn ends | `Message { assistant, [Text] }` for the text streamed so far |
+| `agent_thought_chunk` | `Message { assistant, [Thinking] }` |
+| `tool_call` | `ToolCall { call_id: toolCallId, name, title }` |
+| `tool_call_update` with `completed` / `failed` | `ToolResult { call_id, ok / error, summary }` |
+| `tool_call_update` with `pending` / `in_progress` | logged (progress only) |
+| `user_message_chunk` | ignored: it is the replay echo `session/load` would produce |
+| `plan`, `usage_update`, `current_mode_update`, `config_option_update`, `session_info_update`, `available_commands_update`, `notice`, `compaction_*` | logged and ignored |
+| unknown `sessionUpdate` variant, unknown notification | logged and ignored |
+| unknown **request** (anything with an id) | answered with JSON-RPC `-32601`, so an agent never waits |
+| `session/request_permission` | `PermissionRequest { request_id: <jsonrpc id>, title, detail }`, answered `{outcome:{outcome:"selected", optionId}}` or `{outcome:{outcome:"cancelled"}}` |
+| `session/prompt` result | `stopReason` `end_turn`/`cancelled` → `Status { idle }`; `refusal`, `max_tokens`, `max_turn_requests` → `Error` + `Status { idle }` |
+| transport close | `Status { exited }` |
+
+Deliberate limits, reflected in `capabilities()`:
+
+- `diffs: false` — ACP `diff` tool content is summarized, not turned into a patch yet.
+- `usage: false` — `usage_update` reports context-window fill (`used`/`size`) and cost, not the
+  input/output token split `Usage` carries, so nothing is invented.
+- `images: false`, `mcp: false` — prompts are text, and although `mcpServers` is forwarded because the
+  protocol requires it, Grove's MCP catalog is not wired into ACP sessions yet.
+- No `authenticate` and no model selection: an agent advertising `authMethods` is reported rather than
+  silently failing every turn, and `StartContext.model` is recorded on `SessionStarted` while the
+  agent's own configuration decides what runs.
+- No `session/close`: shutdown kills the agent's process tree and leaves the `exited` transition to
+  the session manager.
+
+Permissions are the place where "always answer" matters more than anything else: every
+`session/request_permission` gets a response, including `cancelled` when the user cancels or when the
+request arrives outside a turn — the protocol says a client **MUST** answer `cancelled` on
+cancellation or the agent may hang. A cancelled turn keeps its deltas but never completes a
+`Message`: fragments between `session/cancel` and the `cancelled` stop reason are accepted and
+discarded rather than shown as a finished answer.
+
 ## The fixture pattern
 
 Tests never touch a real harness or the network. Each adapter ships a scripted fake CLI:
@@ -164,21 +243,46 @@ Guidelines for a new fake:
 - keep every delay configurable (`--delay-ms`) so the suite is fast and cancellable;
 - never call the network.
 
+### When the fixture is a server, not a CLI
+
+Not every harness is a stdio child, so not every fixture is a fake CLI. Two shapes exist:
+
+- **A transport host.** `fixtures/harnesses/pi_sidecar_fake.mjs` is a stand-in for the Node sidecar:
+  it speaks **Grove Sidecar Protocol v1** (NDJSON JSON-RPC on stdio, see
+  `docs/sidecar-protocol.md`) and replays already-normalized `HarnessEvent`s. That is why the Rust
+  `pi` adapter has no idea pi exists — it only knows this protocol, and the fixture proves its side
+  of the handshake, the forwarding and the failure modes.
+- **A real server.** `fixtures/harnesses/opencode_fake.mjs` is an actual loopback HTTP + SSE server
+  (`node opencode_fake.mjs serve --mode <mode>`), because OpenCode is reached over HTTP, not stdio.
+  It binds `127.0.0.1`, prints the chosen port (and can write it to `--port-file`), keeps sessions in
+  `--state-dir/sessions.json` so a restarted server can be resumed, and can append a
+  `--heartbeat-file` so a test can prove the process died. Its `--log-file` records what the adapter
+  really requested.
+
+The fixture rules are the same: validate what the adapter sends, fail loudly on a wrong launch, make
+failure modes selectable with `--mode`, and never reach the network. Conformance still applies — the
+OpenCode target simply starts the server through `config.command`/`config.args` like every other
+adapter, and the shared suite proves the same event ordering over a different transport.
+
 ## The conformance suite
 
 `tests/adapters_conformance.rs` runs the same expectations against every adapter and its fixture:
 
 | Check | What it proves |
 |---|---|
-| capabilities honesty | every claimed capability is observed in the stream; an adapter without permissions reports `Unsupported`; an unverified permission claim fails the suite |
+| capabilities honesty | every claimed capability is observed in the stream; an adapter without permissions reports `Unsupported` from `respond_permission`; an adapter that claims `permissions` must opt in to the roundtrip below |
 | ordering and termination | `session_started` first and once; `ready` before content; delta before its message; call before result; timestamps are RFC 3339 UTC; the turn ends `idle`, never `exited` |
 | cancel | a slow turn is cut short, produces no error and no assistant message, returns to `idle`, and the session still works afterwards |
 | resume token roundtrip | the token is captured, survives a restart with `resumed: true`, and the harness keeps the same conversation id |
 | malformed input | unknown frames and junk input are skipped, the valid frames still land, and the session remains usable |
+| permission roundtrip (opt-in) | the harness emits a `PermissionRequest`, the answer is delivered, and a matching `PermissionResolved` is recorded |
 
-`Target::new(adapter, |scenario| context)` maps the scenario names `turn`, `slow`, and `unknown` to
-whatever the fixture understands. The suite also fails if an adapter is registered in
-`builtin_registry()` without a target, so a new harness cannot ship half-tested.
+`Target::new(adapter, |scenario| context)` maps the scenario names `turn`, `slow`, `unknown` and
+`permission` to whatever the fixture understands. The permission scenario is **opt-in**: a target
+that claims `capabilities.permissions` must call `Target::with_permissions()` and script the
+`permission` scenario (Codex's `approval` mode, ACP's `permission` mode). Without that opt-in the
+suite fails, so a permission claim can never be a guess. The suite also fails if an adapter is
+registered in `builtin_registry()` without a target, so a new harness cannot ship half-tested.
 
 ## Add a sixth harness: the six-step recipe
 
@@ -192,8 +296,10 @@ whatever the fixture understands. The suite also fails if an adapter is register
 3. **Write the fixture** `fixtures/harnesses/<harness>_fake.mjs` with the modes listed above, echoing
    the resume id and failing when Grove's own flags are wrong.
 4. **Test each mode** in `crates/grove-core/tests/adapters_<harness>.rs` (happy plus one test per
-   failure mode), and add a `Target` to `tests/adapters_conformance.rs`. Green conformance is the
-   definition of "contract-compliant".
+   failure mode), and add a `Target` to `tests/adapters_conformance.rs` (plus `with_permissions()` if
+   you claim the permission capability). Add the adapter to `tests/adapters_restart.rs` too: the same
+   create → send → close → reopen → resume path runs against every registered harness. Green
+   conformance is the definition of "contract-compliant".
 5. **Register it in one line**: `crates/grove-core/src/adapters/registry.rs` — add the
    `Arc::new(<Harness>Adapter::default())` entry. That is the only shared file the feature touches
    besides `adapters/mod.rs` (`pub mod <harness>;`) if you re-export it.

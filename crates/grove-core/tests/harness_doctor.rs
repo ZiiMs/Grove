@@ -118,6 +118,22 @@ async fn reports_builtin_harnesses_and_the_node_git_gh_tools() {
     let report = doctor.report().await;
 
     let harness = &report.harnesses[0];
+    assert_eq!(
+        report
+            .harnesses
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["mock", "claude", "acp", "pi", "opencode", "codex"],
+        "the doctor screens the same five harnesses (plus the mock) the picker offers"
+    );
+    assert!(
+        report
+            .harnesses
+            .iter()
+            .all(|row| !row.label.trim().is_empty()),
+        "every harness row is labelled for the Settings table"
+    );
     assert_eq!(harness.id, "mock");
     assert!(harness.installed, "the mock adapter is built in");
     assert_eq!(harness.path.as_deref(), Some("builtin:mock"));

@@ -3,8 +3,6 @@
 //! The adapter tests never touch the network or a real harness install: a fixture script (or the
 //! in-process mock) is pointed at through `StartContext.config.command` and `config.args`.
 
-#![allow(dead_code)]
-
 use grove_core::adapters::AdapterDeps;
 use grove_core::paths::AppPaths;
 use grove_core::secrets::MemorySecretStore;

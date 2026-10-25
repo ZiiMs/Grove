@@ -15,8 +15,6 @@
 //! malformed-input tolerance, and a permission roundtrip when one is claimed. A sixth adapter adds a
 //! target here and keeps these green.
 
-#![allow(dead_code)]
-
 use super::runtime::{deps, drain_until, drain_until_state, is_state, next_event, tags};
 use grove_core::adapters::{AdapterError, HarnessAdapter, HarnessSession, StartContext, UserInput};
 use grove_core::sessions::event::{Decision, EventKind, HarnessEvent, Role, SessionState};

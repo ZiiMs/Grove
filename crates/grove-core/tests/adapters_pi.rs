@@ -5,10 +5,12 @@
 //! The fixture speaks Grove Sidecar Protocol v1 (`docs/sidecar-protocol.md`); `pi` itself is behind
 //! that boundary, and the sidecar's own mapping is covered by `sidecar/test/pi_host.test.ts`.
 
-mod adapter_support;
+pub mod adapter_support;
 
 use adapter_support::pi_fixture::{config, context};
-use adapter_support::runtime::{deps, drain_until, drain_until_state, is_state, next_event, tags};
+use adapter_support::runtime::{
+    deps, drain_until, drain_until_state, fixture, is_state, next_event, tags,
+};
 use grove_core::adapters::{AdapterError, HarnessAdapter, HarnessSession, PiAdapter, UserInput};
 use grove_core::harness_doctor::{DoctorConfig, HarnessDoctor};
 use grove_core::ipc::CreateSessionRequest;
@@ -332,7 +334,12 @@ async fn a_broken_handshake_is_reported_as_unavailable() {
 #[tokio::test]
 async fn a_missing_sidecar_binary_is_reported_as_unavailable() {
     let mut ctx = context("happy", &[]);
-    ctx.config = json!({ "command": "grove-definitely-not-a-real-binary" });
+    // An explicit entry point keeps the test about the launcher, not about whether `npm run build`
+    // has already written sidecar/dist/main.js in this checkout.
+    ctx.config = json!({
+        "command": "grove-definitely-not-a-real-binary",
+        "args": [fixture("pi_sidecar_fake.mjs").to_string_lossy()],
+    });
     let error = PiAdapter::default()
         .start(ctx, deps())
         .await

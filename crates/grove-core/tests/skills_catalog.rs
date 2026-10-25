@@ -1,7 +1,7 @@
 //! Skill catalog: GitHub tree discovery, manifest cache with TTL + ETag, offline fallback, and the
 //! optional token. Everything goes through `wiremock`; no test talks to the network.
 
-mod skills_support;
+pub mod skills_support;
 
 use grove_core::secrets::{MemorySecretStore, SecretStore, GITHUB_TOKEN};
 use grove_core::skills::{SkillCatalogConfig, SkillSource};

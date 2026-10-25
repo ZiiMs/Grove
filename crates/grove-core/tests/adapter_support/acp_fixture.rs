@@ -1,7 +1,5 @@
 //! Start contexts for the scripted ACP agent stand-in (`fixtures/harnesses/acp_fake.mjs`).
 
-#![allow(dead_code)]
-
 use super::conformance::Target;
 use super::runtime::fixture;
 use grove_core::adapters::{AcpAdapter, StartContext};

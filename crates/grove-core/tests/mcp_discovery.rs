@@ -1,7 +1,7 @@
 //! MCP discovery: read every harness config, normalise it, dedupe across files, and turn a broken
 //! file into a warning row. All configs live in a tempdir; nothing here touches the developer's home.
 
-mod mcp_support;
+pub mod mcp_support;
 
 use grove_core::mcp::{McpConfigWarning, McpServerView, McpTransport};
 use mcp_support::{fake_server, wait_for_file, write_fake_server, Sandbox};

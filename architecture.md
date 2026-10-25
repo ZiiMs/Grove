@@ -33,7 +33,7 @@ and is replaceable by any process that speaks the same protocol.
                                  │ Rust calls
 ┌────────────────────────────────┴───────────────────────────────────────────┐
 │ crates/grove-core                                                          │
-│  sessions ── adapters (claude · codex · acp · opencode · pi)               │
+│  sessions ── adapters (mock · claude · codex · acp · opencode · pi)        │
 │  store(SQLite) · specgraph · plan · skills · mcp · gitops · secrets        │
 └────────────────────────────────┬───────────────────────────────────────────┘
                                  │ stdio / HTTP+SSE / JSON-RPC
@@ -47,11 +47,14 @@ Cargo.toml                     workspace: crates/grove-core, apps/desktop/src-ta
 package.json                   npm workspaces: apps/desktop, sidecar, packages/contract
 architecture.md                this file
 goal-and-requirements.md       the goal spec
-AGENTS.md                      agent skills block (tracker/domain pointers)
+AGENTS.md                      agent guide (tracker/domain pointers)
+GLOSSARY.md                    the terms this codebase actually uses
 docs/agents/issue-tracker.md   local-markdown tracker convention
 docs/agents/domain.md          domain doc layout
-docs/adapters.md               "add a sixth harness" contributor guide
-docs/sidecar-protocol.md       Grove Sidecar Protocol v1
+docs/adr/                      architecture decision records (decisions that changed during the build)
+docs/adapters.md               "add a sixth harness" contributor guide + ACP worked example
+docs/sidecar-protocol.md       Grove Sidecar Protocol v1 — a spec node (grove-sidecar-protocol)
+scripts/check-bundle.mjs       bundle guard run after `npm run build`
 packages/contract/             zod schemas + TS types + fixture validator (UI ↔ core ↔ sidecar)
 contract/fixtures/             golden JSON, written by Rust tests, parsed by TS tests
 crates/grove-core/src/
@@ -65,8 +68,8 @@ crates/grove-core/src/
   gitops/{mod,types,repo,diff,pr}.rs
   secrets/mod.rs  harness_doctor.rs  settings/mod.rs
   ipc/{mod,types,error}.rs       command DTOs + event envelope
-crates/grove-core/tests/         integration tests (spawn fake harnesses)
-fixtures/harnesses/*.mjs         scripted fake CLIs / fake SSE server used by tests
+crates/grove-core/tests/         integration tests (spawn fake harnesses; per-adapter restart matrix)
+fixtures/harnesses/*.mjs         scripted fake CLIs, a real loopback HTTP+SSE server, and a sidecar host
 apps/desktop/src/                React UI
 apps/desktop/src-tauri/src/
   lib.rs main.rs state.rs events.rs commands/{mod,app,sessions,plan,specs,skills,mcp,git,settings}.rs
@@ -83,7 +86,7 @@ another adapter, `tauri`, or any UI-facing module. The registry is a plain funct
 harness is one module + one registry line + fixtures — no UI change.
 
 ```rust
-pub struct HarnessId(pub &'static str); // "claude" | "codex" | "acp" | "opencode" | "pi"
+pub struct HarnessId(pub &'static str); // "mock" | "claude" | "codex" | "acp" | "opencode" | "pi"
 
 #[derive(Clone, serde::Serialize)]
 pub struct Capabilities {
@@ -209,7 +212,15 @@ and survive a restart.
 
 SQLite via `rusqlite` (`bundled`, no system dependency), one file at the Tauri app-data dir:
 `%APPDATA%/Grove/grove.db`. Migrations are an ordered `&[&str]` applied under
-`schema_migrations(version)`.
+`schema_migrations(version)`; later domains append rather than edit an earlier migration, so an
+existing install upgrades in place. Four migrations shipped in the first build:
+
+| # | Tables | Feature |
+|---|---|---|
+| 1 | `sessions`, `events`, `events_by_session` | session runtime (ticket 02) |
+| 2 | `plans` (+ `mirror_hash`) | TODO plan and mirror (ticket 09) |
+| 3 | `settings` | typed settings documents (ticket 07) |
+| 4 | `pins` | specs pinned to a session (ticket 14) |
 
 ```sql
 sessions(id TEXT PK, harness TEXT, cwd TEXT, model TEXT, title TEXT, status TEXT,
@@ -218,13 +229,17 @@ events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, at TEXT,
        kind TEXT, payload TEXT)                       -- payload = full EventKind JSON
 plans(session_id TEXT PK, markdown TEXT, version INTEGER, mirror_hash TEXT, updated_at TEXT)
 pins(session_id TEXT, spec_id TEXT, PRIMARY KEY(session_id, spec_id))
-installs(skill TEXT, harness TEXT, path TEXT, installed_at TEXT, PRIMARY KEY(skill, harness, path))
 settings(key TEXT PK, value TEXT)                     -- JSON; never secrets
 ```
 
 **Files stay the source of truth where they already are.** Specs are repo `.md` files; skills live in
 each harness's own directory; the git repo is git. The DB holds only what has no file home: sessions,
-the event log, plan versions, pins, install records, settings.
+the event log, plan versions, pins, settings. Skill installs are a JSON file under the app-data dir
+behind the `InstallStore` trait (the SQL shape below is the reserve, not a migration):
+
+```sql
+installs(skill TEXT, harness TEXT, path TEXT, installed_at TEXT, PRIMARY KEY(skill, harness, path))
+```
 
 **Plan dual-edit.** SQLite is the record; every write also mirrors `.grove/sessions/<id>/plan.md` in the
 project (gitignored), atomically (temp file + rename). `mirror_hash` holds the content the record last
@@ -258,7 +273,9 @@ event payloads with zod before storing them — an unknown event kind is ignored
 ## Sidecar protocol (settled)
 
 `docs/sidecar-protocol.md` defines **Grove Sidecar Protocol v1**: newline-delimited JSON-RPC 2.0 over
-stdio.
+stdio. It is a registered spec node (`grove-sidecar-protocol`, type `architecture-design`, parent
+`grove-architecture`) — not a loose design doc — so the spec graph and every panel that reads it show
+the protocol as part of this architecture. `tests/specgraph.rs` pins the tree it contributes.
 
 - `initialize {protocolVersion:1}` → `{version, harnesses:[...]}`
 - `session.start {sessionId, cwd, model?, prompt?, resumeToken?, config?, context?}` → `{resumeToken?}`
@@ -270,7 +287,8 @@ stdio.
 The `pi` adapter is a host for this protocol, so the sidecar is swappable and the adapter is testable
 against `fixtures/harnesses/pi_sidecar_fake.mjs`. The sidecar fronts pi's RPC mode (`pi --mode rpc`,
 strict JSONL split on `\n` only): an RPC CLI is the stable surface, and an optional SDK path is future
-work rather than a first-build requirement.
+work rather than a first-build requirement. The decision and the alternatives are recorded in
+`docs/adr/0001-harness-protocols-and-sidecar.md`.
 
 ## Rendering (settled)
 
@@ -279,6 +297,8 @@ work rather than a first-build requirement.
 - **Spec reading and chat markdown:** `markdown-it` with HTML disabled — render, don't execute.
 - **Lists:** `@tanstack/react-virtual` for the event list; panels mount only when active (state lives
   in stores), which is the memory strategy for the ~200 MB idle goal.
+- **Build guard:** `scripts/check-bundle.mjs` runs after `npm run build` and fails if Monaco ended up
+  in the entry chunk instead of a lazy one. The manual reasoning is in README §Performance notes.
 - **State:** `zustand` stores per domain; no global event bus in the UI beyond the IPC listener.
 - **Styling:** CSS custom properties in `styles/tokens.css` + one CSS file per panel. No UI kit, no
   Tailwind — keeps the bundle and the conflict surface small.
@@ -296,8 +316,9 @@ work rather than a first-build requirement.
   repo tree, keep entries with a `SKILL.md`, cache the manifest with a TTL and serve it offline.
   `skill_targets()` lists per-harness directories (Claude `~/.claude/skills`, Codex `~/.codex/skills`,
   pi `~/.pi/skills`, OpenCode `~/.config/opencode/skills`, plus project-local `.agents/skills`).
-  Install copies the folder, refuses `..` traversal and symlink escapes, records the install.
-  A GitHub token is optional and lives in the keychain.
+  Install copies the folder, refuses `..` traversal and symlink escapes, records the install in a JSON
+  file under the app-data dir (behind `InstallStore`; the `installs` SQL shape is reserved for a later
+  migration). A GitHub token is optional and lives in the keychain.
 - **mcp** — discover server definitions from `.mcp.json`, `~/.claude.json`, `~/.codex/config.toml`,
   `opencode.json` and adapter config; normalise to `{name, source, transport, command/url}`. Probing
   (spawn stdio server → `initialize` + `tools/list`, or HTTP `tools/list`) is **explicit**, never
@@ -328,13 +349,18 @@ Adding a feature touches one shared list each. Keep edits to one line per file:
 
 - **Rust:** unit tests next to modules; integration tests in `crates/grove-core/tests/` spawn fake
   harnesses from `fixtures/harnesses/*.mjs` (Node is already a dependency of the build). No test talks
-  to the network: `opencode`/skills/git tests point at fakes or `tempfile` repos.
+  to the network: `opencode`/skills/git tests point at fakes or `tempfile` repos. Three cross-cutting
+  suites pin the release promise: `adapters_conformance.rs` (every registered adapter),
+  `adapters_restart.rs` (create → send → close → reopen → resume per adapter, transcript intact and
+  resume token reused) and `offline.rs` (all six fake harnesses plus the cached skill catalog with
+  `HTTP(S)_PROXY` pointed at a black hole and `NO_PROXY` empty).
 - **Contract:** fixtures as described; both sides parse them.
 - **TS:** `vitest` + `@testing-library/react` against a `FakeBridge` implementing the same typed bridge
   the app uses; sidecar tests drive `rpc.ts` with a fake pi runtime.
 - **CI:** `.github/workflows/ci.yml`, `windows-latest`: `npm ci`, `npm run typecheck`, `npm test`,
-  `npm run build`, `cargo fmt --check`, `cargo clippy --workspace -- -D warnings`,
-  `cargo test -p grove-core`, `cargo check -p grove-desktop`.
+  `npm run build` (which ends with the bundle guard), `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p grove-core`,
+  `cargo check -p grove-desktop`.
 - **Not automatable here:** launching the GUI and observing webview paint. `cargo check` + `vite build`
   are the gate; a human smoke run is listed in the README.
 

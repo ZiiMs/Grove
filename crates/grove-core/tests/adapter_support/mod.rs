@@ -1,8 +1,6 @@
 //! Shared support for the adapter integration tests. Not a test target: it lives in a subdirectory
 //! so Cargo only compiles it into the tests that declare `mod adapter_support;`.
 
-#![allow(dead_code)]
-
 pub mod acp_fixture;
 pub mod claude_fixture;
 pub mod codex_fixture;

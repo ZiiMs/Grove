@@ -3,8 +3,6 @@
 //!
 //! Every test points `McpConfig` at a tempdir: no test reads the developer's real home directory.
 
-#![allow(dead_code)]
-
 use grove_core::mcp::{McpConfig, McpService};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -17,6 +15,12 @@ pub struct Sandbox {
     pub project: PathBuf,
     /// The fake home: `.claude.json` and `.codex/config.toml` live here.
     pub home: PathBuf,
+}
+
+impl Default for Sandbox {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Sandbox {

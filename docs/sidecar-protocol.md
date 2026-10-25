@@ -1,3 +1,11 @@
+---
+id: grove-sidecar-protocol
+type: architecture-design
+status: active
+title: Grove Sidecar Protocol v1
+parent: grove-architecture
+---
+
 # Grove Sidecar Protocol v1
 
 The sidecar is a **documented, swappable process boundary**. A sidecar is any program that speaks

@@ -1,7 +1,7 @@
 //! The Codex adapter against `fixtures/harnesses/codex_fake.mjs`: no real CLI, no network, one test
 //! per fixture mode. The shared conformance suite is in `tests/adapters_conformance.rs`.
 
-mod adapter_support;
+pub mod adapter_support;
 
 use adapter_support::codex_fixture::{config, context};
 use adapter_support::runtime::{deps, drain_until, drain_until_state, is_state, next_event, tags};

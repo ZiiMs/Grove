@@ -34,7 +34,7 @@ jobs:
       - name: Unit tests (webview, contract, sidecar)
         run: npm test
 
-      - name: Build webview and sidecar
+      - name: Build webview, sidecar, and run the bundle guard
         run: npm run build
 
       - name: Rust format
