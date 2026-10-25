@@ -200,9 +200,9 @@ describe("redesigned shell", () => {
     await userEvent.click(trigger);
     const listbox = screen.getByRole("listbox", { name: "Thinking level for this session" });
     expect(within(listbox.parentElement as HTMLElement).queryByRole("searchbox")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("option", { name: "Think high" }));
+    await userEvent.click(screen.getByRole("option", { name: "High" }));
     await waitFor(() => expect(bridge.invocations).toContain("session_set_thinking"));
-    await waitFor(() => expect(trigger).toHaveTextContent("Think high"));
+    await waitFor(() => expect(trigger).toHaveTextContent("High"));
   });
 
   it("searches the model combo before switching models", async () => {

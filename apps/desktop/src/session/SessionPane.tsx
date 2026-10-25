@@ -11,10 +11,10 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 const EMPTY_QUEUE: string[] = [];
 
 const THINKING_LEVELS: { value: ThinkingLevel; label: string }[] = [
-  { value: "off", label: "Think off" },
-  { value: "low", label: "Think low" },
-  { value: "medium", label: "Think medium" },
-  { value: "high", label: "Think high" },
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
 ];
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBridge } from "../ipc/context";
