@@ -12,24 +12,51 @@ exist).
 
 **Blocked by:** 08 (adapter contract + Claude Code adapter)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Spawns `codex app-server` (command/args overridable by config) and performs the handshake:
+- [x] Spawns `codex app-server` (command/args overridable by config) and performs the handshake:
       `initialize` → the `initialized` notification → `thread/start` → `turn/start` with
       `input: [{type: "text", text, text_elements: []}]`; no `protocolVersion` field is expected
-- [ ] Notifications map to normalized events: `item/agentMessage/delta` (plus `item/started` /
+- [x] Notifications map to normalized events: `item/agentMessage/delta` (plus `item/started` /
       `item/completed` for the final message), `commandExecution` items → `tool_call`/`tool_result` with
       status, aggregated output and exit code, `turn/diff/updated` → `diff` (aggregated unified diff per
       turn), `thread/tokenUsage/updated` → `usage`, `turn/completed` → `status idle`
-- [ ] Approval requests become `permission_request`, are answerable via `respond_permission`, and resolve
+- [x] Approval requests become `permission_request`, are answerable via `respond_permission`, and resolve
       as `permission_resolved`; if the protocol offers no approval channel, `capabilities.permissions` is
       honestly `false`
-- [ ] Cancel sends `turn/interrupt {threadId, turnId}`; a structured turn error is reported without
+- [x] Cancel sends `turn/interrupt {threadId, turnId}`; a structured turn error is reported without
       ending the session
-- [ ] The thread id is stored as the resume token and reused with `thread/resume {threadId}` so a restart
+- [x] The thread id is stored as the resume token and reused with `thread/resume {threadId}` so a restart
       continues the same conversation (no replay is assumed)
-- [ ] Unknown methods and notifications are logged and ignored; protocol drift never crashes a session
-- [ ] `fixtures/harnesses/codex_fake.mjs` covers happy path, approval, diff, error, crash; the shared
+- [x] Unknown methods and notifications are logged and ignored; protocol drift never crashes a session
+- [x] `fixtures/harnesses/codex_fake.mjs` covers happy path, approval, diff, error, crash; the shared
       conformance suite passes
-- [ ] Capabilities accurately report diffs, permissions, and resume
-- [ ] Registered in `builtin_registry()`; doctor recognises the `codex` binary
+- [x] Capabilities accurately report diffs, permissions, and resume
+- [x] Registered in `builtin_registry()`; doctor recognises the `codex` binary
+
+## Resolution
+
+Merged as `feat(adapters): add the Codex app-server adapter with fixture and conformance target`.
+
+Decisions worth knowing:
+
+- Implements the **v2 thread/turn API** (`initialize` → `initialized` → `thread/start` → `turn/start`,
+  `item/*` notifications, `turn/diff/updated` for one aggregated diff per turn, `turn/completed`), not the
+  removed v1 methods the original ticket text named.
+- Approval answers use the minimal `accept`/`decline`/`cancel` vocabulary and the fixture pins it, so a
+  protocol change fails a test instead of hanging a turn. Non-approval server requests
+  (`requestUserInput`, elicitation) are answered `-32601` so the harness is never left waiting.
+- Usage parsing accepts the several token-breakdown spellings releases have used and skips an unknown shape
+  rather than reporting `0/0`.
+- Turn-scoped frames are matched by `turnId` with the last ended turn remembered: stress-testing exposed a
+  genuine flake where an interrupted turn's late `turn/completed` could end the *next* turn.
+- `thread/start` sends only cwd + model — Grove deliberately does not choose a sandbox or approval policy on
+  the user's behalf.
+- A resume error (stale/unknown thread) falls back to `thread/start` with a warning instead of bricking the
+  session.
+- The shared conformance suite gained the opt-in `Target::with_permissions()` roundtrip (request emitted →
+  answer delivered → `PermissionResolved`), replaced the old blanket refusal of permission claims, and the
+  ACP target now opts in.
+
+Not verified: no real `codex` binary was run (fixtures only); `approvalPolicy`/`sandbox` defaults and a real
+app-server's stdin-EOF termination are untested (the process-tree kill is the backstop).
