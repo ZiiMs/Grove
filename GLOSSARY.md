@@ -20,10 +20,11 @@ the project folder; `git_worktree_create` is the one place the UI creates a new 
 
 ## Provider
 
-A model vendor Grove talks to directly: Anthropic, OpenAI, Google or OpenRouter. A provider owns its
-HTTP wire format and nothing else (`crates/grove-core/src/providers/{anthropic,openai,google}.rs`); the
-catalog that names the four lives in `providers/catalog.rs`. There is no agent CLI to install and no
-harness to detect - only a credential to configure.
+A model vendor Grove talks to directly: Anthropic, OpenAI, Google, OpenRouter or OpenCode Go. A
+provider owns its HTTP wire format and nothing else; the three wire clients live in
+`crates/grove-core/src/providers/{anthropic,openai,google}.rs`, and a gateway such as OpenCode Go
+reuses the client its API speaks. The catalog that names the five lives in `providers/catalog.rs`.
+There is no agent CLI to install and no harness to detect - only a credential to configure.
 
 ## Credential
 

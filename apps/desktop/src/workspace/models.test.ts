@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { providerForModel, providerMeta } from "./models";
+import { modelGroupsFor, providerForModel, providerMeta } from "./models";
 
 describe("model to provider", () => {
   it("resolves a model the presentation map knows", () => {
@@ -24,5 +24,21 @@ describe("model to provider", () => {
 
   it("is null for a model nobody offers, so the caller can fall back deliberately", () => {
     expect(providerForModel("not-a-model", [])).toBeNull();
+  });
+
+  it("knows the OpenCode Go fallback before the core answers", () => {
+    const meta = providerMeta("opencode-go");
+    expect(meta.name).toBe("OpenCode Go");
+    expect(meta.models[0]).toBe("kimi-k3");
+    expect(meta.models).toContain("glm-5.3");
+  });
+
+  it("groups the OpenCode Go models the core registers", () => {
+    const groups = modelGroupsFor({}, ["opencode-go"], {
+      "opencode-go": ["kimi-k3", "glm-5.3"],
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].provider.name).toBe("OpenCode Go");
+    expect(groups[0].models).toContain("glm-5.3");
   });
 });

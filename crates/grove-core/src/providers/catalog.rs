@@ -10,6 +10,29 @@ pub const ANTHROPIC_BASE: &str = "https://api.anthropic.com";
 pub const OPENAI_BASE: &str = "https://api.openai.com/v1";
 pub const GOOGLE_BASE: &str = "https://generativelanguage.googleapis.com";
 pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
+pub const OPENCODE_GO_BASE: &str = "https://opencode.ai/inference/go/openai/v1";
+/// The Go gateway lists every subscription model here, outside the OpenAI-compatible prefix.
+pub const OPENCODE_GO_MODELS_URL: &str = "https://opencode.ai/inference/go/v1/models";
+
+/// Transport details a gateway needs that do not belong in the picker's [`ProviderSpec`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Transport {
+    /// Where the key's model list lives when it is not under `base_url`.
+    pub models_url: Option<&'static str>,
+    /// A request header carrying the conversation id, for a gateway that routes by session.
+    pub session_header: Option<&'static str>,
+}
+
+/// The transport extras for one provider. Unknown ids get the plain wire behaviour.
+pub fn transport(id: &str) -> Transport {
+    match id {
+        "opencode-go" => Transport {
+            models_url: Some(OPENCODE_GO_MODELS_URL),
+            session_header: Some("x-opencode-session"),
+        },
+        _ => Transport::default(),
+    }
+}
 
 /// Every provider this build ships, in display order.
 pub fn builtin() -> Vec<ProviderSpec> {
@@ -79,6 +102,41 @@ pub fn builtin() -> Vec<ProviderSpec> {
             default_model: "anthropic/claude-sonnet-4.5".into(),
             capabilities: Capabilities::agent(),
         },
+        ProviderSpec {
+            id: "opencode-go".into(),
+            name: "OpenCode Go".into(),
+            short: "OG".into(),
+            tint: "#b08ce0".into(),
+            wire: Wire::OpenAi,
+            base_url: OPENCODE_GO_BASE.into(),
+            auth: AuthMethod::ApiKey,
+            key_url: "https://opencode.ai/console".into(),
+            env_var: "OPENCODE_API_KEY".into(),
+            // The Go subscription's chat-completions models. Models served on Go's `/responses`,
+            // Anthropic or Google endpoints need a different client and are not in this build.
+            models: vec![
+                "kimi-k3".into(),
+                "kimi-k3.1-pro".into(),
+                "glm-5.3".into(),
+                "glm-5.3-flash".into(),
+                "glm-5.2".into(),
+                "deepseek-v4.1-flash".into(),
+                "deepseek-v4-pro".into(),
+                "minimax-m3.1-flash".into(),
+                "mimo-v2.6-pro".into(),
+                "mimo-v2.6-flash".into(),
+                "mimo-v2.5-pro".into(),
+                "mimo-v2.5".into(),
+                "kimi-k2.7-code".into(),
+                "longcat-2.0".into(),
+                "step-5-preview".into(),
+                "hy4-preview".into(),
+                "hy3".into(),
+                "beam-free".into(),
+            ],
+            default_model: "kimi-k3".into(),
+            capabilities: Capabilities::agent(),
+        },
     ]
 }
 
@@ -92,7 +150,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_four_providers_cover_three_wire_formats() {
+    fn the_shipped_providers_cover_three_wire_formats() {
         let specs = builtin();
         let wires: Vec<Wire> = specs.iter().map(|spec| spec.wire).collect();
         assert!(wires.contains(&Wire::Anthropic));
@@ -100,8 +158,8 @@ mod tests {
         assert!(wires.contains(&Wire::Google));
         assert_eq!(
             wires.iter().filter(|wire| **wire == Wire::OpenAi).count(),
-            2,
-            "OpenAI and OpenRouter share one client"
+            3,
+            "OpenAI, OpenRouter and OpenCode Go share one client"
         );
     }
 
@@ -126,6 +184,27 @@ mod tests {
             spec.models.iter().all(|model| model.contains('/')),
             "OpenRouter routes by vendor/model"
         );
+    }
+
+    #[test]
+    fn opencode_go_speaks_openai_and_declares_its_session_header() {
+        let spec = find("opencode-go").expect("OpenCode Go ships");
+        assert_eq!(spec.wire, Wire::OpenAi);
+        assert_eq!(spec.base_url, "https://opencode.ai/inference/go/openai/v1");
+        assert_eq!(spec.tint, "#b08ce0");
+        let transport = transport("opencode-go");
+        assert_eq!(transport.models_url, Some(OPENCODE_GO_MODELS_URL));
+        assert_eq!(transport.session_header, Some("x-opencode-session"));
+        assert_eq!(spec.env_var, "OPENCODE_API_KEY");
+        assert_eq!(spec.key_url, "https://opencode.ai/console");
+        assert!(spec.models.contains(&spec.default_model));
+        assert!(spec.models.iter().any(|model| model == "glm-5.3"));
+    }
+
+    #[test]
+    fn only_a_gateway_declares_transport_extras() {
+        assert_eq!(transport("anthropic"), Transport::default());
+        assert_eq!(transport("not-a-provider"), Transport::default());
     }
 
     #[test]

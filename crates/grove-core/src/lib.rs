@@ -193,12 +193,13 @@ impl GroveCore {
             secrets,
             settings,
             credentials,
-            http: reqwest::Client::new(),
+            http: providers::http_client(),
         }
     }
 
-    /// The models the credential for `provider` can reach. One small request; used by the settings
-    /// pane's "test key" action and to refresh the model picker from what the account really has.
+    /// The models the credential for `provider` can reach. One small request, used by the settings
+    /// pane's "test key" action. The catalog's `models` remains the picker's list: a gateway can
+    /// expose more models than this build has a client for.
     pub async fn provider_models(
         &self,
         provider: &str,
@@ -207,7 +208,8 @@ impl GroveCore {
             providers::ProviderError::Unavailable(format!("unknown provider: {provider}"))
         })?;
         let (key, _) = self.credentials.key(provider)?;
-        providers::probe::list_models(&self.http, &spec, &key).await
+        let transport = providers::catalog::transport(provider);
+        providers::probe::list_models(&self.http, &spec, &key, transport.models_url).await
     }
 
     /// What the webview shows in its header. Shape is pinned by `contract/fixtures/app-info.json`.

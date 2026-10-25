@@ -13,7 +13,7 @@ export interface ProviderMeta {
  * Presentation fallback, so a mark renders before `provider_list` has answered. The catalogue in Rust
  * is authoritative for models, default model and auth; this map only supplies a name, initials, tint
  * and a first guess at the model list. An unknown id degrades to its initials, which is what keeps a
- * fifth vendor working before this file learns about it.
+ * new vendor working before this file learns about it.
  */
 export const PROVIDERS: Record<string, ProviderMeta> = {
   anthropic: {
@@ -43,6 +43,32 @@ export const PROVIDERS: Record<string, ProviderMeta> = {
     short: "OR",
     tint: "#9d86c9",
     models: ["anthropic/claude-sonnet-4.5", "openai/gpt-5", "google/gemini-2.5-pro"],
+  },
+  "opencode-go": {
+    id: "opencode-go",
+    name: "OpenCode Go",
+    short: "OG",
+    tint: "#b08ce0",
+    models: [
+      "kimi-k3",
+      "kimi-k3.1-pro",
+      "glm-5.3",
+      "glm-5.3-flash",
+      "glm-5.2",
+      "deepseek-v4.1-flash",
+      "deepseek-v4-pro",
+      "minimax-m3.1-flash",
+      "mimo-v2.6-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
+      "kimi-k2.7-code",
+      "longcat-2.0",
+      "step-5-preview",
+      "hy4-preview",
+      "hy3",
+      "beam-free",
+    ],
   },
   /** Preview/test builds only: the session runtime is real, the model is a script. */
   mock: {

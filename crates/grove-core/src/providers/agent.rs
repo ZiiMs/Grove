@@ -111,6 +111,7 @@ impl AgentProvider for WireProvider {
             system,
             history,
             max_steps,
+            ctx.session_id,
         );
         Ok(Box::new(session))
     }
@@ -129,6 +130,19 @@ struct TurnOutput {
     stop: StopReason,
 }
 
+/// Attach a gateway's conversation header when the provider declares one. A provider that does not
+/// declare a header never sees one, so a session id does not leak to vendors that have no use for it.
+fn with_session_header(
+    request: reqwest::RequestBuilder,
+    header: Option<&str>,
+    session_id: &str,
+) -> reqwest::RequestBuilder {
+    match header {
+        Some(header) => request.header(header, session_id),
+        None => request,
+    }
+}
+
 pub struct AgentSessionImpl {
     spec: ProviderSpec,
     http: reqwest::Client,
@@ -136,6 +150,8 @@ pub struct AgentSessionImpl {
     cwd: PathBuf,
     model: String,
     system: String,
+    /// The session row id, sent to a gateway that routes by conversation.
+    session_id: String,
     history: Arc<Mutex<Vec<Message>>>,
     events: Option<mpsc::Receiver<SessionEvent>>,
     tx: mpsc::Sender<SessionEvent>,
@@ -158,6 +174,7 @@ impl AgentSessionImpl {
         system: String,
         history: Vec<Message>,
         max_steps: u32,
+        session_id: String,
     ) -> Self {
         let (tx, rx) = mpsc::channel(EVENT_BUFFER);
         Self {
@@ -167,6 +184,7 @@ impl AgentSessionImpl {
             cwd,
             model,
             system,
+            session_id,
             history: Arc::new(Mutex::new(history)),
             events: Some(rx),
             tx,
@@ -187,31 +205,28 @@ impl AgentSessionImpl {
         let history = self.history.lock().await.clone();
         let specs = tools::specs();
         let request =
-            match self.spec.wire {
-                Wire::Anthropic => {
-                    let url = anthropic::endpoint(&self.spec);
-                    authorize(self.http.post(url), self.spec.wire, &self.key).json(
-                        &anthropic::body(&self.model, &self.system, &history, &specs),
-                    )
-                }
-                Wire::OpenAi => {
-                    let url = openai::endpoint(&self.spec);
-                    authorize(self.http.post(url), self.spec.wire, &self.key).json(&openai::body(
-                        &self.model,
-                        &self.system,
-                        &history,
-                        &specs,
-                    ))
-                }
-                Wire::Google => {
-                    let url = google::endpoint(&self.spec, &self.model);
-                    authorize(self.http.post(url), self.spec.wire, &self.key).json(&google::body(
-                        &self.system,
-                        &history,
-                        &specs,
-                    ))
-                }
-            };
+            with_session_header(
+                match self.spec.wire {
+                    Wire::Anthropic => {
+                        let url = anthropic::endpoint(&self.spec);
+                        authorize(self.http.post(url), self.spec.wire, &self.key).json(
+                            &anthropic::body(&self.model, &self.system, &history, &specs),
+                        )
+                    }
+                    Wire::OpenAi => {
+                        let url = openai::endpoint(&self.spec);
+                        authorize(self.http.post(url), self.spec.wire, &self.key)
+                            .json(&openai::body(&self.model, &self.system, &history, &specs))
+                    }
+                    Wire::Google => {
+                        let url = google::endpoint(&self.spec, &self.model);
+                        authorize(self.http.post(url), self.spec.wire, &self.key)
+                            .json(&google::body(&self.system, &history, &specs))
+                    }
+                },
+                catalog::transport(&self.spec.id).session_header,
+                &self.session_id,
+            );
 
         let response = request.send().await.map_err(|error| {
             ProviderError::Api(format!("cannot reach {}: {error}", self.spec.name))
@@ -420,6 +435,7 @@ impl AgentSession for AgentSessionImpl {
         let cwd = self.cwd.clone();
         let model = self.model.clone();
         let system = self.system.clone();
+        let session_id = self.session_id.clone();
         let history = Arc::clone(&self.history);
         let tx = self.tx.clone();
         let permits = Arc::clone(&self.permits);
@@ -433,6 +449,7 @@ impl AgentSession for AgentSessionImpl {
                 cwd,
                 model,
                 system,
+                session_id,
                 history,
                 events: None,
                 tx,
@@ -567,7 +584,10 @@ mod tests {
         let registry = registry();
         assert_eq!(registry.len(), catalog::builtin().len());
         let ids: Vec<&str> = registry.iter().map(|provider| provider.id()).collect();
-        assert_eq!(ids, vec!["anthropic", "openai", "google", "openrouter"]);
+        assert_eq!(
+            ids,
+            vec!["anthropic", "openai", "google", "openrouter", "opencode-go"]
+        );
     }
 
     #[test]
@@ -575,6 +595,7 @@ mod tests {
         let ctx = StartContext {
             cwd: PathBuf::from("C:/work/project"),
             model: None,
+            session_id: "test-session".into(),
             prompt: None,
             resume_token: None,
             config: Value::Null,
@@ -619,6 +640,7 @@ mod tests {
                 StartContext {
                     cwd: std::env::temp_dir(),
                     model: None,
+                    session_id: "test-session".into(),
                     prompt: None,
                     resume_token: None,
                     config: Value::Null,
@@ -644,6 +666,7 @@ mod tests {
             "system".into(),
             Vec::new(),
             MAX_STEPS,
+            "test-session".into(),
         );
         let error = session
             .respond_permission("perm-nope", Decision::Approve)
@@ -663,8 +686,90 @@ mod tests {
             "system".into(),
             Vec::new(),
             MAX_STEPS,
+            "test-session".into(),
         );
         let _ = session.take_events();
         assert!(session.send(UserInput::text("   ")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn an_opencode_session_sends_the_session_header() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("opencode-go").unwrap();
+        spec.base_url = format!("{}/openai/v1", server.uri());
+
+        let session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "kimi-k3".into(),
+            "system".into(),
+            vec![Message::user("hi")],
+            MAX_STEPS,
+            "session-42".into(),
+        );
+        session.request_turn().await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]
+                .headers
+                .get("x-opencode-session")
+                .and_then(|value| value.to_str().ok()),
+            Some("session-42")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_provider_without_a_session_header_sends_none() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "gpt-5".into(),
+            "system".into(),
+            vec![Message::user("hi")],
+            MAX_STEPS,
+            "session-42".into(),
+        );
+        session.request_turn().await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests[0].headers.get("x-opencode-session").is_none());
     }
 }

@@ -36,11 +36,11 @@ and an API key, and the runtime streams the turn and executes tools in-process. 
                                  │ Rust calls
 ┌────────────────────────────────┴───────────────────────────────────────────┐
 │ crates/grove-core                                                          │
-│  sessions ── providers (anthropic · openai · google · openrouter)          │
+│  sessions ── providers (five vendors, see catalog.rs)                      │
 │  store(SQLite) · specgraph · plan · skills · mcp · gitops · secrets        │
 └────────────────────────────────┬───────────────────────────────────────────┘
                                  │ HTTPS + SSE
-                        vendor APIs (Anthropic · OpenAI · Google · OpenRouter)
+                        vendor APIs (Anthropic · OpenAI · Google · OpenRouter · OpenCode Go)
 ```
 
 ## Repository layout
@@ -76,7 +76,7 @@ apps/desktop/src/styles/         themes.css (token contract) · design.css (shel
 apps/desktop/tools/              visual screenshot harness (not part of `npm test`)
 apps/desktop/src-tauri/src/
   lib.rs main.rs state.rs events.rs commands/{mod,app,projects,sessions,plan,specs,skills,mcp,git,settings}.rs
-.scratch/grove/issues/           the ticket files
+.scratch/grove/issues/           first-build tickets (history; new work is in ClickUp)
 ```
 
 ## The provider contract (settled)
@@ -98,9 +98,10 @@ pub struct ProviderSpec {                 // what the picker and settings pane r
 }
 
 pub struct StartContext {
-    pub cwd: PathBuf, pub model: Option<String>, pub prompt: Option<String>,
-    pub resume_token: Option<String>, pub config: serde_json::Value, // `maxSteps`
-    pub context_files: Vec<ContextDoc>, /                       // pinned specs + plan, as markdown
+    pub cwd: PathBuf, pub model: Option<String>, pub session_id: String,
+    pub prompt: Option<String>, pub resume_token: Option<String>,
+    pub config: serde_json::Value, // `maxSteps`
+    pub context_files: Vec<ContextDoc>, // pinned specs + plan, as markdown
 }
 
 pub struct ProviderDeps { pub paths: AppPaths, pub http: reqwest::Client,
@@ -134,8 +135,11 @@ pub fn registry() -> Vec<Arc<dyn AgentProvider>>;   // providers::agent
 Provider rules that keep them isolated:
 
 - **One wire format, one client.** `anthropic.rs`, `openai.rs` and `google.rs` each own request
-  encoding and stream decoding behind `wire::StreamDecoder`. OpenAI and OpenRouter share the OpenAI
-  client and differ only by catalog entry.
+  encoding and stream decoding behind `wire::StreamDecoder`. OpenAI, OpenRouter and OpenCode Go share
+  the OpenAI client and differ only by catalog entry.
+- **Gateway extras live with the catalog.** A provider that needs a non-default model-list URL or a
+  conversation header declares it in `catalog::transport(id)`; the runtime applies it generically, so
+  `ProviderSpec` keeps the shape the picker reads and no contract field is added for one vendor.
 - **Forward compatible by default.** Unknown stream frames are dropped, not fatal: a vendor adding an
   event must degrade to a missing detail, never a dead session.
 - **No panics on the wire.** Every parse error becomes `ProviderError`, which the runtime turns into a
@@ -176,7 +180,7 @@ status busy → delta* → message(assistant) → tool_call → permission_reque
 ## Normalized event model (settled)
 
 Every provider reduces to one event enum, persisted and streamed to the UI unchanged. This is the
-contract that makes four vendors one interface.
+contract that makes five vendors one interface.
 
 ```rust
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -429,8 +433,8 @@ models) so a row renders before the catalogue has loaded; an unknown id degrades
 ## Open, deliberately
 
 Issue-tracker integration in-app, cloud sync, and remote/mobile access remain out of the first build.
-Account sign-in is offered by one of the four vendors: Anthropic, OpenAI and Google restrict
-subscription OAuth to their own first-party clients, but OpenRouter documents "Sign In with OpenRouter"
-(a PKCE flow for third-party apps). This build ships API keys for all four; the OpenRouter sign-in flow
-is the documented next step (ADR 0003). `AuthMethod` already carries `SignIn` and `ProviderSpec::auth`
+Account sign-in is offered by one vendor: OpenRouter documents "Sign In with OpenRouter" (a PKCE
+flow for third-party apps), while Anthropic, OpenAI and Google restrict subscription OAuth to their
+own first-party clients. This build ships API keys for all five; the OpenRouter sign-in flow is the
+documented next step (ADR 0003). `AuthMethod` already carries `SignIn` and `ProviderSpec::auth`
 drives the settings row, so adding it is not a UI change.

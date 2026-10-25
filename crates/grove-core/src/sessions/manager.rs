@@ -193,7 +193,7 @@ impl SessionManager {
     ) -> ProviderDeps {
         ProviderDeps {
             paths,
-            http: reqwest::Client::new(),
+            http: crate::providers::http_client(),
             secrets,
         }
     }
@@ -339,6 +339,7 @@ impl SessionManager {
         let context = StartContext {
             cwd,
             model,
+            session_id: id.clone(),
             prompt: None,
             resume_token: None,
             config: config.clone(),
@@ -430,6 +431,7 @@ impl SessionManager {
         let mut context = StartContext {
             cwd: PathBuf::from(&session.cwd),
             model: session.model.clone(),
+            session_id: session.id.clone(),
             prompt: None,
             resume_token: None,
             config,
@@ -532,6 +534,7 @@ impl SessionManager {
         let context = StartContext {
             cwd: PathBuf::from(&session.cwd),
             model: session.model.clone(),
+            session_id: session.id.clone(),
             prompt: (!summary.is_empty()).then_some(summary),
             resume_token: None,
             config,
@@ -991,11 +994,25 @@ mod tests {
     async fn create_and_resume_both_launch_the_provider_with_the_stored_config() {
         let (manager, contexts) = manager_with(StubProvider::new());
         let session = create(&manager).await;
-        assert_eq!(lock(&contexts).len(), 1, "create launches");
+        {
+            let launched = lock(&contexts);
+            assert_eq!(launched.len(), 1, "create launches");
+            assert_eq!(
+                launched[0].session_id, session,
+                "the launch carries the session id"
+            );
+        }
 
         manager.close(&session).await.unwrap();
         manager.resume(&session).await.unwrap();
-        assert_eq!(lock(&contexts).len(), 2, "resume launches again");
+        {
+            let launched = lock(&contexts);
+            assert_eq!(launched.len(), 2, "resume launches again");
+            assert_eq!(
+                launched[1].session_id, session,
+                "the resume keeps the session id"
+            );
+        }
     }
 
     #[tokio::test]

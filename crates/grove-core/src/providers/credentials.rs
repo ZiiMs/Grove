@@ -321,7 +321,10 @@ mod tests {
             .into_iter()
             .map(|row| row.id)
             .collect();
-        assert_eq!(ids, vec!["anthropic", "openai", "google", "openrouter"]);
+        assert_eq!(
+            ids,
+            vec!["anthropic", "openai", "google", "openrouter", "opencode-go"]
+        );
     }
 
     #[test]

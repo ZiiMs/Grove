@@ -3,8 +3,8 @@
 One desktop home for every AI coding model — with the project's intent, not just its chat, kept in
 view.
 
-Grove talks to Anthropic, OpenAI, Google and OpenRouter directly: pick a provider, a model and an API
-key, and Grove runs the agent itself. Around that loop sits the layer each vendor leaves out: a skill
+Grove talks to Anthropic, OpenAI, Google, OpenRouter and OpenCode Go directly: pick a provider, a
+model and an API key, and Grove runs the agent itself. Around that loop sits the layer each vendor leaves out: a skill
 catalog, a spec graph, a TODO plan that survives restarts, a git/PR panel, and an MCP server viewer.
 
 - Intent of record: `goal-and-requirements.md`
@@ -28,8 +28,8 @@ there is no CI — and the manual smoke checklist is the part no test can paint 
 - Rust stable with the MSVC target (`rustup default stable-msvc`)
 - WebView2 runtime (preinstalled on Windows 11)
 - `git` on `PATH` (the Git panel shells out to it); `gh` is optional and only needed to open a draft PR
-- A provider API key (Anthropic, OpenAI, Google or OpenRouter). Settings → Providers stores it in the
-  OS keychain; the vendor's own environment variable works as a fallback.
+- A provider API key (Anthropic, OpenAI, Google, OpenRouter or OpenCode Go). Settings → Providers
+  stores it in the OS keychain; the vendor's own environment variable works as a fallback.
 
 ## Quickstart: your first session
 

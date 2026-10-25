@@ -144,7 +144,7 @@ export function fakeProviderStatus(overrides: Partial<ProviderStatus> = {}): Pro
   };
 }
 
-/** The four shipped providers as the settings pane sees them, for tests and snapshots. */
+/** A representative provider roster for the settings tests and snapshots. */
 export const FAKE_PROVIDER_ROSTER: ProviderStatus[] = [
   fakeProviderStatus(),
   fakeProviderStatus({

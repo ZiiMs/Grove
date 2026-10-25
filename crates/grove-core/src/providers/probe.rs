@@ -12,17 +12,22 @@ pub async fn list_models(
     http: &reqwest::Client,
     spec: &ProviderSpec,
     key: &str,
+    models_url: Option<&str>,
 ) -> Result<Vec<String>, ProviderError> {
-    let url = match spec.wire {
-        Wire::Anthropic => format!(
-            "{}/v1/models?limit=100",
-            spec.base_url.trim_end_matches('/')
-        ),
-        Wire::OpenAi => format!("{}/models", spec.base_url.trim_end_matches('/')),
-        Wire::Google => format!(
-            "{}/v1beta/models?pageSize=200",
-            spec.base_url.trim_end_matches('/')
-        ),
+    let url = match models_url {
+        // A gateway can list every model on one path even when inference is split by wire format.
+        Some(url) => url.to_string(),
+        None => match spec.wire {
+            Wire::Anthropic => format!(
+                "{}/v1/models?limit=100",
+                spec.base_url.trim_end_matches('/')
+            ),
+            Wire::OpenAi => format!("{}/models", spec.base_url.trim_end_matches('/')),
+            Wire::Google => format!(
+                "{}/v1beta/models?pageSize=200",
+                spec.base_url.trim_end_matches('/')
+            ),
+        },
     };
     let response = authorize(http.get(url), spec.wire, key)
         .send()
@@ -93,7 +98,7 @@ mod tests {
         let mut spec = anthropic();
         spec.base_url = server.uri();
 
-        let error = list_models(&reqwest::Client::new(), &spec, "bad")
+        let error = list_models(&reqwest::Client::new(), &spec, "bad", None)
             .await
             .unwrap_err();
         assert!(
@@ -116,7 +121,7 @@ mod tests {
         let mut spec = anthropic();
         spec.base_url = server.uri();
 
-        let models = list_models(&reqwest::Client::new(), &spec, "key")
+        let models = list_models(&reqwest::Client::new(), &spec, "key", None)
             .await
             .unwrap();
         assert_eq!(models, vec!["a", "b"]);
@@ -136,9 +141,36 @@ mod tests {
         let mut spec = crate::providers::catalog::find("google").unwrap();
         spec.base_url = server.uri();
 
-        let models = list_models(&reqwest::Client::new(), &spec, "key")
+        let models = list_models(&reqwest::Client::new(), &spec, "key", None)
             .await
             .unwrap();
         assert_eq!(models, vec!["gemini-2.5-pro"]);
+    }
+
+    #[tokio::test]
+    async fn a_provider_can_point_its_model_list_at_another_path() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/v1/models"))
+            .and(wiremock::matchers::header("authorization", "Bearer key"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_string(r#"{"data":[{"id":"z"},{"id":"a"}]}"#),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = crate::providers::catalog::find("opencode-go").unwrap();
+        spec.base_url = format!("{}/openai/v1", server.uri());
+        let models_url = format!("{}/v1/models", server.uri());
+
+        let models = list_models(
+            &reqwest::Client::new(),
+            &spec,
+            "key",
+            Some(models_url.as_str()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(models, vec!["a", "z"]);
     }
 }

@@ -11,6 +11,7 @@ import {
   DEFAULT_SETTINGS,
   FAKE_PROVIDER_ROSTER,
   createFakeBridge,
+  fakeProviderStatus,
 } from "../test-utils/fakeBridge";
 import { ProvidersPane } from "./ProvidersPane";
 
@@ -69,6 +70,30 @@ describe("ProvidersPane", () => {
       /Add an API key/,
     );
     expect(catalogue.queryByText(/Mistral|Ollama|ACP/)).not.toBeInTheDocument();
+  });
+
+  it("lists a newly registered provider in the catalogue", async () => {
+    const go = fakeProviderStatus({
+      id: "opencode-go",
+      name: "OpenCode Go",
+      short: "OG",
+      tint: "#b08ce0",
+      keyUrl: "https://opencode.ai/console",
+      envVar: "OPENCODE_API_KEY",
+      defaultModel: "kimi-k3",
+      models: ["kimi-k3", "glm-5.3"],
+      configured: false,
+      source: null,
+      detail: "Add an API key from https://opencode.ai/console, or set OPENCODE_API_KEY.",
+    });
+    renderPane([...ROWS, go]);
+    await userEvent.click(await screen.findByRole("button", { name: /Connect provider/ }));
+
+    const catalogue = within(screen.getByRole("dialog", { name: "Add a provider" }));
+    expect(catalogue.getByText("5 of 5 providers")).toBeInTheDocument();
+    const row = catalogue.getByRole("button", { name: /OpenCode Go/ });
+    expect(row).toHaveAccessibleName(/2 models/);
+    expect(row).toHaveAccessibleName(/opencode\.ai\/console/);
   });
 
   it("filters the catalogue by name, model or environment variable, and says when nothing matches", async () => {

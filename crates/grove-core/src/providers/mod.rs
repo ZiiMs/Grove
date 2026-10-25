@@ -6,7 +6,7 @@
 //! spawn, so "is it installed?" is replaced by "is a credential configured?".
 //!
 //! A provider module owns one vendor's wire format and nothing else: it must not import another
-//! provider, `tauri`, or UI code. Adding a fifth vendor is one module plus one line in
+//! provider, `tauri`, or UI code. Adding another vendor is one module plus one line in
 //! [`catalog::builtin`].
 
 pub mod agent;
@@ -31,8 +31,8 @@ use std::sync::{Arc, Mutex};
 /// `sessions.provider` holds.
 pub type ProviderId = String;
 
-/// How a vendor's HTTP API is shaped. Two of the four ship an OpenAI-compatible surface, so this is
-/// the axis that decides which client encodes the request — never the provider id.
+/// How a vendor's HTTP API is shaped. Three of the five ship an OpenAI-compatible surface, so this
+/// is the axis that decides which client encodes the request — never the provider id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Wire {
@@ -132,6 +132,16 @@ impl ProviderSpec {
     }
 }
 
+/// The HTTP client every provider request uses. A gateway sees this User-Agent; OpenCode Go asks
+/// clients to identify themselves rather than posing as a generic SDK, and the MCP and skill clients
+/// already send the same one.
+pub fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(format!("Grove/{}", crate::VERSION))
+        .build()
+        .unwrap_or_default()
+}
+
 /// A document handed to the agent at start: a pinned spec or the current plan, already rendered to
 /// markdown. Assembled by `sessions::context` under the session's character budgets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +158,9 @@ pub struct ContextDoc {
 pub struct StartContext {
     pub cwd: PathBuf,
     pub model: Option<String>,
+    /// The session row id. It is stable across turns and resumes, and is what a gateway that
+    /// routes by conversation (OpenCode Go) receives in its session header.
+    pub session_id: String,
     /// The replayed conversation tail when a conversation is resumed in a new process.
     pub prompt: Option<String>,
     pub resume_token: Option<String>,
@@ -295,7 +308,7 @@ mod tests {
         let specs = catalog::builtin();
         let mut ids: Vec<&str> = specs.iter().map(|spec| spec.id.as_str()).collect();
         let total = ids.len();
-        assert!(total >= 4, "the four shipped providers are registered");
+        assert!(total >= 5, "the shipped providers are registered");
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), total, "provider ids must be unique");
@@ -320,5 +333,27 @@ mod tests {
         );
         assert_eq!(spec.model_or_default(Some("   ")), spec.default_model);
         assert_eq!(spec.model_or_default(None), spec.default_model);
+    }
+
+    #[tokio::test]
+    async fn the_provider_http_client_identifies_as_grove() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        super::http_client().get(server.uri()).send().await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let user_agent = requests[0]
+            .headers
+            .get("user-agent")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        assert!(
+            user_agent.starts_with("Grove/"),
+            "provider requests identify the client, got {user_agent:?}"
+        );
     }
 }

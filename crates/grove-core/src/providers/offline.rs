@@ -254,6 +254,7 @@ mod tests {
                 StartContext {
                     cwd: std::env::temp_dir(),
                     model: None,
+                    session_id: "offline-test-session".into(),
                     prompt: None,
                     resume_token: None,
                     config: serde_json::json!({}),

@@ -12,8 +12,8 @@ tags: [desktop, agent-harness, spec-driven-development, tauri]
 
 > **Amended 2026-10-25.** This document is the original intent of record and is kept as written. Where
 > it specifies harness adapters, a sidecar and per-harness skill directories, ADR 0003 supersedes it:
-> Grove now runs the agent itself against model providers (Anthropic, OpenAI, Google, OpenRouter) with
-> an API key. Read `architecture.md` for what is built; read this for why.
+> Grove now runs the agent itself against model providers (Anthropic, OpenAI, Google, OpenRouter,
+> OpenCode Go) with an API key. Read `architecture.md` for what is built; read this for why.
 
 ## Overview
 
