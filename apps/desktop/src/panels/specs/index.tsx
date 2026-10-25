@@ -2,6 +2,7 @@ import type { IpcError, SpecDoc, SpecGraph, SpecNode, SpecValidation } from "@gr
 import MarkdownIt from "markdown-it";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useBridge } from "../../ipc/context";
+import { useSessionStore } from "../../state/sessionStore";
 import { PanelFrame } from "../PanelFrame";
 import "./specs.css";
 
@@ -13,6 +14,10 @@ import "./specs.css";
  * mounts Monaco lazily, so the editor chunk is only downloaded when the user actually edits. Saves
  * carry the hash of the read they were based on — a mismatch is a `conflict`, surfaced with a reload
  * affordance rather than a silent overwrite.
+ *
+ * A spec can be pinned to the session the Sessions panel has open: a pin is durable and decides what
+ * the session's harness receives as context (`session_pin`). The pin state comes from the same
+ * snapshot the session header shows, so the two views can never disagree.
  */
 
 const MonacoEditor = lazy(() => import("@monaco-editor/react"));
@@ -96,6 +101,13 @@ function validationCount(validation: SpecValidation): number {
 
 export function SpecsPanel() {
   const bridge = useBridge();
+  const activeSession = useSessionStore((state) => state.activeId);
+  const sessionTitle = useSessionStore(
+    (state) => state.sessions.find((row) => row.id === state.activeId)?.title ?? null,
+  );
+  const [pinned, setPinned] = useState<string[]>([]);
+  const [pinning, setPinning] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
   const [graph, setGraph] = useState<SpecGraph | null>(null);
   const [graphError, setGraphError] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(true);
@@ -112,6 +124,26 @@ export function SpecsPanel() {
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<IpcError | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!activeSession) {
+      setPinned([]);
+      return;
+    }
+    let cancelled = false;
+    bridge
+      .invoke("session_context_get", { id: activeSession })
+      .then((context) => {
+        if (!cancelled) setPinned(context.pins.map((pin) => pin.specId));
+      })
+      .catch(() => {
+        // A session that cannot be read pins nothing; the toggle stays disabled.
+        if (!cancelled) setPinned([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge, activeSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,6 +236,27 @@ export function SpecsPanel() {
     }
   }
 
+  async function togglePin(specId: string) {
+    if (!activeSession || pinning) return;
+    const next = !pinned.includes(specId);
+    setPinning(true);
+    setPinError(null);
+    try {
+      const context = await bridge.invoke("session_pin", {
+        id: activeSession,
+        specId,
+        pinned: next,
+      });
+      setPinned(context.pins.map((pin) => pin.specId));
+      // The session header shows the same snapshot: adopt it so pinning here is visible there.
+      useSessionStore.getState().applyContext(context);
+    } catch (error: unknown) {
+      setPinError(messageOf(error));
+    } finally {
+      setPinning(false);
+    }
+  }
+
   function reload() {
     setConflict(null);
     setReloadToken((token) => token + 1);
@@ -244,7 +297,14 @@ export function SpecsPanel() {
                       aria-current={node.path === selectedPath ? "true" : undefined}
                       onClick={() => open(node.path)}
                     >
-                      <span className="spec-tree-name">{nodeLabel(node)}</span>
+                      <span className="spec-tree-name">
+                        {nodeLabel(node)}
+                        {pinned.includes(node.id) ? (
+                          <span className="spec-pin-badge" title="Pinned to the open session">
+                            pinned
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="spec-tree-meta">
                         <code>{node.id}</code>
                         {node.status ? <span className="spec-status">{node.status}</span> : null}
@@ -300,23 +360,51 @@ export function SpecsPanel() {
                     {doc.node.status ? <span className="spec-status">{doc.node.status}</span> : null}
                   </p>
                 </div>
-                {editing ? (
-                  <div className="spec-doc-actions">
-                    <button type="button" className="input primary" onClick={() => void save()} disabled={saving}>
-                      {saving ? "Saving…" : "Save"}
-                    </button>
-                    <button type="button" className="input" onClick={() => setEditing(false)} disabled={saving}>
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <div className="spec-doc-actions">
-                    <button type="button" className="input" onClick={beginEdit}>
-                      Edit
-                    </button>
-                  </div>
-                )}
+                <div className="spec-doc-actions">
+                  {editing ? (
+                    <>
+                      <button type="button" className="input primary" onClick={() => void save()} disabled={saving}>
+                        {saving ? "Saving…" : "Save"}
+                      </button>
+                      <button type="button" className="input" onClick={() => setEditing(false)} disabled={saving}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        className="input"
+                        data-testid="spec-pin"
+                        aria-pressed={pinned.includes(doc.node.id)}
+                        disabled={!activeSession || pinning}
+                        title={
+                          activeSession
+                            ? `${pinned.includes(doc.node.id) ? "Unpin from" : "Pin to"} ${sessionTitle ?? "the open session"}`
+                            : "Open a session to pin specs to it"
+                        }
+                        onClick={() => void togglePin(doc.node.id)}
+                      >
+                        {pinned.includes(doc.node.id) ? "Unpin from session" : "Pin to session"}
+                      </button>
+                      <button type="button" className="input" onClick={beginEdit}>
+                        Edit
+                      </button>
+                    </>
+                  )}
+                </div>
               </header>
+
+              <p className="spec-pin-note" data-testid="spec-pin-note">
+                {activeSession
+                  ? `Context for ${sessionTitle ?? activeSession}: a pinned spec is sent to this session's harness on start and on Refresh context.`
+                  : "No session is open. Open one in Sessions to pin this spec to it."}
+              </p>
+              {pinError ? (
+                <p className="specs-error" role="alert" data-testid="spec-pin-error">
+                  {pinError}
+                </p>
+              ) : null}
 
               {conflict ? (
                 <div className="spec-conflict" role="alert">

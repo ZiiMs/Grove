@@ -52,11 +52,32 @@ describe("session contract fixtures", () => {
       "usage",
       "status",
       "error",
+      "context_refreshed",
     ]);
     const toolCall = events[4];
     expect(toolCall).toMatchObject({ kind: "tool_call", call_id: "mock-call-1", name: "echo" });
     const toolResult = events[5];
     expect(toolResult).toMatchObject({ kind: "tool_result", status: "ok" });
+  });
+
+  it("session-events.json records the context a session was given", () => {
+    const raw = fixture("session-events.json") as unknown[];
+    const refresh = harnessEventSchema.parse(raw[raw.length - 1]);
+    expect(refresh).toMatchObject({
+      kind: "context_refreshed",
+      reason: "refresh",
+      harness: "mock",
+    });
+    expect(
+      refresh.kind === "context_refreshed" ? refresh.documents : [],
+    ).toEqual([
+      {
+        id: "grove-architecture",
+        title: "Grove — architecture",
+        chars: 1200,
+        truncated: false,
+      },
+    ]);
   });
 });
 

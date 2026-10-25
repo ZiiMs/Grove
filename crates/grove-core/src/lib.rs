@@ -41,6 +41,9 @@ pub struct GroveCore {
     pub git: gitops::Git,
     /// One versioned TODO plan per session, mirrored into the session's project for the agent.
     pub plan: Arc<plan::PlanService>,
+    /// Pinned specs plus the plan, assembled into the documents a harness receives at start
+    /// (ticket 14). Also the durable side of the pin commands.
+    pub context: Arc<sessions::context::SessionContextService>,
     /// The session runtime: adapters, live sessions, and the SQLite transcript.
     pub sessions: Arc<SessionManager>,
     pub mcp: Arc<mcp::McpService>,
@@ -79,6 +82,16 @@ impl GroveCore {
             project_root: Some(self.project_root.clone()),
             ..Default::default()
         }));
+        // Pinned specs are read from the project root, so pointing Grove at another project has to
+        // move the knowledge source with it.
+        self.context = Arc::new(sessions::context::SessionContextService::new(
+            self.sessions.store(),
+            Arc::clone(&self.plan),
+            self.project_root.clone(),
+        ));
+        self.sessions.set_context_source(
+            Arc::clone(&self.context) as Arc<dyn sessions::context::ContextSource>
+        );
         self
     }
 
@@ -97,6 +110,19 @@ impl GroveCore {
             Arc::clone(&sessions),
         ));
         let skills = skills::SkillService::new(paths.clone(), Arc::clone(&secrets));
+        let plan = Arc::new(plan::PlanService::new(
+            sessions.store(),
+            project_root.clone(),
+        ));
+        // The session runtime asks this service for its knowledge; the port keeps `sessions` free of
+        // the spec graph and the plan. Wiring it here is the one line that makes pinned specs real.
+        let context = Arc::new(sessions::context::SessionContextService::new(
+            sessions.store(),
+            Arc::clone(&plan),
+            project_root.clone(),
+        ));
+        sessions
+            .set_context_source(Arc::clone(&context) as Arc<dyn sessions::context::ContextSource>);
         // Settings own the catalog sources; apply them at startup so the Skills panel agrees. A bad
         // settings row keeps the built-in defaults instead of blocking the app.
         if let Ok(current) = settings.get() {
@@ -115,10 +141,8 @@ impl GroveCore {
                 project_root: Some(project_root.clone()),
                 ..Default::default()
             })),
-            plan: Arc::new(plan::PlanService::new(
-                sessions.store(),
-                project_root.clone(),
-            )),
+            plan,
+            context,
             paths,
             project_root,
             sessions,

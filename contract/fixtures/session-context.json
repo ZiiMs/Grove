@@ -1,0 +1,40 @@
+{
+  "documents": [
+    {
+      "chars": 1200,
+      "id": "grove-architecture",
+      "title": "Grove — architecture",
+      "truncated": false
+    },
+    {
+      "chars": 480,
+      "id": "grove-goal-and-requirements",
+      "title": "Grove — goal and requirements",
+      "truncated": true
+    },
+    {
+      "chars": 96,
+      "id": "plan",
+      "title": "Plan",
+      "truncated": false
+    }
+  ],
+  "harness": "claude",
+  "limits": {
+    "perDocChars": 8000,
+    "totalChars": 24000
+  },
+  "pins": [
+    {
+      "specId": "grove-architecture",
+      "title": "Grove — architecture"
+    },
+    {
+      "specId": "grove-goal-and-requirements",
+      "title": "Grove — goal and requirements"
+    }
+  ],
+  "planVersion": 3,
+  "sessionId": "session-1",
+  "totalChars": 1776
+}

@@ -49,6 +49,7 @@ export const eventKinds = [
   "usage",
   "status",
   "error",
+  "context_refreshed",
 ] as const;
 export type EventKind = (typeof eventKinds)[number];
 

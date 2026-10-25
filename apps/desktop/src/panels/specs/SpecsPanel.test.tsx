@@ -1,10 +1,16 @@
 import type { SpecDoc, SpecGraph, SpecNode } from "@grove/contract";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GroveBridge } from "../../ipc/bridge";
 import { BridgeProvider } from "../../ipc/context";
-import { createFakeBridge, type FakeBridge } from "../../test-utils/fakeBridge";
+import { useSessionStore } from "../../state/sessionStore";
+import {
+  createFakeBridge,
+  fakeSession,
+  fakeSummary,
+  type FakeBridge,
+} from "../../test-utils/fakeBridge";
 import { SpecsPanel } from ".";
 
 /**
@@ -112,6 +118,10 @@ function renderPanel(bridge: FakeBridge) {
   );
 }
 
+beforeEach(() => {
+  useSessionStore.getState().reset();
+});
+
 describe("SpecsPanel", () => {
   it("renders the spec tree grouped by type with status", async () => {
     const { bridge, invoke } = createSpecBridge();
@@ -173,6 +183,54 @@ describe("SpecsPanel", () => {
     });
     expect(await screen.findByRole("heading", { name: "Updated goal" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Spec editor")).not.toBeInTheDocument();
+  });
+
+  it("pins the open spec to the session the Sessions panel has open", async () => {
+    const row = { ...fakeSession({ status: "idle" as const }), events: [] };
+    const bridge = createFakeBridge({}, {
+      sessions: [fakeSummary(row)],
+      details: { [row.id]: row },
+      specTitles: { "grove-goal-and-requirements": "Grove goal" },
+    });
+    bridge.on("spec_index", () => graph);
+    bridge.on("spec_read", ({ path }) => {
+      const doc = docs[path];
+      if (!doc) throw { code: "not_found", message: `no spec at ${path}` };
+      return doc;
+    });
+    useSessionStore.setState({ activeId: row.id, sessions: [fakeSummary(row)] });
+    renderPanel(bridge);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Grove goal/ }));
+    await screen.findByTestId("spec-reader");
+    const pin = screen.getByTestId("spec-pin");
+    expect(pin).toHaveTextContent("Pin to session");
+
+    await userEvent.click(pin);
+
+    await waitFor(() =>
+      expect(bridge.pinsOf(row.id)).toEqual(["grove-goal-and-requirements"]),
+    );
+    expect(await screen.findByTestId("spec-pin")).toHaveTextContent("Unpin from session");
+    expect(screen.getByText("pinned")).toBeInTheDocument();
+    // The session header shows the same snapshot, so pinning here is visible there.
+    expect(useSessionStore.getState().context?.pins.map((entry) => entry.specId)).toEqual([
+      "grove-goal-and-requirements",
+    ]);
+
+    await userEvent.click(screen.getByTestId("spec-pin"));
+    await waitFor(() => expect(bridge.pinsOf(row.id)).toEqual([]));
+    expect(await screen.findByTestId("spec-pin")).toHaveTextContent("Pin to session");
+  });
+
+  it("cannot pin without an open session", async () => {
+    const { bridge } = createSpecBridge();
+    renderPanel(bridge);
+    await userEvent.click(await screen.findByRole("button", { name: /Grove goal/ }));
+    await screen.findByTestId("spec-reader");
+
+    expect(screen.getByTestId("spec-pin")).toBeDisabled();
+    expect(screen.getByTestId("spec-pin-note")).toHaveTextContent(/No session is open/i);
   });
 
   it("surfaces a conflict and lets the user reload the newer content", async () => {

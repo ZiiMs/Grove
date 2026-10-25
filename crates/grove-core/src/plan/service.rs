@@ -104,7 +104,7 @@ impl PlanService {
         Ok(plan_at(session_id, &path, Some(written)))
     }
 
-    /// The plan text for the session-start path (the prompt context ticket 14 wires up).
+    /// The plan text for the session path: what a session's context carries as its plan document.
     ///
     /// `None` means there is no plan worth putting in a prompt. Reading still imports an external
     /// edit, so a session that starts after the agent rewrote the file starts from the new plan.

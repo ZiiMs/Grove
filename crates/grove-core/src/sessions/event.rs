@@ -83,6 +83,57 @@ pub enum EventKind {
         message: String,
         retryable: bool,
     },
+    /// The session's knowledge was (re)assembled from its pinned specs and the plan, and handed to the
+    /// harness. Additive: the transcript renders `note` as a visible system line, and `documents` is
+    /// exactly what the harness received, so the context a run started from stays auditable.
+    ContextRefreshed {
+        reason: ContextReason,
+        /// The harness that received the documents.
+        harness: String,
+        documents: Vec<ContextDocument>,
+        /// One human-readable line for the transcript.
+        note: String,
+    },
+}
+
+/// What caused a session's context documents to be assembled and handed to the harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextReason {
+    /// A new session was started.
+    Start,
+    /// An existing conversation was resumed after a restart.
+    Resume,
+    /// The user asked for the current pins and plan to be re-sent.
+    Refresh,
+    /// The same conversation was re-launched on a different harness.
+    HarnessSwitch,
+}
+
+impl ContextReason {
+    /// The serde tag, for a log line or a test that wants to name the cause.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContextReason::Start => "start",
+            ContextReason::Resume => "resume",
+            ContextReason::Refresh => "refresh",
+            ContextReason::HarnessSwitch => "harness_switch",
+        }
+    }
+}
+
+/// One document in a session's context, as recorded in the transcript: what the harness got, not the
+/// whole body (the body is already in the session's `StartContext` and would double the log).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextDocument {
+    /// The spec id, or `plan` for the TODO plan.
+    pub id: String,
+    pub title: String,
+    /// Characters the document contributes, marker included.
+    pub chars: usize,
+    /// Whether a character budget cut this document short.
+    pub truncated: bool,
 }
 
 impl EventKind {
@@ -101,6 +152,7 @@ impl EventKind {
             EventKind::Usage { .. } => "usage",
             EventKind::Status { .. } => "status",
             EventKind::Error { .. } => "error",
+            EventKind::ContextRefreshed { .. } => "context_refreshed",
         }
     }
 }
@@ -295,6 +347,17 @@ mod tests {
                 message: "boom".into(),
                 retryable: true,
             },
+            EventKind::ContextRefreshed {
+                reason: ContextReason::Refresh,
+                harness: "mock".into(),
+                documents: vec![ContextDocument {
+                    id: "grove-architecture".into(),
+                    title: "Grove — architecture".into(),
+                    chars: 42,
+                    truncated: false,
+                }],
+                note: "Context refreshed for mock: 1 document (42 chars)".into(),
+            },
         ];
 
         for kind in kinds {
@@ -341,6 +404,19 @@ mod tests {
             assert_eq!(SessionState::parse(state.as_str()), state);
         }
         assert_eq!(SessionState::parse("from-the-future"), SessionState::Error);
+    }
+
+    #[test]
+    fn every_context_reason_names_its_wire_tag() {
+        for reason in [
+            ContextReason::Start,
+            ContextReason::Resume,
+            ContextReason::Refresh,
+            ContextReason::HarnessSwitch,
+        ] {
+            let json = serde_json::to_string(&reason).unwrap();
+            assert_eq!(json, format!("\"{}\"", reason.as_str()));
+        }
     }
 
     #[test]

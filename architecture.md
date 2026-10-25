@@ -56,8 +56,8 @@ packages/contract/             zod schemas + TS types + fixture validator (UI â†
 contract/fixtures/             golden JSON, written by Rust tests, parsed by TS tests
 crates/grove-core/src/
   adapters/{mod,registry,mock,claude,codex,acp,opencode,pi}.rs
-  sessions/{mod,event,manager,pump}.rs
-  store/{mod,db,repos,plans}.rs
+  sessions/{mod,event,manager,pump,context}.rs
+  store/{mod,db,repos,plans,pins}.rs
   specgraph/{mod,frontmatter,index,watch}.rs
   plan/{mod,service,mirror}.rs
   skills/{mod,catalog,targets,install}.rs
@@ -162,6 +162,10 @@ pub enum EventKind {
     Usage { input_tokens: u64, output_tokens: u64 },
     Status { state: SessionState },                    // starting|ready|busy|idle|exited|error
     Error { message: String, retryable: bool },
+    // Additive (ticket 14): the session's knowledge was assembled and handed to a harness. The
+    // transcript renders `note`; `documents` is exactly what the harness received.
+    ContextRefreshed { reason: ContextReason, harness: String,
+                       documents: Vec<ContextDocument>, note: String },
 }
 
 pub struct HarnessEvent { pub at: String /* RFC3339 */, pub kind: EventKind }
@@ -180,6 +184,26 @@ pipe.
 the stored `resume_token` (Claude `--resume`, Codex `thread/resume`, OpenCode session id, ACP session id,
 pi's session file path). If an adapter has no resume capability, Grove replays the conversation tail as
 context â€” the log is already local, so the plan and history survive either way.
+
+**Session knowledge (ticket 14).** Start, resume and harness switch assemble `StartContext.context_files`
+from the session's pinned specs (in pin order) followed by its current plan, read fresh from the project's
+spec files and `PlanService`. `sessions/context.rs` enforces a per-document and a total character budget
+and appends an explicit `[truncated: <n> of <total> chars omitted]` marker to any document it cuts; a
+document that cannot fit is dropped and counted. The assembled context is a **snapshot**: nothing re-reads a spec on a
+timer, so an edit cannot silently change a running conversation.
+
+Two runtime operations move it, and both are visible in the transcript as a `ContextRefreshed` note:
+
+- `session_refresh_context(id)` re-reads pins and plan, pushes the rendered documents into the **running**
+  session as a turn, and records what was sent.
+- `session_switch_harness(id, harness)` re-launches the same conversation on another registered harness
+  with the same context documents plus a transcript summary (`render_tail`) as its prompt, keeping the
+  transcript and dropping the old harness's resume token and model.
+
+The manager talks to knowledge through the `ContextSource` port, so it never imports the spec graph or the
+plan service; `GroveCore::assemble` wires the real `SessionContextService` onto `GroveCore::context`. Pins
+live in the `pins` table, are toggled from the Specs panel for the session the Sessions panel has open,
+and survive a restart.
 
 ## Persistence (settled)
 

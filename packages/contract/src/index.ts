@@ -10,6 +10,7 @@ export * from "./core";
 export * from "./git";
 export * from "./mcp";
 export * from "./plan";
+export * from "./sessionContext";
 export * from "./sessions";
 export * from "./settings";
 export * from "./skills";

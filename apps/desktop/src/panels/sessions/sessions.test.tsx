@@ -8,6 +8,7 @@ import {
   createFakeBridge,
   fakeSession,
   fakeSummary,
+  MOCK_CAPABILITIES,
   type FakeBridge,
 } from "../../test-utils/fakeBridge";
 import { SessionsPanel } from ".";
@@ -171,6 +172,133 @@ describe("SessionsPanel", () => {
       expect(bridge.calls.some((call) => call.command === "session_resume")).toBe(true),
     );
     expect(await screen.findByText("before restart")).toBeInTheDocument();
+  });
+
+  it("keeps two sessions open as tabs with their own transcript, compose text and status", async () => {
+    const first = detail("idle", [
+      { at: AT, kind: "message", role: "user", blocks: [{ type: "text", text: "hello one" }] },
+    ]);
+    const second: SessionDetail = {
+      ...fakeSession({ id: "session-2", title: "second session", status: "busy" }),
+      events: [{ at: AT, kind: "message", role: "user", blocks: [{ type: "text", text: "hello two" }] }],
+    };
+    const bridge = createFakeBridge({}, {
+      sessions: [fakeSummary(first), fakeSummary(second)],
+      details: { [first.id]: first, [second.id]: second },
+    });
+    renderPanel(bridge);
+
+    await userEvent.click(await screen.findByTestId("session-item-session-1"));
+    expect(await screen.findByTestId("session-tab-session-1")).toBeInTheDocument();
+    expect(await screen.findByText("hello one")).toBeInTheDocument();
+    await userEvent.type(screen.getByTestId("session-compose"), "draft one");
+
+    await userEvent.click(screen.getByTestId("session-item-session-2"));
+    expect(await screen.findByTestId("session-tab-session-2")).toBeInTheDocument();
+    expect(await screen.findByText("hello two")).toBeInTheDocument();
+    expect(screen.queryByText("hello one")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-compose")).toHaveValue("");
+    await userEvent.type(screen.getByTestId("session-compose"), "draft two");
+
+    // Each tab keeps its own compose text and status.
+    await userEvent.click(screen.getByTestId("session-tab-session-1"));
+    expect(await screen.findByTestId("session-compose")).toHaveValue("draft one");
+    expect(
+      screen.getByTestId("session-tab-session-2").querySelector(".status-dot"),
+    ).toHaveClass("status-busy");
+    expect(screen.queryByText("hello two")).not.toBeInTheDocument();
+
+    // Closing a tab keeps the session itself and focuses a neighbour.
+    await userEvent.click(screen.getByTestId("session-tab-close-session-1"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-tab-session-1")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByTestId("session-tab-session-2")).toBeInTheDocument();
+    expect(screen.getByTestId("session-item-session-1")).toBeInTheDocument();
+  });
+
+  it("shows the session's pinned specs and plan in the header", async () => {
+    const row = detail("idle", [
+      { at: AT, kind: "message", role: "user", blocks: [{ type: "text", text: "hello" }] },
+    ]);
+    const bridge = createFakeBridge({}, {
+      sessions: [fakeSummary(row)],
+      details: { [row.id]: row },
+      pins: { [row.id]: ["grove-architecture"] },
+      specTitles: { "grove-architecture": "Grove architecture" },
+      plans: {
+        [row.id]: {
+          sessionId: row.id,
+          markdown: "# Plan\n\n- one\n",
+          version: 3,
+          mirrorPath: "C:/projects/grove/.grove/sessions/session-1/plan.md",
+        },
+      },
+    });
+    renderPanel(bridge);
+    await userEvent.click(await screen.findByTestId("session-item-session-1"));
+
+    const context = await screen.findByTestId("session-context");
+    expect(within(context).getByTestId("session-context-pin")).toHaveTextContent(
+      "Grove architecture",
+    );
+    expect(within(context).getByTestId("session-context-plan")).toHaveTextContent("plan v3");
+    expect(within(context).getByTestId("session-context-size")).toHaveTextContent("2 docs");
+  });
+
+  it("switches harness without losing the transcript", async () => {
+    const row = detail("idle", [
+      { at: AT, kind: "message", role: "user", blocks: [{ type: "text", text: "hello claude" }] },
+    ]);
+    const bridge = createFakeBridge(
+      {},
+      {
+        harnesses: [
+          { id: "mock", capabilities: MOCK_CAPABILITIES },
+          { id: "claude", capabilities: MOCK_CAPABILITIES },
+        ],
+        sessions: [fakeSummary(row)],
+        details: { [row.id]: row },
+        pins: { [row.id]: ["grove-architecture"] },
+        specTitles: { "grove-architecture": "Grove architecture" },
+      },
+    );
+    renderPanel(bridge);
+    await userEvent.click(await screen.findByTestId("session-item-session-1"));
+    expect(await screen.findByText("hello claude")).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByTestId("session-harness"), "claude");
+
+    await waitFor(() =>
+      expect(bridge.calls).toContainEqual({
+        command: "session_switch_harness",
+        args: { id: row.id, harness: "claude" },
+      }),
+    );
+    expect(await screen.findByText("hello claude")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Harness switched from mock to claude/),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("session-context-pin")).toHaveTextContent("Grove architecture");
+  });
+
+  it("refreshes the context and shows the note in the transcript", async () => {
+    const row = detail("idle");
+    const bridge = createFakeBridge({}, {
+      sessions: [fakeSummary(row)],
+      details: { [row.id]: row },
+      pins: { [row.id]: ["grove-architecture"] },
+      specTitles: { "grove-architecture": "Grove architecture" },
+    });
+    renderPanel(bridge);
+    await userEvent.click(await screen.findByTestId("session-item-session-1"));
+
+    await userEvent.click(await screen.findByTestId("session-refresh-context"));
+
+    expect(await screen.findByTestId("transcript-notice")).toHaveTextContent(
+      /Context refreshed for mock/,
+    );
+    expect(bridge.calls.some((call) => call.command === "session_refresh_context")).toBe(true);
   });
 
   it("shows a validation/transport error from the core instead of throwing", async () => {

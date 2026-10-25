@@ -87,5 +87,20 @@
     "kind": "error",
     "message": "harness exited",
     "retryable": true
+  },
+  {
+    "at": "2025-01-01T00:00:06.000Z",
+    "documents": [
+      {
+        "chars": 1200,
+        "id": "grove-architecture",
+        "title": "Grove — architecture",
+        "truncated": false
+      }
+    ],
+    "harness": "mock",
+    "kind": "context_refreshed",
+    "note": "Context refreshed for mock: 1 document (1200 chars)",
+    "reason": "refresh"
   }
 ]

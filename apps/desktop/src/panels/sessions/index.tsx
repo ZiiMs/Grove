@@ -15,8 +15,18 @@ import "./sessions.css";
 
 /**
  * The Sessions panel: the session list, a harness picker limited to what the core registered, and the
- * open conversation. Rendering is driven by the persisted event log, so a reload rebuilds the same
- * transcript; live events arrive over `grove://session-event`.
+ * open conversation.
+ *
+ * Several sessions stay open side by side as tabs. Each tab keeps its own transcript, compose text and
+ * status; only the active tab's event list is rendered, because the log is the record and a background
+ * session has nothing to paint.
+ *
+ * The header is the session's knowledge: its harness (switchable, which re-launches the same
+ * conversation on another harness), the specs pinned to it, and the plan — plus the one action that
+ * moves a snapshot, "Refresh context".
+ *
+ * Rendering is driven by the persisted event log, so a reload rebuilds the same transcript; live
+ * events arrive over `grove://session-event`.
  */
 export function SessionsPanel() {
   const bridge = useBridge();
@@ -24,20 +34,27 @@ export function SessionsPanel() {
   const sessions = useSessionStore((state) => state.sessions);
   const detail = useSessionStore((state) => state.detail);
   const events = useSessionStore((state) => state.events);
+  const context = useSessionStore((state) => state.context);
+  const openIds = useSessionStore((state) => state.openIds);
+  const drafts = useSessionStore((state) => state.drafts);
+  const activeId = useSessionStore((state) => state.activeId);
   const loading = useSessionStore((state) => state.loading);
   const busy = useSessionStore((state) => state.busy);
   const error = useSessionStore((state) => state.error);
   const load = useSessionStore((state) => state.load);
   const create = useSessionStore((state) => state.create);
   const select = useSessionStore((state) => state.select);
+  const closeTab = useSessionStore((state) => state.closeTab);
+  const setDraft = useSessionStore((state) => state.setDraft);
   const send = useSessionStore((state) => state.send);
   const cancel = useSessionStore((state) => state.cancel);
   const resume = useSessionStore((state) => state.resume);
   const close = useSessionStore((state) => state.close);
+  const refreshContext = useSessionStore((state) => state.refreshContext);
+  const switchHarness = useSessionStore((state) => state.switchHarness);
 
   const [harness, setHarness] = useState("");
   const [cwd, setCwd] = useState("");
-  const [draft, setDraft] = useState("");
 
   useEffect(() => {
     void load(bridge);
@@ -65,6 +82,7 @@ export function SessionsPanel() {
   const items = useMemo(() => foldEvents(events), [events]);
   const status = detail?.status ?? null;
   const running = status !== null && status !== "exited" && status !== "error";
+  const draft = activeId ? (drafts[activeId] ?? "") : "";
 
   const submitCreate = async (formEvent: FormEvent) => {
     formEvent.preventDefault();
@@ -74,8 +92,9 @@ export function SessionsPanel() {
 
   const submitMessage = async (formEvent: FormEvent) => {
     formEvent.preventDefault();
-    if (!draft.trim()) return;
-    if (await send(bridge, draft)) setDraft("");
+    const id = activeId;
+    if (!id || !draft.trim()) return;
+    if (await send(bridge, draft)) setDraft(id, "");
   };
 
   return (
@@ -152,6 +171,42 @@ export function SessionsPanel() {
         </aside>
 
         <section className="session-main" data-testid="session-main">
+          {openIds.length > 0 ? (
+            <div className="session-tabs" role="tablist" aria-label="Open sessions" data-testid="session-tabs">
+              {openIds.map((id) => {
+                const row = sessions.find((session) => session.id === id);
+                const active = id === activeId;
+                return (
+                  <div key={id} className={active ? "session-tab is-active" : "session-tab"}>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className="session-tab-label"
+                      data-testid={`session-tab-${id}`}
+                      onClick={() => void select(bridge, id)}
+                    >
+                      <span
+                        className={`status-dot status-${row?.status ?? detail?.status ?? "idle"}`}
+                        aria-hidden="true"
+                      />
+                      {row?.title ?? detail?.title ?? id}
+                    </button>
+                    <button
+                      type="button"
+                      className="session-tab-close"
+                      aria-label={`Close tab ${row?.title ?? id}`}
+                      data-testid={`session-tab-close-${id}`}
+                      onClick={() => void closeTab(bridge, id)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
           {detail ? (
             <>
               <header className="session-header">
@@ -162,6 +217,32 @@ export function SessionsPanel() {
                   </p>
                 </div>
                 <div className="session-actions">
+                  <label className="field session-switch">
+                    <span>Harness</span>
+                    <select
+                      className="input"
+                      aria-label="Session harness"
+                      data-testid="session-harness"
+                      value={detail.harness}
+                      disabled={busy}
+                      onChange={(event) => void switchHarness(bridge, event.target.value)}
+                    >
+                      {harnesses.map((info) => (
+                        <option key={info.id} value={info.id}>
+                          {info.id}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="input"
+                    data-testid="session-refresh-context"
+                    disabled={!running || busy}
+                    onClick={() => void refreshContext(bridge)}
+                  >
+                    Refresh context
+                  </button>
                   {running ? (
                     <button
                       type="button"
@@ -186,6 +267,27 @@ export function SessionsPanel() {
                 </div>
               </header>
 
+              <section className="session-context" aria-label="Session context" data-testid="session-context">
+                <span className="session-context-label">Context</span>
+                {context && context.pins.length > 0 ? (
+                  context.pins.map((pin) => (
+                    <span key={pin.specId} className="session-context-pin" data-testid="session-context-pin">
+                      {pin.title}
+                    </span>
+                  ))
+                ) : (
+                  <span className="session-context-empty" data-testid="session-context-empty">
+                    No specs pinned
+                  </span>
+                )}
+                <span className="session-context-plan" data-testid="session-context-plan">
+                  {context && context.planVersion > 0 ? `plan v${context.planVersion}` : "no plan"}
+                </span>
+                <span className="session-context-size" data-testid="session-context-size">
+                  {context ? `${context.documents.length} docs · ${context.totalChars} chars` : "not assembled"}
+                </span>
+              </section>
+
               <Conversation items={items} />
               {items.length === 0 ? (
                 <p className="session-empty" data-testid="session-empty">
@@ -201,7 +303,7 @@ export function SessionsPanel() {
                   placeholder={`Message ${detail.harness}…`}
                   rows={2}
                   value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
+                  onChange={(event) => setDraft(detail.id, event.target.value)}
                 />
                 <div className="compose-actions">
                   <button
@@ -339,4 +441,3 @@ function TranscriptRow({ item }: { item: TranscriptItem }) {
       );
   }
 }
-
