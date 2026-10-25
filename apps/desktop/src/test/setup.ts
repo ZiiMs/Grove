@@ -1,10 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 
 /**
- * jsdom has no layout engine: every element reports a 0×0 box. Virtualized lists therefore render no
- * rows, which would make the Sessions conversation untestable. Give elements a stable box and a no-op
- * `ResizeObserver` (jsdom has none) so `@tanstack/react-virtual` renders the first paint, which is the
- * behaviour the browser shows too.
+ * jsdom has no layout engine: every element reports a 0×0 box. Give elements a stable box and a
+ * no-op `ResizeObserver` so components that measure their container behave like a first paint.
  */
 if (!("ResizeObserver" in globalThis)) {
   class ResizeObserverStub {
@@ -26,5 +24,23 @@ for (const [name, value] of [
   Object.defineProperty(HTMLElement.prototype, name, {
     configurable: true,
     get: () => value,
+  });
+}
+
+/** jsdom has no matchMedia; the shell uses it only to choose the mobile pane after an action. */
+if (!("matchMedia" in window)) {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
   });
 }

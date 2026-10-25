@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  doctorReportSchema,
+  providerStatusSchema,
   secretStatusViewSchema,
   settingsPatchSchema,
   settingsSchema,
@@ -17,21 +17,16 @@ describe("settings contract fixtures", () => {
   it("settings.json matches the zod schema and keeps the unknown key", () => {
     const parsed = settingsSchema.parse(fixture("settings.json"));
     expect(parsed.theme).toBe("dark");
-    expect(parsed.harnessPaths.claude).toBe("C:/Tools/claude.exe");
     expect(parsed.catalogSources).toEqual(["anthropics/skills", "mattpocock/skills"]);
     expect(parsed.futureFlag).toBe(true);
   });
 
   it("rejects a settings document with a missing typed field", () => {
-    expect(() =>
-      settingsSchema.parse({ harnessPaths: {}, theme: "dark" }),
-    ).toThrow();
+    expect(() => settingsSchema.parse({ theme: "dark" })).toThrow();
   });
 
   it("rejects an unknown theme and unknown patch fields are accepted", () => {
-    expect(() =>
-      settingsSchema.parse({ harnessPaths: {}, catalogSources: [], theme: "neon" }),
-    ).toThrow();
+    expect(() => settingsSchema.parse({ catalogSources: [], theme: "neon" })).toThrow();
     const patch = settingsPatchSchema.parse({ theme: "light", futureFlag: 1 });
     expect(patch.theme).toBe("light");
     expect(patch.futureFlag).toBe(1);
@@ -43,23 +38,32 @@ describe("settings contract fixtures", () => {
     expect(Object.keys(parsed)).toHaveLength(2);
   });
 
-  it("doctor.json matches the zod schema", () => {
-    const parsed = doctorReportSchema.parse(fixture("doctor.json"));
-    expect(parsed.harnesses.map((harness) => harness.id)).toEqual(["mock", "claude"]);
-    expect(parsed.harnesses[0].installed).toBe(true);
-    expect(parsed.harnesses[1].installed).toBe(false);
-    expect(parsed.harnesses[1].detail).toContain("configured path does not exist");
-    expect(parsed.tools.map((tool) => tool.id)).toEqual(["node", "git", "gh"]);
-    expect(parsed.tools[2].installed).toBe(false);
-    expect(parsed.checkedAt).toBe("2026-10-24T18:00:00.000Z");
+  it("provider-statuses.json is the settings pane's row, without a key", () => {
+    const rows = (fixture("provider-statuses.json") as unknown[]).map((row) =>
+      providerStatusSchema.parse(row),
+    );
+    expect(rows.map((row) => row.id)).toEqual(["anthropic", "openai"]);
+    expect(rows[0].configured).toBe(true);
+    expect(rows[0].source).toBe("keychain");
+    expect(rows[1].configured).toBe(false);
+    expect(rows[1].detail).toContain("Add an API key");
+    expect(Object.keys(rows[0])).not.toContain("key");
   });
 
-  it("rejects a doctor row without an installed flag", () => {
+  it("rejects a provider row without a configured flag", () => {
     expect(() =>
-      doctorReportSchema.parse({
-        harnesses: [{ id: "mock", label: "Mock", version: null, path: null, detail: null }],
-        tools: [],
-        checkedAt: "2026-10-24T18:00:00.000Z",
+      providerStatusSchema.parse({
+        id: "anthropic",
+        name: "Anthropic",
+        short: "AN",
+        tint: "#c08a63",
+        method: "api_key",
+        keyUrl: "https://console.anthropic.com/settings/keys",
+        envVar: "ANTHROPIC_API_KEY",
+        defaultModel: "claude-sonnet-4-5",
+        models: ["claude-sonnet-4-5"],
+        source: null,
+        detail: null,
       }),
     ).toThrow();
   });

@@ -1,0 +1,10 @@
+{
+  "id": "project-1",
+  "name": "grove",
+  "path": "C:/projects/grove",
+  "remote": "acme/grove",
+  "defaultBranch": "main",
+  "isGit": true,
+  "createdAt": "2025-01-01T00:00:00.000Z",
+  "updatedAt": "2025-01-01T00:00:00.000Z"
+}

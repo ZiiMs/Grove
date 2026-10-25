@@ -564,7 +564,9 @@ fn open_pr_returns_the_url_and_passes_an_exact_argv() {
     let result = git
         .open_pr(
             Some(repo.path()),
-            &PrRequest::new("Add the git panel", "Ticket 04.").with_base("main"),
+            &PrRequest::new("Add the git panel", "Ticket 04.")
+                .with_base("main")
+                .with_draft(true),
         )
         .expect("draft PR");
     assert_eq!(result.url, "https://github.com/acme/grove/pull/42");
@@ -760,5 +762,140 @@ fn a_missing_git_binary_is_unavailable_not_a_panic() {
     assert!(
         err.message.contains("grove-definitely-missing-git-binary"),
         "{err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Staging, detection and worktrees (redesigned shell)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn stage_and_unstage_move_exactly_the_selected_paths() {
+    let repo = Repo::new();
+    repo.write("tracked.txt", "one\n");
+    repo.commit_all("init");
+    repo.write("tracked.txt", "two\n");
+    repo.write("new.txt", "new\n");
+    let git = Git::system();
+
+    let status = git
+        .stage(Some(repo.path()), &["tracked.txt".into()], true)
+        .expect("stage");
+    assert!(find_file(&status, "tracked.txt").staged);
+    assert!(find_file(&status, "new.txt").untracked);
+
+    let status = git
+        .stage(Some(repo.path()), &["tracked.txt".into()], false)
+        .expect("unstage");
+    assert!(!find_file(&status, "tracked.txt").staged);
+
+    assert!(git.stage(Some(repo.path()), &[], true).is_err());
+    assert!(git
+        .stage(Some(repo.path()), &["../outside.txt".into()], true)
+        .is_err());
+}
+
+#[test]
+fn detect_reports_a_repository_with_branches_and_a_plain_folder_as_not_git() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit_all("init");
+    repo.git(&["remote", "add", "origin", "git@github.com:acme/grove.git"]);
+    let git = Git::system();
+
+    let detection = git.detect(repo.path()).expect("detect");
+    assert!(detection.is_git);
+    assert_eq!(detection.current_branch.as_deref(), Some("main"));
+    assert_eq!(detection.branches, vec!["main".to_string()]);
+    assert_eq!(detection.default_branch.as_deref(), Some("main"));
+    assert_eq!(detection.remote.as_deref(), Some("acme/grove"));
+
+    let plain = tempfile::tempdir().expect("temp dir");
+    let detection = git.detect(plain.path()).expect("detect plain");
+    assert!(!detection.is_git);
+    assert!(detection.branches.is_empty());
+}
+
+#[test]
+fn create_worktree_makes_a_new_branch_and_refuses_a_non_empty_folder() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit_all("init");
+    let checkout = tempfile::tempdir().expect("checkout parent");
+    let target = checkout.path().join("wt-feature");
+    let git = Git::system();
+
+    let worktree = git
+        .create_worktree(
+            Some(repo.path()),
+            "feature/ui",
+            "main",
+            target.to_str().expect("utf-8 path"),
+        )
+        .expect("worktree");
+    assert_eq!(worktree.branch.as_deref(), Some("feature/ui"));
+    assert_eq!(canonical(Path::new(&worktree.path)), canonical(&target));
+    assert!(target.join("a.txt").is_file());
+
+    let error = git
+        .create_worktree(
+            Some(repo.path()),
+            "feature/other",
+            "main",
+            target.to_str().expect("utf-8 path"),
+        )
+        .expect_err("a used folder is refused");
+    assert_eq!(error.code, ErrorCode::Invalid);
+}
+
+#[test]
+fn an_untracked_file_gets_a_new_file_patch_for_the_inspector() {
+    let repo = Repo::new();
+    repo.write("src/new.rs", "fn main() {\n    println!(\"hi\");\n}\n");
+    let git = Git::system();
+
+    let diff = git
+        .diff(
+            Some(repo.path()),
+            &DiffRequest::working_tree(Some("src/new.rs".into())),
+        )
+        .expect("untracked diff");
+
+    assert_eq!(diff.path.as_deref(), Some("src/new.rs"));
+    assert_eq!(diff.target, DiffTarget::WorkingTree);
+    assert!(!diff.truncated);
+    assert!(
+        diff.patch.contains("new file mode 100644"),
+        "{}",
+        diff.patch
+    );
+    assert!(diff.patch.contains("+fn main() {"), "{}", diff.patch);
+    assert!(
+        diff.patch.contains("+    println!(\"hi\");"),
+        "{}",
+        diff.patch
+    );
+    assert!(
+        !diff.patch.contains("+++ b/src/new.rs\n+"),
+        "headers are not content"
+    );
+}
+
+#[test]
+fn a_binary_untracked_file_is_named_not_sprayed() {
+    let repo = Repo::new();
+    std::fs::write(repo.path().join("image.bin"), [0u8, 1, 2, 3]).expect("write binary");
+    let git = Git::system();
+
+    let diff = git
+        .diff(
+            Some(repo.path()),
+            &DiffRequest::working_tree(Some("image.bin".into())),
+        )
+        .expect("binary diff");
+    assert!(
+        diff.patch.contains("Binary file image.bin not shown"),
+        "{}",
+        diff.patch
     );
 }

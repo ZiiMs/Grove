@@ -1,7 +1,7 @@
 [
   {
     "at": "2025-01-01T00:00:00.500Z",
-    "harness": "mock",
+    "provider": "mock",
     "kind": "session_started",
     "model": "mock-1",
     "resumed": false
@@ -85,7 +85,7 @@
   {
     "at": "2025-01-01T00:00:05.000Z",
     "kind": "error",
-    "message": "harness exited",
+    "message": "provider exited",
     "retryable": true
   },
   {
@@ -98,7 +98,7 @@
         "truncated": false
       }
     ],
-    "harness": "mock",
+    "provider": "mock",
     "kind": "context_refreshed",
     "note": "Context refreshed for mock: 1 document (1200 chars)",
     "reason": "refresh"

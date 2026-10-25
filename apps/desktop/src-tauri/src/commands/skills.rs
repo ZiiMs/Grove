@@ -4,7 +4,7 @@
 use crate::state::AppState;
 use grove_core::ipc::IpcResult;
 use grove_core::skills::{
-    CatalogSnapshot, InstallRequest, InstallResult, SkillPreview, SkillTarget,
+    CatalogSnapshot, InstallRecord, InstallRequest, InstallResult, SkillPreview, SkillTarget,
 };
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,7 @@ pub async fn skill_preview(
     Ok(state.core.skills.preview(&source, &path).await?)
 }
 
-/// Per-harness skill directories plus project-local `.agents/skills`, each with an `exists` flag.
+/// Per-provider skill directories plus project-local `.agents/skills`, each with an `exists` flag.
 ///
 /// An absent `projectRoot` means "the project Grove is looking at": the local target follows the
 /// active session instead of resolving against the app's own directory.
@@ -61,4 +61,17 @@ pub async fn skill_install(
         project_root: Some(project_root),
     };
     Ok(state.core.skills.install(request).await?)
+}
+
+/// Every recorded installation, so the catalog can mark installed skills and offer removal.
+#[tauri::command]
+pub async fn skill_installs(state: tauri::State<'_, AppState>) -> IpcResult<Vec<InstallRecord>> {
+    Ok(state.core.skills.installs()?)
+}
+
+/// Remove one installed skill folder by its recorded path.
+#[tauri::command]
+pub async fn skill_remove(state: tauri::State<'_, AppState>, path: String) -> IpcResult<()> {
+    state.core.skills.remove_install(&path)?;
+    Ok(())
 }

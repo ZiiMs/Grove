@@ -113,7 +113,7 @@ impl SkillService {
         catalog::preview(self, source, path).await
     }
 
-    /// The install destinations: each harness's skills directory plus project-local `.agents/skills`.
+    /// The install destinations: each provider's skills directory plus project-local `.agents/skills`.
     pub fn targets(&self, project_root: Option<&Path>) -> Vec<SkillTarget> {
         let config = self.config_snapshot();
         targets::project_targets(&targets::home_dir(config.home.as_deref()), project_root)
@@ -127,6 +127,35 @@ impl SkillService {
     /// The recorded installs, newest last.
     pub fn installs(&self) -> Result<Vec<InstallRecord>, SkillError> {
         self.installs.list()
+    }
+
+    /// Delete one installed skill folder and forget its record.
+    ///
+    /// The path comes from the install log, not from the caller's imagination, and must still look
+    /// like `<target>/skills/<name>`: a record that was edited by hand cannot turn this into an
+    /// arbitrary recursive delete.
+    pub fn remove_install(&self, path: &str) -> Result<(), SkillError> {
+        let records = self.installs.list()?;
+        let record = records
+            .into_iter()
+            .find(|record| record.path == path)
+            .ok_or_else(|| SkillError::NotFound(format!("installed skill at {path}")))?;
+        let folder = PathBuf::from(&record.path);
+        let safe = folder
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "skills")
+            && folder.file_name().is_some();
+        if !safe {
+            return Err(SkillError::Invalid(format!(
+                "refusing to remove a non-skill path: {path}"
+            )));
+        }
+        if folder.exists() {
+            std::fs::remove_dir_all(&folder)?;
+        }
+        self.installs.remove(&record.path)
     }
 
     pub(crate) fn github_token(&self) -> Option<String> {

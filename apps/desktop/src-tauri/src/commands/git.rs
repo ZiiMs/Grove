@@ -83,6 +83,41 @@ pub async fn git_commit<R: tauri::Runtime>(
     Ok(status)
 }
 
+/// Stage or unstage the selected paths. The changes list reads `staged` from git, not from a
+/// client-side set, so a reload shows the same checkboxes the user left.
+#[tauri::command]
+pub async fn git_stage<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    repo_path: Option<String>,
+    paths: Vec<String>,
+    staged: bool,
+) -> IpcResult<GitStatus> {
+    let core = state.core.clone();
+    let repo = repo_path.map(PathBuf::from);
+    let status = blocking(move || core.git.stage(repo.as_deref(), &paths, staged)).await?;
+    events::emit_git_changed(&app, status.clone());
+    Ok(status)
+}
+
+/// Create a branch plus a worktree checkout for it, then return the new checkout.
+#[tauri::command]
+pub async fn git_worktree_create(
+    state: tauri::State<'_, AppState>,
+    repo_path: String,
+    branch: String,
+    base: String,
+    path: String,
+) -> IpcResult<GitWorktree> {
+    let core = state.core.clone();
+    blocking(move || {
+        Ok(core
+            .projects
+            .create_worktree(&repo_path, &branch, &base, &path)?)
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn git_open_pr(
     state: tauri::State<'_, AppState>,
@@ -91,11 +126,13 @@ pub async fn git_open_pr(
     body: String,
     base: Option<String>,
     head: Option<String>,
+    draft: Option<bool>,
 ) -> IpcResult<PrResult> {
     let core = state.core.clone();
     let repo = repo_path.map(PathBuf::from);
     let mut request = PrRequest::new(title, body);
     request.base = base;
     request.head = head;
+    request.draft = draft.unwrap_or(false);
     blocking(move || core.git.open_pr(repo.as_deref(), &request)).await
 }

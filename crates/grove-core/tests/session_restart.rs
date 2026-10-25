@@ -3,7 +3,7 @@
 
 use grove_core::ipc::CreateSessionRequest;
 use grove_core::paths::AppPaths;
-use grove_core::sessions::event::{Block, EventKind, HarnessEvent, Role, SessionState};
+use grove_core::sessions::event::{Block, EventKind, Role, SessionEvent, SessionState};
 use grove_core::sessions::manager::SessionManager;
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ fn is_state(kind: &EventKind, state: SessionState) -> bool {
     matches!(kind, EventKind::Status { state: current } if *current == state)
 }
 
-fn idle_count(events: &[HarnessEvent]) -> usize {
+fn idle_count(events: &[SessionEvent]) -> usize {
     events
         .iter()
         .filter(|event| is_state(&event.kind, SessionState::Idle))
@@ -27,8 +27,8 @@ fn idle_count(events: &[HarnessEvent]) -> usize {
 async fn wait_for(
     manager: &SessionManager,
     id: &str,
-    done: impl Fn(&[HarnessEvent]) -> bool,
-) -> Vec<HarnessEvent> {
+    done: impl Fn(&[SessionEvent]) -> bool,
+) -> Vec<SessionEvent> {
     let deadline = tokio::time::Instant::now() + WAIT;
     loop {
         let events = manager.get(id).expect("the session exists").events;
@@ -43,7 +43,7 @@ async fn wait_for(
     }
 }
 
-fn user_texts(events: &[HarnessEvent]) -> Vec<&str> {
+fn user_texts(events: &[SessionEvent]) -> Vec<&str> {
     events
         .iter()
         .filter_map(|event| match &event.kind {
@@ -71,10 +71,12 @@ async fn a_session_survives_a_restart_and_continues() {
     let database = paths(&dir).database;
 
     let (session_id, before) = {
-        let manager = SessionManager::open(paths(&dir)).unwrap();
+        let manager = SessionManager::open_offline(paths(&dir)).unwrap();
         let detail = manager
             .create(CreateSessionRequest {
-                harness: "mock".into(),
+                provider: "mock".into(),
+                project_id: None,
+                worktree_path: None,
                 config: Some(serde_json::json!({ "chunkDelayMs": 1 })),
                 ..Default::default()
             })
@@ -91,7 +93,7 @@ async fn a_session_survives_a_restart_and_continues() {
 
     assert!(database.exists(), "the transcript lives in one file");
 
-    let manager = SessionManager::open(paths(&dir)).unwrap();
+    let manager = SessionManager::open_offline(paths(&dir)).unwrap();
 
     // The reopen is independent of the old pump's last write, so wait for it to settle.
     let restored = wait_for(&manager, &session_id, |events| {
@@ -123,7 +125,7 @@ async fn a_session_survives_a_restart_and_continues() {
     // Resume the same conversation: the mock's stored resume token is handed back to it.
     let resumed = manager.resume(&session_id).await.unwrap();
     assert_eq!(resumed.id, session_id);
-    assert_eq!(resumed.harness, "mock");
+    assert_eq!(resumed.provider, "mock");
 
     manager.send(&session_id, "second").await.unwrap();
     let after = wait_for(&manager, &session_id, |events| idle_count(events) >= 2).await;

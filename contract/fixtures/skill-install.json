@@ -1,8 +1,8 @@
 {
   "skill": "pdf",
   "source": "anthropics/skills",
-  "target": "claude",
-  "path": "C:/Users/demo/.claude/skills/pdf",
+  "target": "user",
+  "path": "C:/Users/demo/.grove/skills/pdf",
   "overwritten": true,
   "installedAt": "2026-10-24T18:00:00Z"
 }

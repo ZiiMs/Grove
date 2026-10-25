@@ -1,0 +1,23 @@
+{
+  "id": "anthropic",
+  "name": "Anthropic",
+  "short": "AN",
+  "tint": "#c08a63",
+  "wire": "anthropic",
+  "baseUrl": "https://api.anthropic.com",
+  "auth": "api_key",
+  "keyUrl": "https://console.anthropic.com/settings/keys",
+  "envVar": "ANTHROPIC_API_KEY",
+  "models": ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"],
+  "defaultModel": "claude-sonnet-4-5",
+  "capabilities": {
+    "streamingDeltas": true,
+    "toolCalls": true,
+    "diffs": true,
+    "permissions": true,
+    "resume": false,
+    "images": false,
+    "mcp": false,
+    "usage": true
+  }
+}

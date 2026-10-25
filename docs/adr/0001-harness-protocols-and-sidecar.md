@@ -1,6 +1,6 @@
 # 0001 — Harness protocols, the sidecar boundary, and context as a snapshot
 
-- **Status:** accepted (first build)
+- **Status:** superseded by ADR 0003 (providers replace harnesses). Kept for the record: it explains why the first build shipped CLI adapters and a sidecar, and which protocol choices were dropped.
 - **Date:** 2026-10-24
 - **Supersedes:** the tentative choices in `architecture.md` §The adapter contract, §Sidecar protocol
   and §Session knowledge where they differ; those sections now record the decisions below.

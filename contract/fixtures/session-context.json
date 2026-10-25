@@ -19,7 +19,7 @@
       "truncated": false
     }
   ],
-  "harness": "claude",
+  "provider": "claude",
   "limits": {
     "perDocChars": 8000,
     "totalChars": 24000

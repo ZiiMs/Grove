@@ -1,11 +1,15 @@
 import type {
   Decision,
-  DoctorReport,
+  ProviderStatus,
   EventEnvelope,
-  HarnessEvent,
-  HarnessInfo,
+  GitBranch,
+  GitStatus,
+  GitWorktree,
+  SessionEvent,
+  ProviderSpec,
   Plan,
   PlanUpdate,
+  Project,
   SecretStatus,
   Session,
   SessionContext,
@@ -13,6 +17,9 @@ import type {
   SessionSummary,
   Settings,
   SettingsPatch,
+  SkillCatalog,
+  SkillTarget,
+  SpecGraph,
 } from "@grove/contract";
 import type { GroveBridge, GroveEventName, UnlistenFn } from "../ipc/bridge";
 import type { CommandArgs, CommandMap, CommandName } from "../ipc/commands";
@@ -24,20 +31,36 @@ export interface FakeBridgeCall {
 
 /** What the fake core already knows when a test renders. */
 export interface FakeBridgeSeed {
-  harnesses?: HarnessInfo[];
+  providers?: ProviderSpec[];
   sessions?: SessionSummary[];
   details?: Record<string, SessionDetail>;
   plans?: Record<string, Plan>;
   settings?: Settings;
   /** Secret key → status. A key that is absent from the map reports `absent`. */
   secretStatuses?: Record<string, SecretStatus>;
-  doctor?: DoctorReport;
+  /** Provider readiness rows the settings pane renders. */
+  providerStatuses?: ProviderStatus[];
   /** Session id → pinned spec ids, in pin order. */
   pins?: Record<string, string[]>;
   /** Spec id → title, so pinned specs read like the Specs panel shows them. */
   specTitles?: Record<string, string>;
   /** The project root the fake core starts at; `app_set_project_root` moves it. */
   projectRoot?: string;
+  projects?: Project[];
+  worktrees?: GitWorktree[];
+  branches?: GitBranch[];
+  gitStatus?: GitStatus;
+  specGraph?: SpecGraph;
+  skillCatalog?: SkillCatalog;
+  skillTargets?: SkillTarget[];
+  /** Installed skill records the fake core remembers. */
+  installs?: Array<{
+    skill: string;
+    source: string;
+    target: string;
+    path: string;
+    installedAt: string;
+  }>;
 }
 
 export interface FakeBridge extends GroveBridge {
@@ -78,64 +101,58 @@ export const MOCK_CAPABILITIES = {
   images: false,
   mcp: false,
   usage: true,
-} satisfies HarnessInfo["capabilities"];
+} satisfies ProviderSpec["capabilities"];
 
-export const DEFAULT_HARNESSES: HarnessInfo[] = [{ id: "mock", capabilities: MOCK_CAPABILITIES }];
+export const DEFAULT_PROVIDERS: ProviderSpec[] = [
+  {
+    id: "mock",
+    name: "Offline",
+    short: "OF",
+    tint: "#8a8f98",
+    wire: "open_ai",
+    baseUrl: "offline://mock",
+    auth: "api_key",
+    keyUrl: "https://example.invalid",
+    envVar: "GROVE_OFFLINE_PROVIDER",
+    models: ["mock-1"],
+    defaultModel: "mock-1",
+    capabilities: MOCK_CAPABILITIES,
+  },
+];
 
 export const DEFAULT_SETTINGS: Settings = {
-  harnessPaths: {},
   catalogSources: ["anthropics/skills", "mattpocock/skills"],
   theme: "system",
 };
 
-export const DEFAULT_DOCTOR: DoctorReport = {
-  harnesses: [
-    {
-      id: "mock",
-      label: "Mock (builtin)",
-      installed: true,
-      version: "0.1.0",
-      path: "builtin:mock",
-      detail: null,
-    },
-  ],
-  tools: [
-    {
-      id: "node",
-      label: "Node.js",
-      installed: true,
-      version: "v20.11.1",
-      path: "C:/Program Files/nodejs/node.exe",
-      detail: null,
-    },
-    {
-      id: "git",
-      label: "Git",
-      installed: true,
-      version: "git version 2.43.0",
-      path: "C:/Program Files/Git/cmd/git.exe",
-      detail: null,
-    },
-    {
-      id: "gh",
-      label: "GitHub CLI",
-      installed: false,
-      version: null,
-      path: null,
-      detail: "gh is not installed or not on PATH",
-    },
-  ],
-  checkedAt: "2025-01-01T00:00:00.000Z",
-};
+/** What the Providers pane renders: one row per shipped vendor, none configured by default. */
+export const DEFAULT_PROVIDER_STATUSES: ProviderStatus[] = [
+  {
+    id: "anthropic",
+    name: "Anthropic",
+    short: "AN",
+    tint: "#c08a63",
+    method: "api_key",
+    keyUrl: "https://console.anthropic.com/settings/keys",
+    envVar: "ANTHROPIC_API_KEY",
+    defaultModel: "claude-sonnet-4-5",
+    models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"],
+    configured: false,
+    source: null,
+    detail: "Add an API key from https://console.anthropic.com/settings/keys, or set ANTHROPIC_API_KEY.",
+  },
+];
 
 export function fakeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: "session-1",
-    harness: "mock",
+    provider: "mock",
     cwd: "C:/projects/grove",
     model: null,
     title: "mock session",
     status: "idle",
+    projectId: null,
+    awaiting: false,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,
@@ -163,10 +180,12 @@ export function createFakeBridge(
   const commands = new Map<string, (args: unknown) => unknown>();
   const invocations: string[] = [];
   const calls: FakeBridgeCall[] = [];
-  const harnesses = seed.harnesses ?? DEFAULT_HARNESSES;
-  const sessions: SessionSummary[] = [...(seed.sessions ?? [])];
-  const details: Record<string, SessionDetail> = { ...(seed.details ?? {}) };
-  const plans: Record<string, Plan> = { ...(seed.plans ?? {}) };
+  const providers = seed.providers ?? DEFAULT_PROVIDERS;
+  // Deep clone the seed: a test's fixtures must survive a bridge that mutates its own rows, exactly
+  // like the real core does not mutate the caller's objects.
+  const sessions: SessionSummary[] = structuredClone(seed.sessions ?? []);
+  const details: Record<string, SessionDetail> = structuredClone(seed.details ?? {});
+  const plans: Record<string, Plan> = structuredClone(seed.plans ?? {});
   const pins: Record<string, string[]> = Object.fromEntries(
     Object.entries(seed.pins ?? {}).map(([sessionId, specIds]) => [sessionId, [...specIds]]),
   );
@@ -184,7 +203,20 @@ export function createFakeBridge(
   const secretStatuses = new Map<string, SecretStatus>(
     Object.entries(seed.secretStatuses ?? {}),
   );
-  const doctor = () => structuredClone(seed.doctor ?? DEFAULT_DOCTOR);
+  const providerStatuses = () => structuredClone(seed.providerStatuses ?? DEFAULT_PROVIDER_STATUSES);
+  const projects: Project[] = structuredClone(seed.projects ?? []);
+  const worktrees = structuredClone(seed.worktrees ?? []);
+  const branches = structuredClone(seed.branches ?? []);
+  const installs = structuredClone(seed.installs ?? []);
+  const defaultGit = (): GitStatus => ({
+    repoRoot: projectRoot,
+    branch: "main",
+    head: null,
+    clean: true,
+    truncated: false,
+    files: [],
+  });
+  let gitStatus: GitStatus = structuredClone(seed.gitStatus ?? defaultGit());
 
   const setStatus = (id: string, status: Session["status"]) => {
     const row = sessions.find((session) => session.id === id);
@@ -211,7 +243,7 @@ export function createFakeBridge(
     }
     return {
       sessionId,
-      harness: details[sessionId]?.harness ?? sessions.find((row) => row.id === sessionId)?.harness ?? "mock",
+      provider: details[sessionId]?.provider ?? sessions.find((row) => row.id === sessionId)?.provider ?? "mock",
       pins: pinned.map((specId) => ({ specId, title: specTitles[specId] ?? specId })),
       documents,
       totalChars: documents.reduce((total, doc) => total + doc.chars, 0),
@@ -225,17 +257,17 @@ export function createFakeBridge(
   /** Append a `context_refreshed` note to the transcript and stream it, exactly like the core. */
   const appendContextNote = (
     sessionId: string,
-    reason: "start" | "resume" | "refresh" | "harness_switch",
+    reason: "start" | "resume" | "refresh" | "provider_switch",
     note: string,
   ) => {
     const detail = details[sessionId];
     if (!detail) return;
     const context = contextOf(sessionId);
-    const event: HarnessEvent = {
+    const event: SessionEvent = {
       at: "2025-01-01T00:00:02.000Z",
       kind: "context_refreshed",
       reason,
-      harness: detail.harness,
+      provider: detail.provider,
       documents: context.documents,
       note,
     };
@@ -268,8 +300,8 @@ export function createFakeBridge(
         bridge.emit("grove://spec-changed", { payload: { paths: [] } });
         return path as CommandMap[K]["result"];
       }
-      if (command === "harness_list") {
-        return harnesses as CommandMap[K]["result"];
+      if (command === "provider_list") {
+        return providers as CommandMap[K]["result"];
       }
       if (command === "session_list") {
         return sessions.map((session) => ({ ...session })) as CommandMap[K]["result"];
@@ -282,16 +314,25 @@ export function createFakeBridge(
       }
       if (command === "session_create") {
         const { req } = args as {
-          req: { harness: string; cwd?: string | null; model?: string | null; title?: string | null };
+          req: {
+            provider: string;
+            cwd?: string | null;
+            model?: string | null;
+            title?: string | null;
+            projectId?: string | null;
+            worktreePath?: string | null;
+          };
         };
         const at = "2025-01-01T00:00:00.000Z";
+        const project = req.projectId ? projects.find((row) => row.id === req.projectId) : null;
         const session = fakeSession({
           id: `session-${sessions.length + 1}`,
-          harness: req.harness,
-          cwd: req.cwd ?? "C:/projects/grove",
+          provider: req.provider,
+          cwd: req.worktreePath ?? project?.path ?? req.cwd ?? "C:/projects/grove",
           model: req.model ?? null,
-          title: req.title ?? `${req.harness} session`,
+          title: req.title ?? `${req.provider} session`,
           status: "starting",
+          projectId: project?.id ?? null,
           createdAt: at,
           updatedAt: at,
         });
@@ -307,7 +348,7 @@ export function createFakeBridge(
         return null as CommandMap[K]["result"];
       }
       if (command === "session_respond_permission") {
-        // The real core answers the harness and the adapter emits `permission_resolved`; the fake
+        // The real core answers the agent run and the runtime emits `permission_resolved`; the fake
         // does both, so a test sees exactly what the transcript sees.
         const { id, requestId, decision } = args as {
           id: string;
@@ -316,13 +357,16 @@ export function createFakeBridge(
         };
         const detail = details[id];
         if (!detail) throw new Error(`FakeBridge has no session: ${id}`);
-        const event: HarnessEvent = {
+        const event: SessionEvent = {
           at: "2025-01-01T00:00:04.000Z",
           kind: "permission_resolved",
           request_id: requestId,
           decision,
         };
         detail.events = [...detail.events, event];
+        detail.awaiting = false;
+        const row = sessions.find((session) => session.id === id);
+        if (row) row.awaiting = false;
         bridge.emitSessionEvent({ sessionId: id, payload: event });
         return null as CommandMap[K]["result"];
       }
@@ -340,7 +384,7 @@ export function createFakeBridge(
           appendContextNote(
             id,
             "resume",
-            `Context re-sent on resume to ${row.harness}: ${documentsLabel(context.documents.length)}`,
+            `Context re-sent on resume to ${row.provider}: ${documentsLabel(context.documents.length)}`,
           );
         }
         return { ...row } as CommandMap[K]["result"];
@@ -368,24 +412,35 @@ export function createFakeBridge(
         appendContextNote(
           id,
           "refresh",
-          `Context refreshed for ${context.harness}: ${documentsLabel(context.documents.length)} (${context.totalChars} chars)`,
+          `Context refreshed for ${context.provider}: ${documentsLabel(context.documents.length)} (${context.totalChars} chars)`,
         );
         return contextOf(id) as CommandMap[K]["result"];
       }
-      if (command === "session_switch_harness") {
-        const { id, harness } = args as { id: string; harness: string };
+      if (command === "session_switch_provider") {
+        const { id, provider, model } = args as {
+          id: string;
+          provider: string;
+          model?: string;
+        };
         const detail = details[id];
         const row = sessions.find((session) => session.id === id);
         if (!detail || !row) throw new Error(`FakeBridge has no session: ${id}`);
-        const from = detail.harness;
-        detail.harness = harness;
-        row.harness = harness;
+        const from = detail.provider;
+        detail.provider = provider;
+        row.provider = provider;
+        if (model !== undefined) {
+          detail.model = model;
+          row.model = model;
+        } else if (provider !== from) {
+          detail.model = null;
+          row.model = null;
+        }
         detail.status = "starting";
         row.status = "starting";
-        const started: HarnessEvent = {
+        const started: SessionEvent = {
           at: "2025-01-01T00:00:03.000Z",
           kind: "session_started",
-          harness,
+          provider,
           model: detail.model,
           resumed: true,
         };
@@ -393,10 +448,215 @@ export function createFakeBridge(
         bridge.emitSessionEvent({ sessionId: id, payload: started });
         appendContextNote(
           id,
-          "harness_switch",
-          `Harness switched from ${from} to ${harness}; context re-sent: ${documentsLabel(contextOf(id).documents.length)}`,
+          "provider_switch",
+          `Provider switched from ${from} to ${provider}; context re-sent: ${documentsLabel(contextOf(id).documents.length)}`,
         );
         return structuredClone(detail) as CommandMap[K]["result"];
+      }
+      if (command === "project_list") {
+        return structuredClone(projects) as CommandMap[K]["result"];
+      }
+      if (command === "project_detect") {
+        const { path } = args as { path: string };
+        return {
+          path,
+          isGit: false,
+          currentBranch: null,
+          branches: [],
+          defaultBranch: null,
+          remote: null,
+        } as CommandMap[K]["result"];
+      }
+      if (command === "project_add") {
+        const { req } = args as {
+          req: {
+            path: string;
+            name?: string | null;
+            defaultBranch?: string | null;
+            remote?: string | null;
+          };
+        };
+        const name =
+          req.name?.trim() || req.path.replace(/\\/g, "/").split("/").pop() || "project";
+        const project: Project = {
+          id: `project-${projects.length + 1}`,
+          name,
+          path: req.path,
+          remote: req.remote ?? null,
+          defaultBranch: req.defaultBranch ?? null,
+          isGit: Boolean(req.defaultBranch || req.remote),
+          createdAt: "2025-01-01T00:00:00.000Z",
+          updatedAt: "2025-01-01T00:00:00.000Z",
+        };
+        projects.push(project);
+        return structuredClone(project) as CommandMap[K]["result"];
+      }
+      if (command === "fs_list_dirs") {
+        const { path } = (args ?? {}) as { path?: string };
+        return {
+          path: path ?? "C:/Users/demo",
+          parent: null,
+          dirs: [],
+        } as CommandMap[K]["result"];
+      }
+      if (command === "git_status") {
+        return structuredClone(gitStatus) as CommandMap[K]["result"];
+      }
+      if (command === "git_branches") {
+        return structuredClone(branches) as CommandMap[K]["result"];
+      }
+      if (command === "git_worktrees") {
+        return structuredClone(worktrees) as CommandMap[K]["result"];
+      }
+      if (command === "git_diff") {
+        const { path } = args as { path?: string };
+        return {
+          repoRoot: projectRoot,
+          target: "working_tree",
+          path: path ?? null,
+          base: null,
+          branch: null,
+          patch: "",
+          truncated: false,
+        } as CommandMap[K]["result"];
+      }
+      if (command === "git_stage") {
+        const { paths, staged } = args as { paths: string[]; staged: boolean };
+        gitStatus = {
+          ...gitStatus,
+          files: gitStatus.files.map((file) =>
+            paths.includes(file.path) ? { ...file, staged } : file,
+          ),
+        };
+        return structuredClone(gitStatus) as CommandMap[K]["result"];
+      }
+      if (command === "git_commit") {
+        gitStatus = { ...gitStatus, clean: true, files: [] };
+        return structuredClone(gitStatus) as CommandMap[K]["result"];
+      }
+      if (command === "git_open_pr") {
+        const { draft, base } = args as { draft?: boolean; base?: string };
+        return {
+          url: "https://github.com/acme/grove/pull/1",
+          draft: draft ?? false,
+          base: base ?? null,
+        } as CommandMap[K]["result"];
+      }
+      if (command === "git_worktree_create") {
+        const { branch, path } = args as { branch: string; path: string };
+        const worktree: GitWorktree = {
+          path,
+          head: null,
+          branch,
+          bare: false,
+          detached: false,
+          current: false,
+        };
+        worktrees.push(worktree);
+        return structuredClone(worktree) as CommandMap[K]["result"];
+      }
+      if (command === "spec_index") {
+        return (
+          seed.specGraph
+            ? structuredClone(seed.specGraph)
+            : {
+                root: projectRoot,
+                nodes: [],
+                validation: { danglingLinks: [], duplicateIds: [], parentCycles: [] },
+              }
+        ) as CommandMap[K]["result"];
+      }
+      if (command === "spec_read") {
+        const { path } = args as { path: string };
+        return {
+          node: {
+            id: path.replace(/\.md$/, ""),
+            type: "module-design",
+            title: path,
+            status: "accepted",
+            path,
+            dependsOn: [],
+            references: [],
+            implements: [],
+            covers: [],
+          },
+          body: "# Spec\n\nBody",
+          hash: "hash",
+        } as CommandMap[K]["result"];
+      }
+      if (command === "skill_catalog") {
+        return (
+          seed.skillCatalog ?? {
+            entries: [],
+            fetchedAt: null,
+            fromCache: false,
+            offline: false,
+          }
+        ) as CommandMap[K]["result"];
+      }
+      if (command === "skill_preview") {
+        const { source, path } = args as { source: string; path: string };
+        return {
+          entry: {
+            id: `${source}::${path}`,
+            name: path.replace(/\\/g, "/").split("/").pop() ?? path,
+            source,
+            path,
+          },
+          frontmatter: { description: "Fake skill" },
+          body: "# Fake skill",
+        } as CommandMap[K]["result"];
+      }
+      if (command === "skill_targets") {
+        return structuredClone(seed.skillTargets ?? []) as CommandMap[K]["result"];
+      }
+      if (command === "skill_install") {
+        const { source, path, target } = args as {
+          source: string;
+          path: string;
+          target: string;
+        };
+        const skill = path.replace(/\\/g, "/").split("/").pop() ?? path;
+        const result = {
+          skill,
+          source,
+          target,
+          path: `C:/projects/grove/.agents/skills/${skill}`,
+          overwritten: false,
+          installedAt: "2025-01-01T00:00:00Z",
+        };
+        installs.push({
+          skill,
+          source,
+          target,
+          path: result.path,
+          installedAt: result.installedAt,
+        });
+        return result as CommandMap[K]["result"];
+      }
+      if (command === "skill_installs") {
+        return structuredClone(installs) as CommandMap[K]["result"];
+      }
+      if (command === "skill_remove") {
+        const { path } = args as { path: string };
+        const index = installs.findIndex((record) => record.path === path);
+        if (index >= 0) installs.splice(index, 1);
+        return null as CommandMap[K]["result"];
+      }
+      if (command === "mcp_servers") {
+        return { servers: [], warnings: [] } as CommandMap[K]["result"];
+      }
+      if (command === "mcp_probe") {
+        const { name, source } = args as { name: string; source: string };
+        return {
+          name,
+          source,
+          transport: "stdio",
+          state: "connected",
+          tools: [],
+          error: null,
+          stderrTail: null,
+        } as CommandMap[K]["result"];
       }
       if (command === "plan_get") {
         const { id } = args as { id: string };
@@ -425,8 +685,7 @@ export function createFakeBridge(
       }
       if (command === "settings_set") {
         const { patch } = args as { patch: SettingsPatch };
-        const { harnessPaths, catalogSources, theme, ...extras } = patch;
-        if (harnessPaths) settings.harnessPaths = { ...harnessPaths };
+        const { catalogSources, theme, ...extras } = patch;
         if (catalogSources) settings.catalogSources = [...catalogSources];
         if (theme) settings.theme = theme;
         Object.assign(settings, extras);
@@ -449,8 +708,31 @@ export function createFakeBridge(
         secretStatuses.set(key, "absent");
         return { key, status: "absent" } as CommandMap[K]["result"];
       }
-      if (command === "doctor_report") {
-        return doctor() as CommandMap[K]["result"];
+      if (command === "provider_statuses") {
+        return providerStatuses() as CommandMap[K]["result"];
+      }
+      if (command === "provider_key_set") {
+        const { provider } = args as { provider: string; key: string };
+        const rows = providerStatuses().map((row) =>
+          row.id === provider
+            ? { ...row, configured: true, source: "keychain" as const, detail: null }
+            : row,
+        );
+        return rows.find((row) => row.id === provider) as CommandMap[K]["result"];
+      }
+      if (command === "provider_key_delete") {
+        const { provider } = args as { provider: string };
+        const rows = providerStatuses().map((row) =>
+          row.id === provider
+            ? { ...row, configured: false, source: null, detail: "No key configured." }
+            : row,
+        );
+        return rows.find((row) => row.id === provider) as CommandMap[K]["result"];
+      }
+      if (command === "provider_models") {
+        const { provider } = args as { provider: string };
+        const row = providerStatuses().find((item) => item.id === provider);
+        return (row?.models ?? []) as CommandMap[K]["result"];
       }
 
       throw new Error(`FakeBridge has no handler for command: ${command}`);

@@ -1,13 +1,13 @@
 import type {
-  DoctorReport,
+  ProviderStatus,
   SecretStatusView,
   Settings,
   SettingsPatch,
 } from "@grove/contract";
 
 /**
- * Settings, secrets and the doctor. Secret commands expose status / set / delete only: there is no
- * command that returns a value, so a secret can never be read back into the webview.
+ * Settings, secrets and provider credentials. Secret commands expose status / set / delete only:
+ * there is no command that returns a value, so a key can never be read back into the webview.
  */
 export interface SettingsCommands {
   settings_get: { args: Record<string, never>; result: Settings };
@@ -15,5 +15,12 @@ export interface SettingsCommands {
   secret_status: { args: { key: string }; result: SecretStatusView };
   secret_set: { args: { key: string; value: string }; result: SecretStatusView };
   secret_delete: { args: { key: string }; result: SecretStatusView };
-  doctor_report: { args: Record<string, never>; result: DoctorReport };
+  /** Every provider's readiness: configured, how it was found, and why it may be unusable. */
+  provider_statuses: { args: Record<string, never>; result: ProviderStatus[] };
+  /** Store a key. Returns the refreshed row; the value never comes back. */
+  provider_key_set: { args: { provider: string; key: string }; result: ProviderStatus };
+  /** Remove a stored key. The vendor's environment variable, if set, then applies again. */
+  provider_key_delete: { args: { provider: string }; result: ProviderStatus };
+  /** Ask the vendor which models the key can reach; this is the "test key" action. */
+  provider_models: { args: { provider: string }; result: string[] };
 }

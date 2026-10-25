@@ -1,9 +1,9 @@
-//! The MCP subsystem: what servers each harness *would* use, and an explicit probe for one of them.
+//! The MCP subsystem: what servers each provider *would* use, and an explicit probe for one of them.
 //!
 //! **Discovery only reads files.** The configs belong to other tools (`.mcp.json`, `~/.claude.json`,
 //! `~/.codex/config.toml`, `opencode.json`, an adapter-provided file); Grove parses them defensively
 //! and never rewrites them. A file it cannot read or parse becomes a warning row, so one broken
-//! harness config never hides the servers the others define.
+//! provider config never hides the servers the others define.
 //!
 //! **Probing is explicit only.** [`McpService::probe`] spawns a third-party process, so nothing calls
 //! it on discovery, on app start or on panel mount — the only caller is the `mcp_probe` command, i.e.

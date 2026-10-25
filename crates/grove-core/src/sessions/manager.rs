@@ -1,25 +1,27 @@
 //! The session runtime: live sessions, their transcript, and the commands that drive them.
 //!
-//! A session is a row plus, while it is running, one adapter process and one pump task. The manager
-//! owns both. Commands (`send`, `cancel`, `respond_permission`) go through a per-session mutex, so no
-//! two writes ever interleave on one stdio pipe; events come back the other way through the pump.
+//! A session is a row plus, while it is running, one in-process agent and one pump task. The manager
+//! owns both. Commands (`send`, `cancel`, `respond_permission`) go through a per-session mutex, so a
+//! session never has two turns in flight; events come back the other way through the pump.
 //!
 //! Nothing here imports `tauri`: the shell forwards events and exposes commands, and the whole runtime
-//! is testable headlessly against the mock adapter.
+//! is testable headlessly.
 
-use crate::adapters::registry::builtin_registry;
-use crate::adapters::{
-    AdapterDeps, AdapterError, Detection, HarnessAdapter, HarnessSession, StartContext, UserInput,
-};
 use crate::ipc::{
-    CreateSessionRequest, EventEnvelope, HarnessInfo, IpcError, Session, SessionDetail,
+    CreateSessionRequest, EventEnvelope, IpcError, ProviderStatus, Session, SessionDetail,
     SessionSummary,
 };
 use crate::paths::{display_path, AppPaths};
+use crate::providers::agent::registry as provider_registry;
+use crate::providers::credentials::Credentials;
+use crate::providers::{
+    AgentProvider, AgentSession, Detection, ProviderDeps, ProviderError, ProviderSpec,
+    StartContext, UserInput,
+};
 use crate::secrets::MemorySecretStore;
 use crate::sessions::context::{render_documents, ContextAssembly, ContextSource};
 use crate::sessions::event::{
-    now, render_tail, Block, ContextReason, Decision, EventKind, HarnessEvent, Role, SessionState,
+    now, render_tail, Block, ContextReason, Decision, EventKind, Role, SessionEvent, SessionState,
 };
 use crate::sessions::pump::{self, InjectedEvent, SessionBus};
 use crate::store::{Store, StoreError};
@@ -29,10 +31,10 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
 
-/// A running session: the adapter handle plus the task draining its events.
+/// A running session: the agent handle plus the task draining its events.
 struct LiveSession {
     /// Serializes every command to this session.
-    commands: Mutex<Box<dyn HarnessSession>>,
+    commands: Mutex<Box<dyn AgentSession>>,
     /// The pump is the single writer for this session, so manager-authored events go through it.
     inject: tokio::sync::mpsc::UnboundedSender<InjectedEvent>,
     pump: tokio::task::JoinHandle<()>,
@@ -40,8 +42,8 @@ struct LiveSession {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    #[error("unknown harness: {0}")]
-    UnknownHarness(String),
+    #[error("unknown provider: {0}")]
+    UnknownProvider(String),
     #[error("session not found: {0}")]
     NotFound(String),
     #[error("session is not running: {0} (resume it first)")]
@@ -49,7 +51,7 @@ pub enum SessionError {
     #[error("invalid request: {0}")]
     Invalid(String),
     #[error(transparent)]
-    Adapter(#[from] AdapterError),
+    Provider(#[from] ProviderError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -62,48 +64,28 @@ impl From<SessionError> for IpcError {
         let message = error.to_string();
         match error {
             SessionError::NotFound(_) => IpcError::not_found(message),
-            SessionError::UnknownHarness(_) | SessionError::Invalid(_) => {
+            SessionError::UnknownProvider(_) | SessionError::Invalid(_) => {
                 IpcError::invalid(message)
             }
             SessionError::NotRunning(_) => IpcError::unavailable(message),
-            SessionError::Adapter(AdapterError::Unavailable(_))
-            | SessionError::Adapter(AdapterError::Unsupported(_)) => IpcError::unavailable(message),
-            SessionError::Adapter(_) => IpcError::invalid(message),
+            SessionError::Provider(ProviderError::Unavailable(_)) => IpcError::unavailable(message),
+            SessionError::Provider(_) => IpcError::invalid(message),
             SessionError::Store(_) | SessionError::Io(_) => IpcError::io(message),
         }
     }
 }
 
-/// How many transcript lines a harness switch replays as the new harness's opening prompt.
+/// How many transcript lines a provider switch replays as the new provider's opening prompt.
 pub const TRANSCRIPT_SUMMARY_LINES: usize = 24;
-
-/// Where a session's adapter config comes from besides the request itself.
-///
-/// `StartContext.config` is "adapter-specific, from settings" (see `docs/adapters.md`), and the one
-/// setting every process-backed adapter reads is `config.command`. The manager resolves it through
-/// this port so it never imports `SettingsService` — exactly like [`ContextSource`] for knowledge.
-///
-/// **Merge precedence is explicit and only two levels deep:** a `config.command` the caller passed on
-/// the request (and which is stored on the row) always wins, because it is the more specific
-/// instruction; otherwise the configured harness path in Settings fills it in; every other key in
-/// `config` is passed through untouched. Nothing is merged key-by-key beyond `command`, so an
-/// adapter's own defaults are never silently overwritten.
-pub trait AdapterConfigSource: Send + Sync {
-    /// The command a harness should launch, when the user configured one in Settings.
-    fn command_for(&self, harness: &str) -> Option<String>;
-}
 
 /// Owns every live session and the store they persist into. One instance per application.
 pub struct SessionManager {
     store: Arc<Store>,
-    deps: AdapterDeps,
-    adapters: Vec<Arc<dyn HarnessAdapter>>,
+    deps: ProviderDeps,
+    providers: Vec<Arc<dyn AgentProvider>>,
     /// Pinned specs and the plan. Absent in tests and previews that never assemble knowledge: a
     /// session then starts with an empty context rather than failing.
     context: std::sync::Mutex<Option<Arc<dyn ContextSource>>>,
-    /// Configured harness binaries from settings. Absent in tests and previews: a session then
-    /// launches the adapter's own default command.
-    config_source: std::sync::Mutex<Option<Arc<dyn AdapterConfigSource>>>,
     live: Mutex<HashMap<String, Arc<LiveSession>>>,
     bus: SessionBus,
 }
@@ -111,16 +93,15 @@ pub struct SessionManager {
 impl SessionManager {
     pub fn new(
         store: Arc<Store>,
-        deps: AdapterDeps,
-        adapters: Vec<Arc<dyn HarnessAdapter>>,
+        deps: ProviderDeps,
+        providers: Vec<Arc<dyn AgentProvider>>,
     ) -> Self {
         let (bus, _) = broadcast::channel(512);
         Self {
             store,
             deps,
-            adapters,
+            providers,
             context: std::sync::Mutex::new(None),
-            config_source: std::sync::Mutex::new(None),
             live: Mutex::new(HashMap::new()),
             bus,
         }
@@ -136,54 +117,38 @@ impl SessionManager {
         *slot = Some(source);
     }
 
-    /// Attach the settings-backed command source. `GroveCore::assemble` wires it, so a harness path
-    /// configured in the Settings panel reaches the next session of that harness; tests attach a
-    /// stub, or nothing at all.
-    pub fn set_config_source(&self, source: Arc<dyn AdapterConfigSource>) {
-        let mut slot = self
-            .config_source
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *slot = Some(source);
-    }
-
-    /// The config a session of `harness` launches with: the caller's config, plus the configured
-    /// harness path as `command` when the caller named none (see [`AdapterConfigSource`] for the
-    /// precedence rule).
-    fn start_config(&self, harness: &str, config: serde_json::Value) -> serde_json::Value {
-        let mut config = if config.is_object() {
-            config
-        } else {
-            serde_json::json!({})
-        };
-        let explicit = config
-            .get("command")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .is_some_and(|command| !command.is_empty());
-        if !explicit {
-            if let Some(configured) = self.configured_command(harness) {
-                config["command"] = serde_json::Value::String(configured);
-            }
-        }
-        config
-    }
-
-    fn configured_command(&self, harness: &str) -> Option<String> {
-        let source = self
-            .config_source
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()?;
-        source.command_for(harness)
-    }
-
-    /// Open the durable store at `paths.database` and wire the built-in adapters. Sessions left live
+    /// Open the durable store at `paths.database` and wire the built-in providers. Sessions left live
     /// by a previous run are marked exited: after a restart they are conversations, not processes.
+    ///
+    /// Keyless: a preview or a test wants no keychain prompt. The app calls
+    /// [`Self::open_with_secrets`] with the OS keychain, because a session reads its provider key from
+    /// the same port the settings pane writes.
     pub fn open(paths: AppPaths) -> Result<Self, SessionError> {
         let store = Arc::new(Store::open(&paths.database)?);
         store.mark_orphaned_sessions_exited()?;
-        Ok(Self::new(store, Self::deps(paths), builtin_registry()))
+        Ok(Self::new(store, Self::deps(paths), provider_registry()))
+    }
+
+    /// Open the durable store with a specific secret store, so a session authenticates with the key
+    /// the user saved. `GroveCore::init` passes the OS keychain here; nothing else in the runtime
+    /// knows which implementation it got.
+    pub fn open_with_secrets(
+        paths: AppPaths,
+        secrets: Arc<dyn crate::secrets::SecretStore>,
+    ) -> Result<Self, SessionError> {
+        let store = Arc::new(Store::open(&paths.database)?);
+        store.mark_orphaned_sessions_exited()?;
+        Ok(Self::new(
+            store,
+            Self::deps_with_secrets(paths, secrets),
+            provider_registry(),
+        ))
+    }
+
+    /// The secret store a session authenticates with. A test uses it to prove the manager and the
+    /// settings pane share one store rather than two.
+    pub fn secrets(&self) -> Arc<dyn crate::secrets::SecretStore> {
+        Arc::clone(&self.deps.secrets)
     }
 
     /// In-memory runtime for previews and tests that do not care about the file.
@@ -192,17 +157,44 @@ impl SessionManager {
         Ok(Self::new(
             store,
             Self::deps(paths.clone()),
-            builtin_registry(),
+            provider_registry(),
         ))
     }
 
-    fn deps(paths: AppPaths) -> AdapterDeps {
-        AdapterDeps {
+    /// A durable runtime whose only provider is the offline one. Previews and integration tests use
+    /// this: the session pump, transcript and cancellation paths are real, the model is a script.
+    pub fn open_offline(paths: AppPaths) -> Result<Self, SessionError> {
+        let store = Arc::new(Store::open(&paths.database)?);
+        store.mark_orphaned_sessions_exited()?;
+        Ok(Self::new(
+            store,
+            Self::deps(paths),
+            crate::providers::offline::registry(),
+        ))
+    }
+
+    /// The in-memory form of [`Self::open_offline`].
+    pub fn in_memory_offline(paths: &AppPaths) -> Result<Self, SessionError> {
+        let store = Arc::new(Store::open_in_memory()?);
+        Ok(Self::new(
+            store,
+            Self::deps(paths.clone()),
+            crate::providers::offline::registry(),
+        ))
+    }
+
+    fn deps(paths: AppPaths) -> ProviderDeps {
+        Self::deps_with_secrets(paths, Arc::new(MemorySecretStore::new()))
+    }
+
+    fn deps_with_secrets(
+        paths: AppPaths,
+        secrets: Arc<dyn crate::secrets::SecretStore>,
+    ) -> ProviderDeps {
+        ProviderDeps {
             paths,
-            // Adapters that need the network build their own requests; sessions never call this.
             http: reqwest::Client::new(),
-            // Ticket 07 swaps the OS keychain in behind this same port.
-            secrets: Arc::new(MemorySecretStore::new()),
+            secrets,
         }
     }
 
@@ -213,38 +205,49 @@ impl SessionManager {
     }
 
     /// The event bus the shell forwards as `grove://session-event`.
-    pub fn subscribe(&self) -> broadcast::Receiver<EventEnvelope<HarnessEvent>> {
+    pub fn subscribe(&self) -> broadcast::Receiver<EventEnvelope<SessionEvent>> {
         self.bus.subscribe()
     }
 
-    /// Every registered harness, with honest capabilities, for the session picker.
-    pub fn harnesses(&self) -> Vec<HarnessInfo> {
-        self.adapters
+    /// Every registered provider, with its models and auth, for the session picker and settings.
+    pub fn providers(&self) -> Vec<ProviderSpec> {
+        self.providers
             .iter()
-            .map(|adapter| HarnessInfo {
-                id: adapter.id().as_str().to_string(),
-                capabilities: adapter.capabilities(),
-            })
+            .map(|provider| provider.spec().clone())
             .collect()
     }
 
-    /// Ask every registered adapter whether its harness is installed. The doctor consumes this: it
-    /// reports what the adapters themselves believe, in the same order as [`Self::harnesses`].
+    /// Every provider's readiness: is a credential configured, and which model would it use.
     pub fn detect_all(&self) -> Vec<Detection> {
-        self.adapters
+        self.providers
             .iter()
-            .map(|adapter| adapter.detect(&self.deps))
+            .map(|provider| provider.detect(&self.deps))
             .collect()
     }
 
-    /// The display name an adapter advertises (`Claude Code`, `Codex`, …), or `None` for a harness
-    /// this build does not register. The doctor reads it from the registry rather than keeping a
-    /// second list of harness names.
-    pub fn label_for(&self, harness: &str) -> Option<&'static str> {
-        self.adapters
+    /// Credential readiness for every provider, as the settings pane shows it.
+    pub fn provider_statuses(&self) -> Vec<ProviderStatus> {
+        Credentials::new(Arc::clone(&self.deps.secrets)).statuses()
+    }
+
+    /// The provider a request did not name: the first one with a usable credential, else the first
+    /// catalogued provider. A new session then fails on a *named* provider with an actionable
+    /// "add a key" message instead of a mystery.
+    fn default_provider(&self) -> Option<String> {
+        self.providers
             .iter()
-            .find(|adapter| adapter.id().as_str() == harness)
-            .map(|adapter| adapter.display_name())
+            .find(|provider| provider.detect(&self.deps).installed)
+            .or_else(|| self.providers.first())
+            .map(|provider| provider.id().to_string())
+    }
+
+    /// The display name a provider advertises (`Anthropic`, `OpenAI`, …), or `None` for one this
+    /// build does not register.
+    pub fn label_for(&self, provider: &str) -> Option<&str> {
+        self.providers
+            .iter()
+            .find(|candidate| candidate.id() == provider)
+            .map(|candidate| candidate.spec().name.as_str())
     }
 
     pub fn list(&self) -> Result<Vec<SessionSummary>, SessionError> {
@@ -257,30 +260,74 @@ impl SessionManager {
             .ok_or_else(|| SessionError::NotFound(id.to_string()))
     }
 
-    /// Create the row, start the adapter, and begin pumping. The transcript is durable from here on.
+    /// Create the row, start the agent, and begin pumping. The transcript is durable from here on.
     pub async fn create(
         &self,
         request: CreateSessionRequest,
     ) -> Result<SessionDetail, SessionError> {
-        let adapter = self.adapter(&request.harness)?;
+        let mut request = request;
+        if request.provider.trim().is_empty() {
+            // "Whatever works": the first provider with a credential, else the first catalogued one,
+            // so an unnamed session still gets a precise error instead of an empty picker value.
+            match self.default_provider() {
+                Some(provider) => request.provider = provider,
+                None => {
+                    return Err(SessionError::Invalid("no providers are registered".into()));
+                }
+            }
+        }
+        let provider = self.provider(&request.provider)?;
         let id = Uuid::new_v4().to_string();
         let at = now();
-        let cwd = resolve_cwd(request.cwd.as_deref(), &self.deps.paths);
+        // A project session runs in its chosen worktree, or in the project folder when none was
+        // named. A loose chat keeps the old cwd rule so it can still run anywhere.
+        let project =
+            match request
+                .project_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            {
+                Some(project_id) => Some(self.store.project(project_id)?.ok_or_else(|| {
+                    SessionError::Invalid(format!("unknown project: {project_id}"))
+                })?),
+                None => None,
+            };
+        let cwd = match &project {
+            Some(project) => match request
+                .worktree_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+            {
+                Some(path) => {
+                    let candidate = PathBuf::from(path);
+                    if !candidate.is_dir() {
+                        return Err(SessionError::Invalid(format!(
+                            "worktree folder does not exist: {path}"
+                        )));
+                    }
+                    candidate
+                }
+                None => PathBuf::from(&project.path),
+            },
+            None => resolve_cwd(request.cwd.as_deref(), &self.deps.paths),
+        };
         let model = non_empty(request.model);
         let title =
-            non_empty(request.title).unwrap_or_else(|| format!("{} session", request.harness));
-        // The request's own config is what the row keeps; the launch config additionally resolves a
-        // configured harness path (see [`AdapterConfigSource`]).
+            non_empty(request.title).unwrap_or_else(|| format!("{} session", request.provider));
+        // The request's own config is what the row keeps and what the launch uses.
         let config = request.config.unwrap_or_else(|| serde_json::json!({}));
-        let launch_config = self.start_config(&request.harness, config.clone());
 
         let session = Session {
             id: id.clone(),
-            harness: request.harness,
+            provider: request.provider,
             cwd: display_path(&cwd),
             model: model.clone(),
             title,
             status: SessionState::Starting,
+            project_id: project.map(|project| project.id),
+            awaiting: false,
             created_at: at.clone(),
             updated_at: at,
         };
@@ -294,11 +341,11 @@ impl SessionManager {
             model,
             prompt: None,
             resume_token: None,
-            config: launch_config,
+            config: config.clone(),
             context_files: assembly.docs.clone(),
         };
         self.publish_context(&session, ContextReason::Start, &assembly, None);
-        if let Err(error) = self.launch(&adapter, &session, context).await {
+        if let Err(error) = self.launch(&provider, &session, context).await {
             let _ = self.store.update_session_status(&id, SessionState::Error);
             return Err(error);
         }
@@ -306,19 +353,19 @@ impl SessionManager {
     }
 
     /// Send a user message. The message is persisted before the adapter is asked, so the transcript
-    /// keeps what the user typed even if the harness dies mid-send.
+    /// keeps what the user typed even if the provider dies mid-send.
     pub async fn send(&self, id: &str, text: &str) -> Result<(), SessionError> {
         let text = text.trim();
         if text.is_empty() {
             return Err(SessionError::Invalid("message is empty".into()));
         }
         let live = self.live_session(id).await?;
-        // Hold the command lock across both steps: the transcript order and the order the harness
+        // Hold the command lock across both steps: the transcript order and the order the provider
         // sees commands are then the same, even when two sends race.
         let mut handle = live.commands.lock().await;
 
         let (message, persisted) =
-            InjectedEvent::acknowledged(HarnessEvent::new(EventKind::Message {
+            InjectedEvent::acknowledged(SessionEvent::new(EventKind::Message {
                 role: Role::User,
                 blocks: vec![Block::Text {
                     text: text.to_string(),
@@ -327,7 +374,7 @@ impl SessionManager {
         live.inject
             .send(message)
             .map_err(|_| SessionError::NotRunning(id.to_string()))?;
-        // Wait until the message is durable before the harness can react to it.
+        // Wait until the message is durable before the provider can react to it.
         let _ = persisted.await;
 
         handle.send(UserInput::text(text)).await?;
@@ -371,11 +418,11 @@ impl SessionManager {
             .store
             .session(id)?
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
-        let adapter = self.adapter(&session.harness)?;
+        let provider = self.provider(&session.provider)?;
         let token = self.store.resume_token(id)?;
-        // Re-resolve on every resume, so a harness path changed in Settings applies to the next
+        // Re-resolve on every resume, so a provider path changed in Settings applies to the next
         // start of an existing conversation instead of only to brand-new sessions.
-        let config = self.start_config(&session.harness, self.store.adapter_config(id)?);
+        let config = self.store.adapter_config(id)?;
         let events = self.store.session_events(id)?;
         self.stop(id).await;
 
@@ -388,7 +435,7 @@ impl SessionManager {
             config,
             context_files: assembly.docs.clone(),
         };
-        if adapter.capabilities().resume && token.is_some() {
+        if provider.capabilities().resume && token.is_some() {
             context.resume_token = token;
         } else if !events.is_empty() {
             context.prompt = Some(render_tail(&events, 12));
@@ -396,14 +443,14 @@ impl SessionManager {
 
         self.mark(id, SessionState::Starting)?;
         self.publish_context(&session, ContextReason::Resume, &assembly, None);
-        self.launch(&adapter, &session, context).await?;
+        self.launch(&provider, &session, context).await?;
         Ok(self.store.session(id)?.unwrap_or(session))
     }
 
     /// Re-read the pins and the plan and push the current knowledge into the running session.
     ///
     /// The context is a snapshot taken at start: nothing re-reads a spec on its own. This is the
-    /// explicit way to move it, and it is visible twice — the harness receives the rendered documents
+    /// explicit way to move it, and it is visible twice — the provider receives the rendered documents
     /// as a turn, and the transcript records what was sent.
     pub async fn refresh_context(&self, id: &str) -> Result<ContextAssembly, SessionError> {
         let live = self.live_session(id).await?;
@@ -414,7 +461,7 @@ impl SessionManager {
         let assembly = self.context_assembly(id);
 
         // Hold the command lock across both steps, exactly like `send`: the transcript note and the
-        // turn the harness sees must be in the same order for every caller.
+        // turn the provider sees must be in the same order for every caller.
         let mut handle = live.commands.lock().await;
         if let Some(event) = context_event(&session, ContextReason::Refresh, &assembly, None) {
             inject(&live, event, id).await?;
@@ -428,44 +475,59 @@ impl SessionManager {
         Ok(assembly)
     }
 
-    /// Re-launch the same conversation on a different registered harness.
+    /// Re-launch the same conversation on another provider or model.
     ///
-    /// The transcript is the record and stays untouched: the new harness gets the same context
-    /// documents plus a summary of the conversation so far, and the switch itself is a visible system
-    /// note. The resume token belongs to the old harness, so it is dropped rather than handed over.
-    pub async fn switch_harness(
+    /// The transcript is the record and stays untouched: the new provider gets the same context
+    /// documents plus a summary of the conversation so far, and the change itself is a visible system
+    /// note. The resume token belongs to the old provider (and model), so it is dropped rather than
+    /// handed over. A same-provider call with a new model is the composer's model picker.
+    pub async fn switch_provider(
         &self,
         id: &str,
-        harness: &str,
+        provider: &str,
+        model: Option<String>,
     ) -> Result<SessionDetail, SessionError> {
         let session = self
             .store
             .session(id)?
             .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
-        if session.harness == harness {
+        let same_provider = session.provider == provider;
+        let model = match non_empty(model) {
+            Some(model) => Some(model),
+            None if same_provider => session.model.clone(),
+            None => None,
+        };
+        if same_provider && model == session.model {
             return Err(SessionError::Invalid(format!(
-                "session {id} already runs {harness}"
+                "session {id} already runs {provider} with that model"
             )));
         }
-        let adapter = self.adapter(harness)?;
-        let previous = session.harness.clone();
-        let config = self.start_config(harness, self.store.adapter_config(id)?);
+        let provider_id = provider.to_string();
+        let provider = self.provider(&provider_id)?;
+        let previous = session.provider.clone();
+        let config = self.store.adapter_config(id)?;
         let events = self.store.session_events(id)?;
         let assembly = self.context_assembly(id);
         let summary = render_tail(&events, TRANSCRIPT_SUMMARY_LINES);
 
         self.stop(id).await;
-        // A model name belongs to the harness that understood it, and so does the resume token.
-        self.store.set_session_harness(id, harness, None)?;
+        // A model name belongs to the provider that understood it, and so does the resume token.
+        self.store
+            .set_session_provider(id, &provider_id, model.as_deref())?;
         self.store.set_resume_token(id, None)?;
         let session = self.store.session(id)?.unwrap_or(session);
         self.mark(id, SessionState::Starting)?;
-        self.publish_context(
-            &session,
-            ContextReason::HarnessSwitch,
-            &assembly,
-            Some((previous.as_str(), harness)),
-        );
+        if same_provider {
+            // The provider did not change; this is a context/model refresh rather than a switch.
+            self.publish_context(&session, ContextReason::Refresh, &assembly, None);
+        } else {
+            self.publish_context(
+                &session,
+                ContextReason::ProviderSwitch,
+                &assembly,
+                Some((previous.as_str(), provider_id.as_str())),
+            );
+        }
 
         let context = StartContext {
             cwd: PathBuf::from(&session.cwd),
@@ -475,9 +537,9 @@ impl SessionManager {
             config,
             context_files: assembly.docs,
         };
-        // A harness that refuses to start leaves the row on the new harness and the session stopped:
+        // A provider that refuses to start leaves the row on the new provider and the session stopped:
         // the conversation is intact and can be resumed (or switched again).
-        if let Err(error) = self.launch(&adapter, &session, context).await {
+        if let Err(error) = self.launch(&provider, &session, context).await {
             let _ = self.store.update_session_status(id, SessionState::Error);
             return Err(error);
         }
@@ -513,12 +575,12 @@ impl SessionManager {
 
     async fn launch(
         &self,
-        adapter: &Arc<dyn HarnessAdapter>,
+        provider: &Arc<dyn AgentProvider>,
         session: &Session,
         context: StartContext,
     ) -> Result<(), SessionError> {
-        let mut handle = adapter.start(context, self.deps.clone()).await?;
-        // The adapter may already know the harness's conversation id; mirror it now, and again after
+        let mut handle = provider.start(context, self.deps.clone()).await?;
+        // The adapter may already know the provider's conversation id; mirror it now, and again after
         // every command, so a restart has the freshest token the protocol offered.
         if let Some(token) = handle.resume_token() {
             self.store.set_resume_token(&session.id, Some(&token))?;
@@ -572,16 +634,12 @@ impl SessionManager {
             &self.store,
             &self.bus,
             id,
-            &HarnessEvent::new(EventKind::Status { state }),
+            &SessionEvent::new(EventKind::Status { state }),
         );
         Ok(())
     }
 
-    fn mirror_resume_token(
-        &self,
-        id: &str,
-        handle: &dyn HarnessSession,
-    ) -> Result<(), SessionError> {
+    fn mirror_resume_token(&self, id: &str, handle: &dyn AgentSession) -> Result<(), SessionError> {
         if let Some(token) = handle.resume_token() {
             self.store.set_resume_token(id, Some(&token))?;
         }
@@ -598,54 +656,54 @@ impl SessionManager {
         Err(SessionError::NotRunning(id.to_string()))
     }
 
-    fn adapter(&self, harness: &str) -> Result<Arc<dyn HarnessAdapter>, SessionError> {
-        self.adapters
+    fn provider(&self, provider_id: &str) -> Result<Arc<dyn AgentProvider>, SessionError> {
+        self.providers
             .iter()
-            .find(|adapter| adapter.id().as_str() == harness)
+            .find(|candidate| candidate.id() == provider_id)
             .cloned()
-            .ok_or_else(|| SessionError::UnknownHarness(harness.to_string()))
+            .ok_or_else(|| SessionError::UnknownProvider(provider_id.to_string()))
     }
 }
 
 /// The visible system note for a context event, or `None` when there is nothing worth recording.
 ///
 /// A start or resume with no pins and no plan stays silent (the header shows an empty context); an
-/// explicit refresh or a harness switch always says what happened, because the user asked for it.
+/// explicit refresh or a provider switch always says what happened, because the user asked for it.
 fn context_event(
     session: &Session,
     reason: ContextReason,
     assembly: &ContextAssembly,
     switch: Option<(&str, &str)>,
-) -> Option<HarnessEvent> {
+) -> Option<SessionEvent> {
     let explicit = matches!(
         reason,
-        ContextReason::Refresh | ContextReason::HarnessSwitch
+        ContextReason::Refresh | ContextReason::ProviderSwitch
     );
     if assembly.docs.is_empty() && !explicit {
         return None;
     }
-    Some(HarnessEvent::new(EventKind::ContextRefreshed {
+    Some(SessionEvent::new(EventKind::ContextRefreshed {
         reason,
-        harness: session.harness.clone(),
+        provider: session.provider.clone(),
         documents: assembly.documents.clone(),
-        note: context_note(reason, &session.harness, assembly, switch),
+        note: context_note(reason, &session.provider, assembly, switch),
     }))
 }
 
 fn context_note(
     reason: ContextReason,
-    harness: &str,
+    provider: &str,
     assembly: &ContextAssembly,
     switch: Option<(&str, &str)>,
 ) -> String {
     let summary = context_summary(assembly);
     match reason {
-        ContextReason::Start => format!("Context sent to {harness}: {summary}"),
-        ContextReason::Resume => format!("Context re-sent on resume to {harness}: {summary}"),
-        ContextReason::Refresh => format!("Context refreshed for {harness}: {summary}"),
-        ContextReason::HarnessSwitch => {
-            let (from, to) = switch.unwrap_or(("?", harness));
-            format!("Harness switched from {from} to {to}; context re-sent: {summary}")
+        ContextReason::Start => format!("Context sent to {provider}: {summary}"),
+        ContextReason::Resume => format!("Context re-sent on resume to {provider}: {summary}"),
+        ContextReason::Refresh => format!("Context refreshed for {provider}: {summary}"),
+        ContextReason::ProviderSwitch => {
+            let (from, to) = switch.unwrap_or(("?", provider));
+            format!("provider switched from {from} to {to}; context re-sent: {summary}")
         }
     }
 }
@@ -674,7 +732,7 @@ fn context_summary(assembly: &ContextAssembly) -> String {
 /// Persist and broadcast one manager-authored event through the pump, waiting until it is durable.
 async fn inject(
     live: &LiveSession,
-    event: HarnessEvent,
+    event: SessionEvent,
     session_id: &str,
 ) -> Result<(), SessionError> {
     let (injected, persisted) = InjectedEvent::acknowledged(event);
@@ -704,71 +762,109 @@ fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::Capabilities;
-    use crate::adapters::Detection;
-    use crate::adapters::HarnessId;
+    use crate::providers::catalog;
+    use crate::providers::{AuthMethod, Capabilities, Detection, ProviderSpec};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex as StdMutex;
     use std::time::Duration;
     use tokio::sync::mpsc;
 
-    /// An adapter that records how many `send` calls are ever in flight at once.
-    struct SlowAdapter {
+    /// A provider that records what the manager does to it, without touching the network.
+    struct StubProvider {
+        spec: ProviderSpec,
         active: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
+        contexts: Arc<StdMutex<Vec<StartContext>>>,
+        permissions: Arc<StdMutex<Vec<(String, Decision)>>>,
+        /// Whether a credential counts as configured (drives `detect`).
+        ready: bool,
     }
 
-    #[async_trait::async_trait]
-    impl HarnessAdapter for SlowAdapter {
-        fn id(&self) -> HarnessId {
-            HarnessId("slow")
-        }
-
-        fn capabilities(&self) -> Capabilities {
-            Capabilities {
-                streaming_deltas: false,
-                tool_calls: false,
-                diffs: false,
-                permissions: false,
-                resume: false,
-                images: false,
-                mcp: false,
-                usage: false,
+    impl StubProvider {
+        fn new() -> Self {
+            let mut spec = catalog::find("anthropic").expect("anthropic ships");
+            spec.id = "stub".into();
+            spec.name = "Stub".into();
+            Self {
+                spec,
+                active: Arc::new(AtomicUsize::new(0)),
+                peak: Arc::new(AtomicUsize::new(0)),
+                contexts: Arc::new(StdMutex::new(Vec::new())),
+                permissions: Arc::new(StdMutex::new(Vec::new())),
+                ready: true,
             }
         }
 
-        fn detect(&self, _deps: &AdapterDeps) -> Detection {
-            Detection::installed("0.0.0", "builtin:slow")
+        fn with_ready(mut self, ready: bool) -> Self {
+            self.ready = ready;
+            self
+        }
+    }
+
+    fn lock<T>(value: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+        value
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[async_trait::async_trait]
+    impl AgentProvider for StubProvider {
+        fn id(&self) -> &str {
+            &self.spec.id
+        }
+
+        fn spec(&self) -> &ProviderSpec {
+            &self.spec
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::agent()
+        }
+
+        fn detect(&self, _deps: &ProviderDeps) -> Detection {
+            if self.ready {
+                Detection::ready(AuthMethod::ApiKey, self.spec.default_model.clone())
+            } else {
+                Detection::missing(
+                    AuthMethod::ApiKey,
+                    self.spec.default_model.clone(),
+                    "No API key for Stub.",
+                )
+            }
         }
 
         async fn start(
             &self,
-            _ctx: StartContext,
-            _deps: AdapterDeps,
-        ) -> Result<Box<dyn HarnessSession>, AdapterError> {
+            ctx: StartContext,
+            _deps: ProviderDeps,
+        ) -> Result<Box<dyn AgentSession>, ProviderError> {
+            lock(&self.contexts).push(ctx);
             let (keepalive, events) = mpsc::channel(4);
-            Ok(Box::new(SlowSession {
+            Ok(Box::new(StubSession {
                 events: Some(events),
                 _keepalive: keepalive,
                 active: Arc::clone(&self.active),
                 peak: Arc::clone(&self.peak),
+                permissions: Arc::clone(&self.permissions),
             }))
         }
     }
 
-    struct SlowSession {
-        events: Option<mpsc::Receiver<HarnessEvent>>,
-        _keepalive: mpsc::Sender<HarnessEvent>,
+    struct StubSession {
+        events: Option<mpsc::Receiver<SessionEvent>>,
+        _keepalive: mpsc::Sender<SessionEvent>,
         active: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
+        permissions: Arc<StdMutex<Vec<(String, Decision)>>>,
     }
 
     #[async_trait::async_trait]
-    impl HarnessSession for SlowSession {
-        fn take_events(&mut self) -> mpsc::Receiver<HarnessEvent> {
-            self.events.take().unwrap()
+    impl AgentSession for StubSession {
+        fn take_events(&mut self) -> mpsc::Receiver<SessionEvent> {
+            self.events.take().expect("called once")
         }
 
-        async fn send(&mut self, _input: UserInput) -> Result<(), AdapterError> {
+        async fn send(&mut self, _input: UserInput) -> Result<(), ProviderError> {
             let in_flight = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(in_flight, Ordering::SeqCst);
             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -778,107 +874,18 @@ mod tests {
 
         async fn respond_permission(
             &mut self,
-            _request_id: &str,
-            _decision: Decision,
-        ) -> Result<(), AdapterError> {
-            Ok(())
-        }
-
-        async fn cancel(&mut self) -> Result<(), AdapterError> {
-            Ok(())
-        }
-
-        async fn shutdown(&mut self) -> Result<(), AdapterError> {
-            Ok(())
-        }
-
-        fn resume_token(&self) -> Option<String> {
-            None
-        }
-    }
-
-    /// An adapter that records the `StartContext` of every launch, so a test can see exactly what a
-    /// session was started with.
-    struct RecordingAdapter {
-        contexts: Arc<std::sync::Mutex<Vec<StartContext>>>,
-        permissions: Arc<std::sync::Mutex<Vec<(String, Decision)>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl HarnessAdapter for RecordingAdapter {
-        fn id(&self) -> HarnessId {
-            HarnessId("record")
-        }
-
-        fn capabilities(&self) -> Capabilities {
-            Capabilities {
-                streaming_deltas: false,
-                tool_calls: false,
-                diffs: false,
-                permissions: false,
-                resume: true,
-                images: false,
-                mcp: false,
-                usage: false,
-            }
-        }
-
-        fn detect(&self, _deps: &AdapterDeps) -> Detection {
-            Detection::installed("0.0.0", "builtin:record")
-        }
-
-        async fn start(
-            &self,
-            ctx: StartContext,
-            _deps: AdapterDeps,
-        ) -> Result<Box<dyn HarnessSession>, AdapterError> {
-            self.contexts
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(ctx);
-            let (keepalive, events) = mpsc::channel(4);
-            Ok(Box::new(QuietSession {
-                events: Some(events),
-                _keepalive: keepalive,
-                permissions: Arc::clone(&self.permissions),
-            }))
-        }
-    }
-
-    /// Starts and does nothing: enough to observe the launch without noise in the transcript.
-    struct QuietSession {
-        events: Option<mpsc::Receiver<HarnessEvent>>,
-        _keepalive: mpsc::Sender<HarnessEvent>,
-        permissions: Arc<std::sync::Mutex<Vec<(String, Decision)>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl HarnessSession for QuietSession {
-        fn take_events(&mut self) -> mpsc::Receiver<HarnessEvent> {
-            self.events.take().unwrap()
-        }
-
-        async fn send(&mut self, _input: UserInput) -> Result<(), AdapterError> {
-            Ok(())
-        }
-
-        async fn respond_permission(
-            &mut self,
             request_id: &str,
             decision: Decision,
-        ) -> Result<(), AdapterError> {
-            self.permissions
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push((request_id.to_string(), decision));
+        ) -> Result<(), ProviderError> {
+            lock(&self.permissions).push((request_id.to_string(), decision));
             Ok(())
         }
 
-        async fn cancel(&mut self) -> Result<(), AdapterError> {
+        async fn cancel(&mut self) -> Result<(), ProviderError> {
             Ok(())
         }
 
-        async fn shutdown(&mut self) -> Result<(), AdapterError> {
+        async fn shutdown(&mut self) -> Result<(), ProviderError> {
             Ok(())
         }
 
@@ -887,197 +894,30 @@ mod tests {
         }
     }
 
-    /// Settings stand-in: one harness has a configured binary.
-    struct StubPaths {
-        harness: &'static str,
-        command: &'static str,
-    }
-
-    impl AdapterConfigSource for StubPaths {
-        fn command_for(&self, harness: &str) -> Option<String> {
-            (harness == self.harness).then(|| self.command.to_string())
-        }
-    }
-
-    fn recording() -> (SessionManager, Arc<std::sync::Mutex<Vec<StartContext>>>) {
-        let (manager, contexts, _permissions) = recording_with_permissions();
-        (manager, contexts)
-    }
-
-    /// What a recording adapter captured: the launch contexts, and every permission answer.
-    type Recorded = (
-        SessionManager,
-        Arc<std::sync::Mutex<Vec<StartContext>>>,
-        Arc<std::sync::Mutex<Vec<(String, Decision)>>>,
-    );
-
-    fn recording_with_permissions() -> Recorded {
-        let contexts = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let permissions = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let adapter = Arc::new(RecordingAdapter {
-            contexts: Arc::clone(&contexts),
-            permissions: Arc::clone(&permissions),
-        });
-        (manager(adapter), contexts, permissions)
-    }
-
-    fn recorded(contexts: &Arc<std::sync::Mutex<Vec<StartContext>>>) -> Vec<StartContext> {
-        contexts
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
-    #[tokio::test]
-    async fn a_permission_answer_reaches_the_live_session() {
-        // The Tauri command is a one-line forward to this call, so proving the manager delivers the
-        // answer to the adapter is what proves the button in the transcript can unblock a turn.
-        let (manager, _contexts, permissions) = recording_with_permissions();
-        let id = manager
-            .create(CreateSessionRequest {
-                harness: "record".into(),
-                ..Default::default()
-            })
-            .await
-            .expect("session is created")
-            .session
-            .id;
-
-        manager
-            .respond_permission(&id, "req-1", Decision::Approve)
-            .await
-            .expect("the answer is delivered");
-        manager
-            .respond_permission(&id, "req-2", Decision::Deny)
-            .await
-            .expect("the answer is delivered");
-
-        assert_eq!(
-            *permissions
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-            vec![
-                ("req-1".to_string(), Decision::Approve),
-                ("req-2".to_string(), Decision::Deny),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_configured_harness_path_reaches_the_session_on_create_and_resume() {
-        let (manager, contexts) = recording();
-        manager.set_config_source(Arc::new(StubPaths {
-            harness: "record",
-            command: "C:/configured/record.exe",
-        }));
-
-        let id = manager
-            .create(CreateSessionRequest {
-                harness: "record".into(),
-                ..Default::default()
-            })
-            .await
-            .expect("session is created")
-            .session
-            .id;
-
-        let launched = recorded(&contexts);
-        assert_eq!(
-            launched[0].config["command"], "C:/configured/record.exe",
-            "a path configured in Settings is the command the session launches"
-        );
-
-        manager.close(&id).await.unwrap();
-        manager.resume(&id).await.unwrap();
-
-        let launched = recorded(&contexts);
-        assert_eq!(
-            launched.len(),
-            2,
-            "create and resume both launch the adapter"
-        );
-        assert_eq!(
-            launched[1].config["command"], "C:/configured/record.exe",
-            "a resume re-resolves the configured path instead of using a stale one"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_explicit_request_config_beats_the_configured_harness_path() {
-        let (manager, contexts) = recording();
-        manager.set_config_source(Arc::new(StubPaths {
-            harness: "record",
-            command: "C:/configured/record.exe",
-        }));
-
-        manager
-            .create(CreateSessionRequest {
-                harness: "record".into(),
-                config: Some(serde_json::json!({
-                    "command": "C:/fixtures/node.exe",
-                    "args": ["fixture.mjs"],
-                })),
-                ..Default::default()
-            })
-            .await
-            .expect("session is created");
-
-        let launched = recorded(&contexts);
-        assert_eq!(
-            launched[0].config["command"], "C:/fixtures/node.exe",
-            "the more specific request config wins"
-        );
-        assert_eq!(launched[0].config["args"][0], "fixture.mjs");
-    }
-
-    #[tokio::test]
-    async fn without_a_configured_path_the_request_config_is_passed_through_untouched() {
-        let (manager, contexts) = recording();
-
-        manager
-            .create(CreateSessionRequest {
-                harness: "record".into(),
-                config: Some(serde_json::json!({ "chunkDelayMs": 5 })),
-                ..Default::default()
-            })
-            .await
-            .expect("session is created");
-
-        let launched = recorded(&contexts);
-        assert_eq!(
-            launched[0].config,
-            serde_json::json!({ "chunkDelayMs": 5 }),
-            "no settings, no injected keys: the adapter keeps its own defaults"
-        );
-    }
-
-    fn manager(adapter: Arc<dyn HarnessAdapter>) -> SessionManager {
+    fn manager_with(stub: StubProvider) -> (SessionManager, Arc<StdMutex<Vec<StartContext>>>) {
+        let contexts = Arc::clone(&stub.contexts);
         let paths = AppPaths::new(std::env::temp_dir().join("grove-manager-tests"));
-        let deps = AdapterDeps {
+        let deps = ProviderDeps {
             paths,
             http: reqwest::Client::new(),
             secrets: Arc::new(MemorySecretStore::new()),
         };
-        SessionManager::new(
+        let manager = SessionManager::new(
             Arc::new(Store::open_in_memory().unwrap()),
             deps,
-            vec![adapter],
-        )
+            vec![Arc::new(stub) as Arc<dyn AgentProvider>],
+        );
+        (manager, contexts)
     }
 
-    fn slow() -> (SessionManager, Arc<AtomicUsize>) {
-        let peak = Arc::new(AtomicUsize::new(0));
-        let manager = manager(Arc::new(SlowAdapter {
-            active: Arc::new(AtomicUsize::new(0)),
-            peak: Arc::clone(&peak),
-        }));
-        (manager, peak)
+    fn manager() -> SessionManager {
+        manager_with(StubProvider::new()).0
     }
 
     async fn create(manager: &SessionManager) -> String {
         manager
             .create(CreateSessionRequest {
-                harness: "slow".into(),
+                provider: "stub".into(),
                 ..Default::default()
             })
             .await
@@ -1087,20 +927,106 @@ mod tests {
     }
 
     #[test]
-    fn detect_all_asks_every_adapter_in_registry_order() {
-        let (manager, _peak) = slow();
-        let harnesses = manager.harnesses();
+    fn providers_reports_the_registered_specs_with_their_models() {
+        let manager = manager();
+        let providers = manager.providers();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id, "stub");
+        assert!(!providers[0].models.is_empty(), "the picker needs models");
+        assert_eq!(manager.label_for("stub"), Some("Stub"));
+        assert_eq!(manager.label_for("nope"), None);
+    }
+
+    #[test]
+    fn detect_all_reports_readiness_in_registry_order() {
+        let (manager, _contexts) = manager_with(StubProvider::new().with_ready(false));
         let detections = manager.detect_all();
-        assert_eq!(harnesses.len(), detections.len());
-        assert_eq!(detections[0], Detection::installed("0.0.0", "builtin:slow"));
+        assert_eq!(detections.len(), 1);
+        assert!(!detections[0].installed);
+        assert_eq!(detections[0].method, "api_key");
+        assert_eq!(detections[0].default_model, "claude-sonnet-4-5");
+    }
+
+    #[tokio::test]
+    async fn an_unnamed_provider_falls_back_to_one_that_is_ready() {
+        let manager = manager();
+        let detail = manager
+            .create(CreateSessionRequest {
+                provider: String::new(),
+                ..Default::default()
+            })
+            .await
+            .expect("a default provider is chosen");
+        assert_eq!(detail.session.provider, "stub");
+    }
+
+    #[tokio::test]
+    async fn a_permission_answer_reaches_the_live_session() {
+        // The Tauri command is a one-line forward to this call, so proving the manager delivers the
+        // answer to the runtime is what proves the buttons in the transcript can unblock a turn.
+        let stub = StubProvider::new();
+        let permissions = Arc::clone(&stub.permissions);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+
+        manager
+            .respond_permission(&session, "req-1", Decision::Approve)
+            .await
+            .expect("the answer is delivered");
+        manager
+            .respond_permission(&session, "req-2", Decision::Deny)
+            .await
+            .expect("the answer is delivered");
+
+        assert_eq!(
+            *lock(&permissions),
+            vec![
+                ("req-1".to_string(), Decision::Approve),
+                ("req-2".to_string(), Decision::Deny),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_and_resume_both_launch_the_provider_with_the_stored_config() {
+        let (manager, contexts) = manager_with(StubProvider::new());
+        let session = create(&manager).await;
+        assert_eq!(lock(&contexts).len(), 1, "create launches");
+
+        manager.close(&session).await.unwrap();
+        manager.resume(&session).await.unwrap();
+        assert_eq!(lock(&contexts).len(), 2, "resume launches again");
+    }
+
+    #[tokio::test]
+    async fn a_resume_replays_the_transcript_tail_because_the_agent_has_no_server_side_state() {
+        let (manager, contexts) = manager_with(StubProvider::new());
+        let session = create(&manager).await;
+        manager
+            .send(&session, "remember the number 7")
+            .await
+            .unwrap();
+        manager.close(&session).await.unwrap();
+        manager.resume(&session).await.unwrap();
+
+        let launched = lock(&contexts);
+        let resumed = launched.last().expect("resume launched");
+        let prompt = resumed.prompt.as_deref().unwrap_or_default();
+        assert!(
+            prompt.contains("remember the number 7"),
+            "the replayed tail carries the conversation: {prompt:?}"
+        );
     }
 
     #[tokio::test]
     async fn concurrent_commands_for_one_session_are_serialized() {
-        let (manager, peak) = slow();
-        let id = create(&manager).await;
+        let stub = StubProvider::new();
+        let peak = Arc::clone(&stub.peak);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
 
-        let (first, second) = tokio::join!(manager.send(&id, "one"), manager.send(&id, "two"));
+        let (first, second) =
+            tokio::join!(manager.send(&session, "one"), manager.send(&session, "two"));
         first.unwrap();
         second.unwrap();
 
@@ -1113,12 +1039,12 @@ mod tests {
 
     #[tokio::test]
     async fn sending_persists_the_user_message() {
-        let (manager, _peak) = slow();
-        let id = create(&manager).await;
+        let manager = manager();
+        let session = create(&manager).await;
 
-        manager.send(&id, "  hello  ").await.unwrap();
+        manager.send(&session, "  hello  ").await.unwrap();
 
-        let detail = manager.get(&id).unwrap();
+        let detail = manager.get(&session).unwrap();
         let last = detail.events.last().expect("the user message is persisted");
         assert_eq!(
             last.kind,
@@ -1133,18 +1059,18 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_and_stopped_sessions_report_distinct_errors() {
-        let (manager, _peak) = slow();
+        let manager = manager();
 
         let missing = manager.send("missing", "hi").await.unwrap_err();
         assert!(matches!(missing, SessionError::NotFound(_)));
 
-        let id = create(&manager).await;
-        manager.close(&id).await.unwrap();
+        let session = create(&manager).await;
+        manager.close(&session).await.unwrap();
 
-        let stopped = manager.send(&id, "hi").await.unwrap_err();
+        let stopped = manager.send(&session, "hi").await.unwrap_err();
         assert!(matches!(stopped, SessionError::NotRunning(_)));
 
-        let detail = manager.get(&id).unwrap();
+        let detail = manager.get(&session).unwrap();
         assert_eq!(detail.session.status, SessionState::Exited);
         assert_eq!(
             detail
@@ -1161,24 +1087,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_harness_is_rejected_without_a_row() {
-        let (manager, _peak) = slow();
+    async fn unknown_provider_is_rejected_without_a_row() {
+        let manager = manager();
         let error = manager
             .create(CreateSessionRequest {
-                harness: "nope".into(),
+                provider: "nope".into(),
                 ..Default::default()
             })
             .await
             .unwrap_err();
-        assert!(matches!(error, SessionError::UnknownHarness(_)));
+        assert!(matches!(error, SessionError::UnknownProvider(_)));
         assert!(manager.list().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn empty_messages_are_rejected() {
-        let (manager, _peak) = slow();
-        let id = create(&manager).await;
-        let error = manager.send(&id, "   ").await.unwrap_err();
+        let manager = manager();
+        let session = create(&manager).await;
+        let error = manager.send(&session, "   ").await.unwrap_err();
         assert!(matches!(error, SessionError::Invalid(_)));
+    }
+
+    #[tokio::test]
+    async fn switching_provider_drops_the_resume_token_and_keeps_the_transcript() {
+        let (manager, contexts) = manager_with(StubProvider::new());
+        let session = create(&manager).await;
+        manager.send(&session, "hello").await.unwrap();
+
+        let detail = manager
+            .switch_provider(&session, "stub", Some("claude-opus-4-1".into()))
+            .await
+            .expect("a model change is a switch");
+        assert_eq!(detail.session.model.as_deref(), Some("claude-opus-4-1"));
+        assert!(
+            detail
+                .events
+                .iter()
+                .any(|event| matches!(event.kind, EventKind::Message { .. })),
+            "the transcript survives the switch"
+        );
+        assert_eq!(lock(&contexts).len(), 2, "the switch relaunches");
     }
 }

@@ -3,23 +3,25 @@
 
 use super::{Store, StoreError};
 use crate::ipc::{Session, SessionDetail, SessionSummary};
-use crate::sessions::event::{now, EventKind, HarnessEvent, SessionState};
+use crate::sessions::event::{now, EventKind, SessionEvent, SessionState};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::BTreeMap;
 
 const SESSION_COLUMNS: &str =
-    "s.id, s.harness, s.cwd, s.model, s.title, s.status, s.created_at, s.updated_at";
+    "s.id, s.provider, s.cwd, s.model, s.title, s.status, s.created_at, s.updated_at, s.project_id, s.awaiting";
 
 fn row_to_session(row: &Row<'_>) -> rusqlite::Result<Session> {
     Ok(Session {
         id: row.get(0)?,
-        harness: row.get(1)?,
+        provider: row.get(1)?,
         cwd: row.get(2)?,
         model: row.get(3)?,
         title: row.get(4)?,
         status: SessionState::parse(&row.get::<_, String>(5)?),
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
+        project_id: row.get(8)?,
+        awaiting: row.get::<_, i64>(9)? != 0,
     })
 }
 
@@ -32,11 +34,11 @@ impl Store {
         self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO sessions
-                     (id, harness, cwd, model, title, status, adapter_config, resume_token, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9)",
+                     (id, provider, cwd, model, title, status, adapter_config, resume_token, created_at, updated_at, project_id, awaiting)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11)",
                 params![
                     &session.id,
-                    &session.harness,
+                    &session.provider,
                     &session.cwd,
                     session.model.as_deref(),
                     &session.title,
@@ -44,6 +46,8 @@ impl Store {
                     adapter_config.to_string(),
                     &session.created_at,
                     &session.updated_at,
+                    session.project_id.as_deref(),
+                    i64::from(session.awaiting),
                 ],
             )?;
             Ok(())
@@ -69,7 +73,7 @@ impl Store {
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], |row| {
-                let event_count: i64 = row.get(8)?;
+                let event_count: i64 = row.get(10)?;
                 Ok(SessionSummary {
                     session: row_to_session(row)?,
                     event_count: event_count.max(0) as u64,
@@ -91,7 +95,7 @@ impl Store {
 
     /// The transcript in sequence order. Sequence numbers are assigned by SQLite on append, so
     /// "ordered by seq" is the insertion order the pump persisted.
-    pub fn session_events(&self, session_id: &str) -> Result<Vec<HarnessEvent>, StoreError> {
+    pub fn session_events(&self, session_id: &str) -> Result<Vec<SessionEvent>, StoreError> {
         let rows: Vec<(String, String)> = self.with_conn(|conn| {
             let mut stmt =
                 conn.prepare("SELECT at, payload FROM events WHERE session_id = ?1 ORDER BY seq")?;
@@ -104,14 +108,14 @@ impl Store {
         rows.into_iter()
             .map(|(at, payload)| {
                 let kind: EventKind = serde_json::from_str(&payload)?;
-                Ok(HarnessEvent { at, kind })
+                Ok(SessionEvent { at, kind })
             })
             .collect()
     }
 
     /// Append one event and return its sequence number. `payload` is the full `EventKind` JSON; `kind`
     /// is the tag, duplicated in its own column for cheap queries.
-    pub fn append_event(&self, session_id: &str, event: &HarnessEvent) -> Result<i64, StoreError> {
+    pub fn append_event(&self, session_id: &str, event: &SessionEvent) -> Result<i64, StoreError> {
         let payload = serde_json::to_string(&event.kind)?;
         self.with_conn(|conn| {
             conn.execute(
@@ -142,18 +146,29 @@ impl Store {
         })
     }
 
-    /// Point an existing session at another harness. The model and the resume token belong to the
-    /// harness that produced them, so a switch writes both through separate calls.
-    pub fn set_session_harness(
+    /// Mirror the one bit the tree and titlebar read without loading a transcript.
+    pub fn update_session_awaiting(&self, id: &str, awaiting: bool) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET awaiting = ?2 WHERE id = ?1",
+                params![id, i64::from(awaiting)],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Point an existing session at another provider. The model and the resume token belong to the
+    /// provider that produced them, so a switch writes both through separate calls.
+    pub fn set_session_provider(
         &self,
         id: &str,
-        harness: &str,
+        provider: &str,
         model: Option<&str>,
     ) -> Result<(), StoreError> {
         self.with_conn(|conn| {
             conn.execute(
-                "UPDATE sessions SET harness = ?2, model = ?3, updated_at = ?4 WHERE id = ?1",
-                params![id, harness, model, now()],
+                "UPDATE sessions SET provider = ?2, model = ?3, updated_at = ?4 WHERE id = ?1",
+                params![id, provider, model, now()],
             )?;
             Ok(())
         })
@@ -202,7 +217,7 @@ impl Store {
     pub fn mark_orphaned_sessions_exited(&self) -> Result<usize, StoreError> {
         self.with_conn(|conn| {
             Ok(conn.execute(
-                "UPDATE sessions SET status = 'exited'
+                "UPDATE sessions SET status = 'exited', awaiting = 0
                  WHERE status IN ('starting', 'ready', 'busy')",
                 [],
             )?)
@@ -262,18 +277,20 @@ mod tests {
     fn session(id: &str) -> Session {
         Session {
             id: id.into(),
-            harness: "mock".into(),
+            provider: "mock".into(),
             cwd: "C:/projects/grove".into(),
             model: Some("mock-1".into()),
             title: "Refactor the store".into(),
             status: SessionState::Starting,
+            project_id: None,
+            awaiting: false,
             created_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-01T00:00:00.000Z".into(),
         }
     }
 
-    fn message(text: &str) -> HarnessEvent {
-        HarnessEvent::at(
+    fn message(text: &str) -> SessionEvent {
+        SessionEvent::at(
             EventKind::Message {
                 role: Role::User,
                 blocks: vec![Block::Text { text: text.into() }],

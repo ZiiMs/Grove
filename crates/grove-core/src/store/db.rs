@@ -14,7 +14,7 @@ pub const MIGRATIONS: &[&str] = &[
     r#"
 CREATE TABLE sessions (
     id             TEXT PRIMARY KEY,
-    harness        TEXT NOT NULL,
+    harness         TEXT NOT NULL,
     cwd            TEXT NOT NULL,
     model          TEXT,
     title          TEXT NOT NULL,
@@ -64,6 +64,32 @@ CREATE TABLE pins (
     spec_id    TEXT NOT NULL,
     PRIMARY KEY (session_id, spec_id)
 );
+"#,
+    // 5 — workspace projects and the two session facts the new shell reads directly: which project a
+    // conversation belongs to (loose chats keep `NULL`), and whether a permission request is waiting.
+    // `awaiting` is mirrored by the pump, so the tree and titlebar need no transcript read.
+    r#"
+CREATE TABLE projects (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL UNIQUE,
+    path           TEXT NOT NULL UNIQUE,
+    remote         TEXT,
+    default_branch TEXT,
+    is_git         INTEGER NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
+ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+ALTER TABLE sessions ADD COLUMN awaiting INTEGER NOT NULL DEFAULT 0;
+
+CREATE INDEX sessions_by_project ON sessions(project_id);
+"#,
+    // 6 — providers replace providers. A session now names the vendor it talks to and Grove runs the
+    // agent itself, so the column is renamed rather than reinterpreted: a leftover `claude` row is a
+    // provider this build does not know, which the session picker already handles.
+    r#"
+ALTER TABLE sessions RENAME COLUMN harness TO provider;
 "#,
 ];
 
@@ -185,14 +211,14 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4]);
+            assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4, 5, 6]);
         }
         assert!(path.exists(), "the database file is created on open");
 
         let reopened = Store::open(&path).unwrap();
         assert_eq!(
             reopened.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4],
+            vec![1, 2, 3, 4, 5, 6],
             "reopening does not replay migrations"
         );
     }
@@ -200,7 +226,46 @@ mod tests {
     #[test]
     fn in_memory_store_migrates_too() {
         let store = Store::open_in_memory().unwrap();
-        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn migration_six_turns_a_legacy_harness_row_into_a_provider_row() {
+        // The rename is the one migration that rewrites an existing column, so it is pinned by effect
+        // rather than by count: an install from the harness era must keep its conversations, under the
+        // new column name.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (index, sql) in MIGRATIONS[..5].iter().enumerate() {
+                conn.execute_batch(sql).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    rusqlite::params![(index + 1) as i64, "2026-10-24T00:00:00Z"],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO sessions (id, harness, cwd, title, status, created_at, updated_at)
+                 VALUES ('legacy', 'claude', 'C:/work', 'From the harness era', 'idle',
+                         '2026-10-24T00:00:00Z', '2026-10-24T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4, 5, 6]);
+        let session = store.session("legacy").unwrap().expect("the row survives");
+        assert_eq!(
+            session.provider, "claude",
+            "the value moves with the column"
+        );
     }
 
     #[test]
@@ -227,7 +292,7 @@ mod tests {
         }
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4, 5, 6]);
         assert!(store.pins("session-1").unwrap().is_empty(), "pins exists");
     }
 }

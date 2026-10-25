@@ -1,12 +1,11 @@
 import {
-  harnessEventSchema,
   parseEventEnvelope,
   parseGitChanged,
   parsePlanChanged,
   parseSpecChanged,
-  type EventEnvelope,
+  sessionEventSchema,
   type GitStatus,
-  type HarnessEvent,
+  type SessionEvent,
   type Plan,
   type SpecChange,
 } from "@grove/contract";
@@ -17,14 +16,16 @@ export const GIT_CHANGED = "grove://git-changed" as const;
 export const PLAN_CHANGED = "grove://plan-changed" as const;
 export const SPEC_CHANGED = "grove://spec-changed" as const;
 
-export type SessionEventHandler = (envelope: EventEnvelope) => void;
+export type SessionEventHandler = (sessionId: string | null, event: SessionEvent) => void;
 export type GitChangedHandler = (status: GitStatus) => void;
 export type PlanChangedHandler = (sessionId: string | null, plan: Plan) => void;
 export type SpecChangedHandler = (change: SpecChange) => void;
 
 /**
- * Subscribe to the session event stream. Malformed payloads and unknown event kinds are dropped here,
- * once, so no store or panel has to defend against a newer core.
+ * Typed session event stream. The envelope is parsed once by the contract, then the payload is
+ * narrowed to a complete `SessionEvent`: an unknown kind or a malformed payload is dropped here, so no
+ * store or panel has to defend against a newer core — the webview's zod gate from
+ * `architecture.md` §IPC contract.
  */
 export async function subscribeToSessionEvents(
   bridge: GroveBridge,
@@ -32,7 +33,9 @@ export async function subscribeToSessionEvents(
 ): Promise<UnlistenFn> {
   return bridge.listen(SESSION_EVENT, (raw) => {
     const envelope = parseEventEnvelope(raw);
-    if (envelope) handler(envelope);
+    if (!envelope) return;
+    const parsed = sessionEventSchema.safeParse(envelope.payload);
+    if (parsed.success) handler(envelope.sessionId ?? null, parsed.data);
   });
 }
 
@@ -73,22 +76,5 @@ export async function subscribeToSpecChanged(
   return bridge.listen(SPEC_CHANGED, (raw) => {
     const envelope = parseSpecChanged(raw);
     if (envelope) handler(envelope.payload);
-  });
-}
-
-export type HarnessEventHandler = (sessionId: string | null, event: HarnessEvent) => void;
-
-/**
- * Typed session event stream: the same subscription, but the payload must be a complete
- * `HarnessEvent` before a store sees it. This is the webview's zod gate from `architecture.md` §IPC
- * contract — an unknown kind is ignored, never fatal.
- */
-export async function subscribeToHarnessEvents(
-  bridge: GroveBridge,
-  handler: HarnessEventHandler,
-): Promise<UnlistenFn> {
-  return subscribeToSessionEvents(bridge, (envelope) => {
-    const parsed = harnessEventSchema.safeParse(envelope.payload);
-    if (parsed.success) handler(envelope.sessionId ?? null, parsed.data);
   });
 }

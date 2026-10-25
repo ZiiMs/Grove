@@ -1,8 +1,4 @@
 {
-  "harnessPaths": {
-    "claude": "C:/Tools/claude.exe",
-    "mock": "C:/Tools/fake-harness.cmd"
-  },
   "catalogSources": ["anthropics/skills", "mattpocock/skills"],
   "theme": "dark",
   "futureFlag": true

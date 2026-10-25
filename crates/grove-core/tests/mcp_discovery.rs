@@ -1,4 +1,4 @@
-//! MCP discovery: read every harness config, normalise it, dedupe across files, and turn a broken
+//! MCP discovery: read every provider config, normalise it, dedupe across files, and turn a broken
 //! file into a warning row. All configs live in a tempdir; nothing here touches the developer's home.
 
 pub mod mcp_support;
@@ -231,7 +231,7 @@ fn a_malformed_file_becomes_a_warning_row_not_a_failure() {
     assert_eq!(
         discovery.servers.len(),
         1,
-        "one broken file never hides another harness's servers"
+        "one broken file never hides another provider's servers"
     );
     assert_eq!(discovery.servers[0].name, "docs");
 }
@@ -278,7 +278,7 @@ fn missing_config_files_are_silent() {
     assert!(discovery.servers.is_empty());
     assert!(
         discovery.warnings.is_empty(),
-        "a harness the user does not use is not a warning: {:?}",
+        "a provider the user does not use is not a warning: {:?}",
         discovery.warnings
     );
 }

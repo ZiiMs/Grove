@@ -1,10 +1,11 @@
 {
+  "awaiting": false,
   "createdAt": "2025-01-01T00:00:00.000Z",
   "cwd": "C:/projects/grove",
   "events": [
     {
       "at": "2025-01-01T00:00:00.500Z",
-      "harness": "mock",
+      "provider": "mock",
       "kind": "session_started",
       "model": "mock-1",
       "resumed": false
@@ -30,9 +31,10 @@
       "role": "assistant"
     }
   ],
-  "harness": "mock",
+  "provider": "mock",
   "id": "session-1",
   "model": "mock-1",
+  "projectId": null,
   "status": "idle",
   "title": "Refactor the store",
   "updatedAt": "2025-01-01T00:00:05.000Z"

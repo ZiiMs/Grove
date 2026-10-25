@@ -1,0 +1,192 @@
+import type {
+  AddProjectRequest,
+  AppInfo,
+  GitBranch,
+  GitWorktree,
+  Project,
+  SettingsPatch,
+} from "@grove/contract";
+import { create } from "zustand";
+import type { GroveBridge } from "../ipc/bridge";
+import { errorText } from "../ipc/errors";
+import { applyTheme, findTheme, readBootTheme, type ThemeId, type ThemeMode } from "../workspace/theme";
+
+export type PermissionMode = "ask" | "accept-edits" | "bypass";
+
+export interface Preferences {
+  /** Which provider a new session starts on. */
+  defaultProvider: string;
+  defaultModel: string;
+  permissionMode: PermissionMode;
+  /** Absolute folder new worktrees are created under; empty means "next to the project". */
+  worktreeRoot: string;
+  restoreSessions: boolean;
+  enabledProviders: Record<string, boolean>;
+}
+
+interface WorkspaceState {
+  info: AppInfo | null;
+  projects: Project[];
+  worktrees: Record<string, GitWorktree[]>;
+  branches: Record<string, GitBranch[]>;
+  gitErrors: Record<string, string | null>;
+  prefs: Preferences;
+  themeId: ThemeId;
+  themeMode: ThemeMode;
+  loading: boolean;
+  error: string | null;
+  load: (bridge: GroveBridge) => Promise<void>;
+  refreshProjects: (bridge: GroveBridge) => Promise<void>;
+  refreshProjectGit: (bridge: GroveBridge, project: Project) => Promise<void>;
+  addProject: (bridge: GroveBridge, request: AddProjectRequest) => Promise<Project>;
+  setTheme: (id: ThemeId, mode: ThemeMode) => void;
+  saveSettings: (bridge: GroveBridge, patch: SettingsPatch) => Promise<void>;
+  setPrefs: (patch: Partial<Preferences>) => void;
+  reset: () => void;
+}
+
+const DEFAULT_PREFS: Preferences = {
+  defaultProvider: "anthropic",
+  defaultModel: "claude-sonnet-4-5",
+  permissionMode: "ask",
+  worktreeRoot: "~/code",
+  restoreSessions: true,
+  enabledProviders: {},
+};
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim().length > 0 ? value : fallback;
+}
+
+function booleanValue(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function prefsFromSettings(settings: Record<string, unknown>): Preferences {
+  const mode = settings.permissionMode;
+  return {
+    defaultProvider: stringValue(settings.defaultProvider, DEFAULT_PREFS.defaultProvider),
+    defaultModel: stringValue(settings.defaultModel, DEFAULT_PREFS.defaultModel),
+    permissionMode:
+      mode === "accept-edits" || mode === "bypass" || mode === "ask"
+        ? mode
+        : DEFAULT_PREFS.permissionMode,
+    worktreeRoot: stringValue(settings.worktreeRoot, DEFAULT_PREFS.worktreeRoot),
+    restoreSessions: booleanValue(settings.restoreSessions, true),
+    enabledProviders:
+      settings.enabledProviders && typeof settings.enabledProviders === "object"
+        ? (settings.enabledProviders as Record<string, boolean>)
+        : {},
+  };
+}
+
+export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
+  info: null,
+  projects: [],
+  worktrees: {},
+  branches: {},
+  gitErrors: {},
+  prefs: DEFAULT_PREFS,
+  themeId: readBootTheme().id,
+  themeMode: readBootTheme().mode,
+  loading: true,
+  error: null,
+
+  load: async (bridge) => {
+    set({ loading: true, error: null });
+    try {
+      const [info, projects, settings] = await Promise.all([
+        bridge.invoke("app_info"),
+        bridge.invoke("project_list"),
+        bridge.invoke("settings_get"),
+      ]);
+      const prefs = prefsFromSettings(settings as unknown as Record<string, unknown>);
+      const theme = findTheme(
+        typeof settings.themeId === "string" ? settings.themeId : get().themeId,
+      );
+      const mode: ThemeMode =
+        settings.themeMode === "light" || settings.themeMode === "dark"
+          ? settings.themeMode
+          : get().themeMode;
+      applyTheme(theme.id, mode);
+      set({ info, projects, prefs, themeId: theme.id, themeMode: mode, loading: false });
+      await Promise.all(projects.map((project) => get().refreshProjectGit(bridge, project)));
+    } catch (error) {
+      set({ loading: false, error: errorText(error) });
+    }
+  },
+
+  refreshProjects: async (bridge) => {
+    try {
+      const projects = await bridge.invoke("project_list");
+      set({ projects });
+      await Promise.all(projects.map((project) => get().refreshProjectGit(bridge, project)));
+    } catch (error) {
+      set({ error: errorText(error) });
+    }
+  },
+
+  refreshProjectGit: async (bridge, project) => {
+    if (!project.isGit) {
+      set((state) => ({
+        worktrees: { ...state.worktrees, [project.id]: [] },
+        branches: { ...state.branches, [project.id]: [] },
+        gitErrors: { ...state.gitErrors, [project.id]: null },
+      }));
+      return;
+    }
+    try {
+      const [worktrees, branches] = await Promise.all([
+        bridge.invoke("git_worktrees", { repoPath: project.path }),
+        bridge.invoke("git_branches", { repoPath: project.path }),
+      ]);
+      set((state) => ({
+        worktrees: { ...state.worktrees, [project.id]: worktrees },
+        branches: { ...state.branches, [project.id]: branches },
+        gitErrors: { ...state.gitErrors, [project.id]: null },
+      }));
+    } catch (error) {
+      set((state) => ({
+        worktrees: { ...state.worktrees, [project.id]: [] },
+        branches: { ...state.branches, [project.id]: [] },
+        gitErrors: { ...state.gitErrors, [project.id]: errorText(error) },
+      }));
+    }
+  },
+
+  addProject: async (bridge, request) => {
+    const project = await bridge.invoke("project_add", { req: request });
+    set((state) => ({ projects: [...state.projects, project] }));
+    await get().refreshProjectGit(bridge, project);
+    return project;
+  },
+
+  setTheme: (id, mode) => {
+    applyTheme(id, mode);
+    set({ themeId: id, themeMode: mode });
+  },
+
+  saveSettings: async (bridge, patch) => {
+    const settings = await bridge.invoke("settings_set", { patch });
+    const prefs = prefsFromSettings(settings as unknown as Record<string, unknown>);
+    set({ prefs });
+  },
+
+  setPrefs: (patch) => set((state) => ({ prefs: { ...state.prefs, ...patch } })),
+
+  reset: () => {
+    applyTheme("house", "dark");
+    set({
+      info: null,
+      projects: [],
+      worktrees: {},
+      branches: {},
+      gitErrors: {},
+      prefs: DEFAULT_PREFS,
+      themeId: "house",
+      themeMode: "dark",
+      loading: true,
+      error: null,
+    });
+  },
+}));

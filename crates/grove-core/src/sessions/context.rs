@@ -1,20 +1,20 @@
-//! Session knowledge: the pinned specs and the current plan, assembled into the documents a harness
+//! Session knowledge: the pinned specs and the current plan, assembled into the documents a provider
 //! receives when a session starts (ticket 14, `architecture.md` §Session runtime).
 //!
 //! Three rules give this module its shape:
 //!
 //! - **Specs stay files.** A pin stores the spec *id*; each assembly re-reads the graph and the bodies,
 //!   so a spec edited between two starts is picked up by the second one and never by the first.
-//! - **Context is a snapshot.** Documents are assembled at start, resume, harness switch or an explicit
+//! - **Context is a snapshot.** Documents are assembled at start, resume, provider switch or an explicit
 //!   refresh — never on a timer — so editing a spec cannot silently change a running conversation.
 //! - **No unbounded context.** A per-document and a total character budget bound what a session can
 //!   carry, and a document that is cut short says so in its own body with an explicit marker, because
-//!   the harness only ever sees text.
+//!   the provider only ever sees text.
 
-use crate::adapters::ContextDoc;
 use crate::ipc::{IpcError, IpcResult};
 use crate::paths::ProjectRoot;
 use crate::plan::PlanService;
+use crate::providers::ContextDoc;
 use crate::sessions::event::ContextDocument;
 use crate::specgraph::{read_spec, SpecIndex};
 use crate::store::{Store, StoreError};
@@ -34,7 +34,7 @@ pub const MIN_DOC_CHARS: usize = 64;
 pub const PLAN_DOC_ID: &str = "plan";
 
 /// The explicit marker appended to a truncated document body. It quotes how much was dropped, so the
-/// harness can tell a cut-off spec from a short one.
+/// provider can tell a cut-off spec from a short one.
 pub fn truncation_marker(omitted: usize, total: usize) -> String {
     format!("\n\n[truncated: {omitted} of {total} chars omitted]")
 }
@@ -69,7 +69,7 @@ pub struct ContextPin {
 #[serde(rename_all = "camelCase")]
 pub struct SessionContext {
     pub session_id: String,
-    pub harness: String,
+    pub provider: String,
     pub pins: Vec<ContextPin>,
     pub documents: Vec<ContextDocument>,
     pub total_chars: usize,
@@ -78,7 +78,7 @@ pub struct SessionContext {
     pub plan_version: u64,
 }
 
-/// The result of applying the budgets: the documents the harness gets, plus the record the transcript
+/// The result of applying the budgets: the documents the provider gets, plus the record the transcript
 /// and the header keep.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ContextAssembly {
@@ -137,7 +137,7 @@ impl SessionContextService {
         let assembly = assemble(&collected.docs, self.limits);
         Ok(SessionContext {
             session_id: collected.session.id,
-            harness: collected.session.harness,
+            provider: collected.session.provider,
             pins: collected.pins,
             documents: assembly.documents,
             total_chars: assembly.total_chars,
@@ -360,7 +360,7 @@ fn clamp_body(body: &str, budget: usize) -> (String, bool) {
 }
 
 /// Render documents as one markdown message. Used when context is pushed into a *running* session
-/// (refresh, harness switch), where the only channel to the harness is a user turn.
+/// (refresh, provider switch), where the only channel to the provider is a user turn.
 pub fn render_documents(documents: &[ContextDoc]) -> String {
     let mut rendered = String::from("# Project context\n\n");
     for document in documents {
@@ -530,11 +530,13 @@ mod tests {
     fn session_row(id: &str, project: &Path) -> Session {
         Session {
             id: id.into(),
-            harness: "mock".into(),
+            provider: "mock".into(),
             cwd: crate::paths::display_path(project),
             model: None,
             title: "Knowledge".into(),
             status: SessionState::Idle,
+            project_id: None,
+            awaiting: false,
             created_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-01T00:00:00.000Z".into(),
         }
@@ -595,7 +597,7 @@ mod tests {
 
         let empty = fixture.service.snapshot("session-1").unwrap();
         assert_eq!(empty.session_id, "session-1");
-        assert_eq!(empty.harness, "mock");
+        assert_eq!(empty.provider, "mock");
         assert_eq!(empty.plan_version, 0);
         assert_eq!(
             empty

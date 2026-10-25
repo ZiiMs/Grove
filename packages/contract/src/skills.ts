@@ -60,3 +60,14 @@ export const installResultSchema = z.object({
   installedAt: z.string(),
 });
 export type InstallResult = z.infer<typeof installResultSchema>;
+
+/** One recorded installation, so the catalog can mark a skill installed and offer removal. */
+export const installRecordSchema = z.object({
+  skill: z.string(),
+  source: z.string(),
+  target: z.string(),
+  /** Forward-slash path of the installed folder. */
+  path: z.string(),
+  installedAt: z.string(),
+});
+export type InstallRecord = z.infer<typeof installRecordSchema>;

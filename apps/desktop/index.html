@@ -1,9 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="house" data-mode="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Grove</title>
+    <script>
+      // Apply the saved theme before first paint so the window never flashes the default.
+      (function () {
+        try {
+          var allowed = ["house", "terminal", "blueprint", "softstack", "signal", "editorial", "mono"];
+          var saved = JSON.parse(localStorage.getItem("grove.theme") || "null");
+          if (saved && allowed.indexOf(saved.id) !== -1) {
+            document.documentElement.dataset.theme = saved.id;
+            document.documentElement.dataset.mode = saved.mode === "light" ? "light" : "dark";
+          }
+        } catch (error) {
+          // A blocked storage keeps the defaults above.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

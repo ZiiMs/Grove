@@ -1,0 +1,7 @@
+{
+  "skill": "provider-adapter",
+  "source": "anthropics/skills",
+  "target": "agents",
+  "path": "C:/projects/grove/.agents/skills/provider-adapter",
+  "installedAt": "2025-01-01T00:00:00Z"
+}

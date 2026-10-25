@@ -3,16 +3,15 @@
 
 use crate::commands::app::adopt;
 use crate::state::AppState;
-use grove_core::ipc::{
-    CreateSessionRequest, HarnessInfo, IpcResult, Session, SessionDetail, SessionSummary,
-};
+use grove_core::ipc::{CreateSessionRequest, IpcResult, Session, SessionDetail, SessionSummary};
+use grove_core::providers::ProviderSpec;
 use grove_core::sessions::context::SessionContext;
 use grove_core::sessions::event::Decision;
 
-/// Every registered harness, for the session picker.
+/// Every registered provider, with models and auth, for the picker and settings.
 #[tauri::command]
-pub fn harness_list(state: tauri::State<'_, AppState>) -> IpcResult<Vec<HarnessInfo>> {
-    Ok(state.core.sessions.harnesses())
+pub fn provider_list(state: tauri::State<'_, AppState>) -> IpcResult<Vec<ProviderSpec>> {
+    Ok(state.core.sessions.providers())
 }
 
 #[tauri::command]
@@ -108,7 +107,7 @@ pub fn session_pin(
     }
 }
 
-/// Re-read the pins and the plan and push them into the running session: the harness receives the
+/// Re-read the pins and the plan and push them into the running session: the provider receives the
 /// rendered documents as a turn, and the transcript gains a visible note. Returns the new snapshot.
 #[tauri::command]
 pub async fn session_refresh_context(
@@ -119,13 +118,18 @@ pub async fn session_refresh_context(
     state.core.context.snapshot(&id)
 }
 
-/// Re-launch the same conversation on another registered harness, with the same context documents and
+/// Re-launch the same conversation on another registered provider, with the same context documents and
 /// a summary of the transcript. The transcript itself is never rewritten.
 #[tauri::command]
-pub async fn session_switch_harness(
+pub async fn session_switch_provider(
     state: tauri::State<'_, AppState>,
     id: String,
-    harness: String,
+    provider: String,
+    model: Option<String>,
 ) -> IpcResult<SessionDetail> {
-    Ok(state.core.sessions.switch_harness(&id, &harness).await?)
+    Ok(state
+        .core
+        .sessions
+        .switch_provider(&id, &provider, model)
+        .await?)
 }

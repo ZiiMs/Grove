@@ -1,4 +1,4 @@
-//! The normalized event model. Every harness reduces to this one enum, which is persisted verbatim
+//! The normalized event model. Every provider reduces to this one enum, which is persisted verbatim
 //! and streamed to the UI unchanged (see `architecture.md` §Normalized event model).
 //!
 //! Adding a kind is additive: `packages/contract` lists the known tags and the webview drops kinds it
@@ -10,14 +10,14 @@ use serde::{Deserialize, Serialize};
 ///
 /// `kind` is flattened so the wire shape is `{ "at": "...", "kind": "delta", "text": "..." }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HarnessEvent {
+pub struct SessionEvent {
     /// RFC3339 with milliseconds, UTC — stable across platforms.
     pub at: String,
     #[serde(flatten)]
     pub kind: EventKind,
 }
 
-impl HarnessEvent {
+impl SessionEvent {
     /// Timestamped now. Adapters call this; tests construct events with a fixed `at`.
     pub fn new(kind: EventKind) -> Self {
         Self { at: now(), kind }
@@ -36,7 +36,10 @@ impl HarnessEvent {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventKind {
     SessionStarted {
-        harness: String,
+        /// harness is the pre-provider name, kept as a read alias so a transcript written by an
+        /// older build still loads. It is never written back.
+        #[serde(alias = "harness")]
+        provider: String,
         model: Option<String>,
         resumed: bool,
     },
@@ -84,19 +87,20 @@ pub enum EventKind {
         retryable: bool,
     },
     /// The session's knowledge was (re)assembled from its pinned specs and the plan, and handed to the
-    /// harness. Additive: the transcript renders `note` as a visible system line, and `documents` is
-    /// exactly what the harness received, so the context a run started from stays auditable.
+    /// provider. Additive: the transcript renders `note` as a visible system line, and `documents` is
+    /// exactly what the provider received, so the context a run started from stays auditable.
     ContextRefreshed {
         reason: ContextReason,
-        /// The harness that received the documents.
-        harness: String,
+        /// The provider that received the documents.
+        #[serde(alias = "harness")]
+        provider: String,
         documents: Vec<ContextDocument>,
         /// One human-readable line for the transcript.
         note: String,
     },
 }
 
-/// What caused a session's context documents to be assembled and handed to the harness.
+/// What caused a session's context documents to be assembled and handed to the provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextReason {
@@ -106,8 +110,10 @@ pub enum ContextReason {
     Resume,
     /// The user asked for the current pins and plan to be re-sent.
     Refresh,
-    /// The same conversation was re-launched on a different harness.
-    HarnessSwitch,
+    /// The same conversation was re-launched on a different provider.
+    /// harness_switch is the pre-provider wire value, kept as a read alias for old transcripts.
+    #[serde(alias = "harness_switch")]
+    ProviderSwitch,
 }
 
 impl ContextReason {
@@ -117,12 +123,12 @@ impl ContextReason {
             ContextReason::Start => "start",
             ContextReason::Resume => "resume",
             ContextReason::Refresh => "refresh",
-            ContextReason::HarnessSwitch => "harness_switch",
+            ContextReason::ProviderSwitch => "provider_switch",
         }
     }
 }
 
-/// One document in a session's context, as recorded in the transcript: what the harness got, not the
+/// One document in a session's context, as recorded in the transcript: what the provider got, not the
 /// whole body (the body is already in the session's `StartContext` and would double the log).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -266,7 +272,7 @@ pub fn now() -> String {
 
 /// Render the tail of a transcript as plain text, for adapters that cannot resume a conversation
 /// and need the history replayed as context.
-pub fn render_tail(events: &[HarnessEvent], limit: usize) -> String {
+pub fn render_tail(events: &[SessionEvent], limit: usize) -> String {
     let mut lines: Vec<String> = Vec::new();
     for event in events {
         match &event.kind {
@@ -295,7 +301,7 @@ mod tests {
     fn every_kind_round_trips_through_json() {
         let kinds = vec![
             EventKind::SessionStarted {
-                harness: "mock".into(),
+                provider: "mock".into(),
                 model: None,
                 resumed: false,
             },
@@ -349,7 +355,7 @@ mod tests {
             },
             EventKind::ContextRefreshed {
                 reason: ContextReason::Refresh,
-                harness: "mock".into(),
+                provider: "mock".into(),
                 documents: vec![ContextDocument {
                     id: "grove-architecture".into(),
                     title: "Grove — architecture".into(),
@@ -361,21 +367,51 @@ mod tests {
         ];
 
         for kind in kinds {
-            let event = HarnessEvent::at(kind.clone(), "2025-01-01T00:00:00.000Z");
+            let event = SessionEvent::at(kind.clone(), "2025-01-01T00:00:00.000Z");
             let json = serde_json::to_string(&event).unwrap();
             assert!(
                 json.contains(&format!("\"kind\":\"{}\"", kind.tag())),
                 "tag missing for {}: {json}",
                 kind.tag()
             );
-            let back: HarnessEvent = serde_json::from_str(&json).unwrap();
+            let back: SessionEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(back, event);
         }
     }
 
     #[test]
+    fn a_transcript_written_before_providers_still_loads() {
+        // The event payload is persisted JSON, so renaming the field is a schema change: an install
+        // with history must keep its transcript readable rather than failing the whole session read.
+        let legacy: SessionEvent = serde_json::from_str(
+            r#"{"at":"2026-10-24T00:00:00.000Z","kind":"session_started","harness":"claude","model":"claude-sonnet-4-5","resumed":false}"#,
+        )
+        .expect("an old payload deserialises");
+        assert_eq!(
+            legacy.kind,
+            EventKind::SessionStarted {
+                provider: "claude".into(),
+                model: Some("claude-sonnet-4-5".into()),
+                resumed: false,
+            }
+        );
+
+        // Writing it back uses the new name, so the alias is read-only.
+        let json = serde_json::to_string(&legacy).unwrap();
+        assert!(json.contains("\"provider\":\"claude\""), "{json}");
+        assert!(!json.contains("\"harness\""), "{json}");
+
+        // The reason enum was renamed too, and it is persisted in the same payload.
+        let switched: ContextReason = serde_json::from_str("\"harness_switch\"").unwrap();
+        assert_eq!(switched, ContextReason::ProviderSwitch);
+        assert_eq!(
+            serde_json::to_string(&switched).unwrap(),
+            "\"provider_switch\""
+        );
+    }
+    #[test]
     fn event_flattens_kind_beside_at() {
-        let event = HarnessEvent::at(
+        let event = SessionEvent::at(
             EventKind::Status {
                 state: SessionState::Idle,
             },
@@ -412,7 +448,7 @@ mod tests {
             ContextReason::Start,
             ContextReason::Resume,
             ContextReason::Refresh,
-            ContextReason::HarnessSwitch,
+            ContextReason::ProviderSwitch,
         ] {
             let json = serde_json::to_string(&reason).unwrap();
             assert_eq!(json, format!("\"{}\"", reason.as_str()));
@@ -421,9 +457,9 @@ mod tests {
 
     #[test]
     fn render_tail_keeps_the_last_lines() {
-        let events: Vec<HarnessEvent> = (0..5)
+        let events: Vec<SessionEvent> = (0..5)
             .map(|n| {
-                HarnessEvent::at(
+                SessionEvent::at(
                     EventKind::Message {
                         role: Role::User,
                         blocks: vec![Block::Text {

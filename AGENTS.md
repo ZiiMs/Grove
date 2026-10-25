@@ -1,7 +1,8 @@
 # Grove — agent guide
 
-Grove is a Tauri 2 desktop app (Rust core + React/TS webview) that runs AI coding harnesses behind
-one interface and keeps the project's specs, skill catalog, TODO plan, and git/PR state in view.
+Grove is a Tauri 2 desktop app (Rust core + React/TS webview) that runs AI coding agents against model
+providers behind one interface and keeps the project's specs, skill catalog, TODO plan, and git/PR
+state in view.
 
 Read `architecture.md` before changing anything structural; it is the authoritative design and names
 the extension seams. `goal-and-requirements.md` is the intent of record.
@@ -24,10 +25,10 @@ Single-context: one root `GLOSSARY.md` and ADRs under `docs/adr/`. See `docs/age
 ## Build and verify
 
 ```
-npm ci                 # workspace install (apps/desktop, packages/contract, sidecar)
+npm ci                 # workspace install (apps/desktop, packages/contract)
 npm run typecheck      # tsc --noEmit across workspaces
-npm test               # vitest (UI, contract, sidecar)
-npm run build          # vite production build + sidecar dist + the Monaco bundle guard
+npm test               # vitest (UI, contract)
+npm run build          # vite production build + the entry-size bundle guard
 cargo test -p grove-core
 cargo check -p grove-desktop
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
@@ -38,8 +39,8 @@ cache. Secrets go through `SecretStore` (OS keychain) — never into `settings`,
 
 ## Conventions
 
-- One adapter per harness, isolated behind `adapters::HarnessAdapter`; no adapter imports another
-  adapter, `tauri`, or UI code.
+- One module per vendor wire format, isolated behind `providers::AgentProvider`; no provider module
+  imports another provider, `tauri`, or UI code.
 - Rust owns the wire shape; TS validates with zod from `packages/contract`. Add a contract fixture when
   you add a DTO.
 - Keep shared-file edits to one line per seam (see `architecture.md` §Extension seams) so parallel

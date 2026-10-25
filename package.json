@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "One desktop home for every AI coding harness",
-  "workspaces": ["apps/desktop", "packages/contract", "sidecar"],
+  "workspaces": ["apps/desktop", "packages/contract"],
   "scripts": {
     "dev": "npm run dev -w @grove/desktop",
     "build": "npm run build --workspaces --if-present && node scripts/check-bundle.mjs",

@@ -171,6 +171,18 @@ impl DiffRequest {
     }
 }
 
+/// What detection reports about a folder before it becomes a project. This is the source data for
+/// the IPC `ProjectDetection`; it stays in gitops because only git knows the answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDetection {
+    pub is_git: bool,
+    pub current_branch: Option<String>,
+    pub branches: Vec<String>,
+    pub default_branch: Option<String>,
+    pub remote: Option<String>,
+}
+
 /// What the webview asks [`super::Git::open_pr`] for. Built from command arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrRequest {
@@ -178,6 +190,7 @@ pub struct PrRequest {
     pub body: String,
     pub base: Option<String>,
     pub head: Option<String>,
+    pub draft: bool,
 }
 
 impl PrRequest {
@@ -187,6 +200,7 @@ impl PrRequest {
             body: body.into(),
             base: None,
             head: None,
+            draft: false,
         }
     }
 
@@ -197,6 +211,11 @@ impl PrRequest {
 
     pub fn with_head(mut self, head: impl Into<String>) -> Self {
         self.head = Some(head.into());
+        self
+    }
+
+    pub fn with_draft(mut self, draft: bool) -> Self {
+        self.draft = draft;
         self
     }
 }

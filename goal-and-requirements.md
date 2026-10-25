@@ -2,13 +2,18 @@
 id: grove-goal-and-requirements
 type: goal-and-requirements
 status: active
-title: Grove — one desktop home for every AI coding harness
+title: Grove — one desktop home for every AI coding provider
 tags: [desktop, agent-harness, spec-driven-development, tauri]
 ---
 
 # Grove
 
-**One desktop home for every AI coding harness — with the project's intent, not just its chat, kept in view.**
+**One desktop home for every AI coding model - with the project's intent, not just its chat, kept in view.**
+
+> **Amended 2026-10-25.** This document is the original intent of record and is kept as written. Where
+> it specifies harness adapters, a sidecar and per-harness skill directories, ADR 0003 supersedes it:
+> Grove now runs the agent itself against model providers (Anthropic, OpenAI, Google, OpenRouter) with
+> an API key. Read `architecture.md` for what is built; read this for why.
 
 ## Overview
 

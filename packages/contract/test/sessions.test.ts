@@ -5,9 +5,10 @@ import {
   capabilitiesSchema,
   createSessionRequestSchema,
   detectionSchema,
-  harnessEventSchema,
-  harnessInfoSchema,
+  providerSpecSchema,
+  providerStatusSchema,
   sessionDetailSchema,
+  sessionEventSchema,
   sessionSchema,
   sessionSummarySchema,
 } from "../src/index";
@@ -21,7 +22,7 @@ describe("session contract fixtures", () => {
   it("session.json matches the zod schema", () => {
     const parsed = sessionSchema.parse(fixture("session.json"));
     expect(parsed.id).toBe("session-1");
-    expect(parsed.harness).toBe("mock");
+    expect(parsed.provider).toBe("mock");
     expect(parsed.status).toBe("idle");
     expect(parsed.createdAt).toBe("2025-01-01T00:00:00.000Z");
   });
@@ -40,7 +41,7 @@ describe("session contract fixtures", () => {
 
   it("session-events.json covers every event payload variant", () => {
     const raw = fixture("session-events.json") as unknown[];
-    const events = raw.map((event) => harnessEventSchema.parse(event));
+    const events = raw.map((event) => sessionEventSchema.parse(event));
     expect(events.map((event) => event.kind)).toEqual([
       "session_started",
       "status",
@@ -64,11 +65,11 @@ describe("session contract fixtures", () => {
 
   it("session-events.json records the context a session was given", () => {
     const raw = fixture("session-events.json") as unknown[];
-    const refresh = harnessEventSchema.parse(raw[raw.length - 1]);
+    const refresh = sessionEventSchema.parse(raw[raw.length - 1]);
     expect(refresh).toMatchObject({
       kind: "context_refreshed",
       reason: "refresh",
-      harness: "mock",
+      provider: "mock",
     });
     expect(
       refresh.kind === "context_refreshed" ? refresh.documents : [],
@@ -83,7 +84,7 @@ describe("session contract fixtures", () => {
   });
 });
 
-describe("harness capabilities and detection", () => {
+describe("provider contract", () => {
   it("capabilities.json matches the zod schema", () => {
     const parsed = capabilitiesSchema.parse(fixture("capabilities.json"));
     expect(parsed).toEqual({
@@ -98,58 +99,66 @@ describe("harness capabilities and detection", () => {
     });
   });
 
-  it("harness-info.json matches the zod schema", () => {
-    const parsed = harnessInfoSchema.parse(fixture("harness-info.json"));
-    expect(parsed.id).toBe("claude");
-    expect(parsed.capabilities.permissions).toBe(false);
+  it("provider-info.json describes a vendor the picker can offer", () => {
+    const parsed = providerSpecSchema.parse(fixture("provider-info.json"));
+    expect(parsed.id).toBe("anthropic");
+    expect(parsed.wire).toBe("anthropic");
+    expect(parsed.auth).toBe("api_key");
+    expect(parsed.models).toContain(parsed.defaultModel);
+    expect(parsed.capabilities.toolCalls).toBe(true);
   });
 
-  it("create-session-request.json carries the adapter config", () => {
+  it("provider-statuses.json reports readiness without a key value", () => {
+    const raw = fixture("provider-statuses.json") as unknown[];
+    const rows = raw.map((row) => providerStatusSchema.parse(row));
+    expect(rows[0]).toMatchObject({ id: "anthropic", configured: true, source: "keychain" });
+    expect(rows[1]).toMatchObject({ id: "openai", configured: false, source: null });
+    expect(Object.keys(raw[0] as object)).not.toContain("key");
+  });
+
+  it("create-session-request.json names a provider and its config", () => {
     const parsed = createSessionRequestSchema.parse(fixture("create-session-request.json"));
-    expect(parsed.harness).toBe("claude");
-    expect(parsed.config).toEqual({
-      command: "C:/tools/claude.cmd",
-      args: ["--permission-mode", "acceptEdits"],
-    });
+    expect(parsed.provider).toBe("anthropic");
+    expect(parsed.config).toEqual({ maxSteps: 12 });
   });
 
   it("a create request without a config is still valid", () => {
-    const parsed = createSessionRequestSchema.parse({ harness: "mock" });
+    const parsed = createSessionRequestSchema.parse({ provider: "anthropic" });
     expect(parsed.config).toBeUndefined();
   });
 
-  it("detection.json matches the zod schema", () => {
+  it("detection.json reports whether a provider would start", () => {
     const parsed = detectionSchema.parse(fixture("detection.json"));
     expect(parsed).toEqual({
       installed: true,
-      version: "2.1.302 (Claude Code)",
-      path: "C:/Users/demo/AppData/Roaming/npm/claude.cmd",
+      method: "api_key",
+      defaultModel: "claude-sonnet-4-5",
       detail: null,
     });
   });
 
-  it("a missing install is a valid detection with a reason", () => {
+  it("a provider without a key is a valid detection with a reason", () => {
     const parsed = detectionSchema.parse({
       installed: false,
-      version: null,
-      path: null,
-      detail: "claude is not on PATH",
+      method: "api_key",
+      defaultModel: "gpt-5",
+      detail: "No API key for OpenAI.",
     });
     expect(parsed.installed).toBe(false);
-    expect(parsed.detail).toBe("claude is not on PATH");
+    expect(parsed.detail).toBe("No API key for OpenAI.");
   });
 });
 
-describe("harness events", () => {
+describe("session events", () => {
   it("rejects an unknown kind instead of guessing", () => {
     expect(
-      harnessEventSchema.safeParse({ at: "2025-01-01T00:00:00.000Z", kind: "from-the-future" })
+      sessionEventSchema.safeParse({ at: "2025-01-01T00:00:00.000Z", kind: "from-the-future" })
         .success,
     ).toBe(false);
   });
 
   it("requires a timestamp", () => {
-    expect(harnessEventSchema.safeParse({ kind: "delta", text: "hi" }).success).toBe(false);
+    expect(sessionEventSchema.safeParse({ kind: "delta", text: "hi" }).success).toBe(false);
   });
 
   it("rejects an unknown session state", () => {

@@ -1,4 +1,5 @@
 import type {
+  InstallRecord,
   InstallResult,
   SkillCatalog,
   SkillPreview,
@@ -14,4 +15,8 @@ export interface SkillCommands {
     args: { source: string; path: string; target: string; projectRoot?: string };
     result: InstallResult;
   };
+  /** Every recorded installation, newest last. */
+  skill_installs: { args: Record<string, never>; result: InstallRecord[] };
+  /** Delete one installed skill folder by the recorded path. */
+  skill_remove: { args: { path: string }; result: null };
 }

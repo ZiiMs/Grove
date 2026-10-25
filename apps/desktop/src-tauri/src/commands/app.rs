@@ -36,8 +36,20 @@ pub async fn app_set_project_root(
 /// Move the project root and everything that watches it. Shared by the command above and the session
 /// commands, so creating a session and activating its tab cannot disagree.
 pub(crate) fn adopt(state: &AppState, path: impl AsRef<Path>) -> String {
+    let requested = path.as_ref();
+    // A restored session can point at a worktree that has since been deleted. Moving the project
+    // root there would break the spec graph and plan mirror for every panel, so keep the root that
+    // works and let the session open with its transcript.
+    if !requested.is_dir() {
+        tracing::warn!(
+            target: "grove::specgraph",
+            "ignoring missing project root: {}",
+            requested.display()
+        );
+        return display_path(&state.core.project_root());
+    }
     let previous = state.core.project_root();
-    let root = state.core.set_project_root(path.as_ref());
+    let root = state.core.set_project_root(requested);
     let Some(app) = state.app_handle() else {
         // No window yet (a headless construction): the core already moved, nothing to tell.
         return display_path(&root);

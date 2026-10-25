@@ -1,17 +1,18 @@
-use grove_core::adapters::{Capabilities, Detection};
 use grove_core::gitops::{
     DiffTarget, GitBranch, GitDiff, GitStatus, GitStatusFile, GitWorktree, PrResult,
 };
 use grove_core::ipc::{
-    AppInfo, CreateSessionRequest, ErrorCode, EventEnvelope, HarnessInfo, IpcError, Session,
-    SessionDetail, SessionSummary,
+    AppInfo, CreateSessionRequest, DirEntry, DirListing, ErrorCode, EventEnvelope, IpcError,
+    Project, ProjectDetection, Session, SessionDetail, SessionSummary,
 };
 use grove_core::plan::{Plan, PlanUpdate};
+use grove_core::providers::{Capabilities, Detection};
 use grove_core::sessions::context::{ContextLimits, ContextPin, SessionContext};
 use grove_core::sessions::event::{
-    Block, ContextDocument, ContextReason, Decision, EventKind, HarnessEvent, Role, SessionState,
+    Block, ContextDocument, ContextReason, Decision, EventKind, Role, SessionEvent, SessionState,
     ToolStatus,
 };
+use grove_core::skills::InstallRecord;
 
 /// Each fixture is canonical JSON produced by the Rust side. A change to a DTO without a matching
 /// fixture change fails here, and the TS side fails too — that is the contract test.
@@ -87,8 +88,8 @@ fn capabilities_matches_fixture() {
 fn detection_matches_fixture() {
     let sample = Detection {
         installed: true,
-        version: Some("2.1.302 (Claude Code)".into()),
-        path: Some("C:/Users/demo/AppData/Roaming/npm/claude.cmd".into()),
+        method: "api_key".into(),
+        default_model: "claude-sonnet-4-5".into(),
         detail: None,
     };
     assert_eq!(
@@ -318,27 +319,29 @@ fn git_changed_event_matches_fixture() {
 
 // ---------- sessions (ticket 02) ----------
 //
-// One fixture per session DTO, plus one covering every `HarnessEvent` payload variant. The same files
+// One fixture per session DTO, plus one covering every `SessionEvent` payload variant. The same files
 // are parsed by the zod schemas in `packages/contract`, so either side drifting breaks a test.
 
 fn sample_session() -> Session {
     Session {
         id: "session-1".into(),
-        harness: "mock".into(),
+        provider: "mock".into(),
         cwd: "C:/projects/grove".into(),
         model: Some("mock-1".into()),
         title: "Refactor the store".into(),
         status: SessionState::Idle,
+        project_id: None,
+        awaiting: false,
         created_at: "2025-01-01T00:00:00.000Z".into(),
         updated_at: "2025-01-01T00:00:05.000Z".into(),
     }
 }
 
-fn sample_events() -> Vec<HarnessEvent> {
+fn sample_events() -> Vec<SessionEvent> {
     vec![
         event(
             EventKind::SessionStarted {
-                harness: "mock".into(),
+                provider: "mock".into(),
                 model: Some("mock-1".into()),
                 resumed: false,
             },
@@ -429,7 +432,7 @@ fn sample_events() -> Vec<HarnessEvent> {
         ),
         event(
             EventKind::Error {
-                message: "harness exited".into(),
+                message: "provider exited".into(),
                 retryable: true,
             },
             "2025-01-01T00:00:05.000Z",
@@ -437,7 +440,7 @@ fn sample_events() -> Vec<HarnessEvent> {
         event(
             EventKind::ContextRefreshed {
                 reason: ContextReason::Refresh,
-                harness: "mock".into(),
+                provider: "mock".into(),
                 documents: vec![ContextDocument {
                     id: "grove-architecture".into(),
                     title: "Grove — architecture".into(),
@@ -451,8 +454,8 @@ fn sample_events() -> Vec<HarnessEvent> {
     ]
 }
 
-fn event(kind: EventKind, at: &str) -> HarnessEvent {
-    HarnessEvent::at(kind, at)
+fn event(kind: EventKind, at: &str) -> SessionEvent {
+    SessionEvent::at(kind, at)
 }
 
 #[test]
@@ -549,7 +552,7 @@ fn plan_update_matches_fixture() {
 fn sample_session_context() -> SessionContext {
     SessionContext {
         session_id: "session-1".into(),
-        harness: "claude".into(),
+        provider: "claude".into(),
         pins: vec![
             ContextPin {
                 spec_id: "grove-architecture".into(),
@@ -607,43 +610,106 @@ fn plan_changed_envelope_matches_fixture() {
 }
 
 #[test]
-fn harness_info_matches_fixture() {
-    // The session picker's row: the harness id plus its honest capabilities.
-    let sample = HarnessInfo {
-        id: "claude".into(),
-        capabilities: Capabilities {
-            streaming_deltas: true,
-            tool_calls: true,
-            diffs: false,
-            permissions: false,
-            resume: true,
-            images: false,
-            mcp: false,
-            usage: true,
-        },
-    };
+fn provider_info_matches_fixture() {
+    // The picker's row: what a provider is, what it costs to start, and the models it offers.
+    let sample = grove_core::providers::catalog::find("anthropic").expect("anthropic ships");
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
-        fixture("harness-info.json")
+        fixture("provider-info.json")
     );
 }
 
 #[test]
 fn create_session_request_matches_fixture() {
-    // `config` is the adapter-specific JSON from settings; the zod schema had drifted without it, so
-    // this fixture is what keeps the two sides honest.
+    // `config` is provider config from settings; the zod schema had drifted without it, so this
+    // fixture is what keeps the two sides honest.
     let sample = CreateSessionRequest {
-        harness: "claude".into(),
+        provider: "anthropic".into(),
         cwd: Some("C:/work/grove".into()),
-        model: Some("claude-sonnet-4".into()),
+        model: Some("claude-sonnet-4-5".into()),
         title: Some("Review the diff".into()),
-        config: Some(serde_json::json!({
-            "command": "C:/tools/claude.cmd",
-            "args": ["--permission-mode", "acceptEdits"],
-        })),
+        project_id: None,
+        worktree_path: None,
+        config: Some(serde_json::json!({ "maxSteps": 12 })),
     };
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("create-session-request.json")
+    );
+}
+
+// ---------- workspace (redesign) ----------
+
+fn sample_project() -> Project {
+    Project {
+        id: "project-1".into(),
+        name: "grove".into(),
+        path: "C:/projects/grove".into(),
+        remote: Some("acme/grove".into()),
+        default_branch: Some("main".into()),
+        is_git: true,
+        created_at: "2025-01-01T00:00:00.000Z".into(),
+        updated_at: "2025-01-01T00:00:00.000Z".into(),
+    }
+}
+
+#[test]
+fn project_matches_fixture() {
+    assert_eq!(
+        serde_json::to_value(sample_project()).unwrap(),
+        fixture("project.json")
+    );
+}
+
+#[test]
+fn project_detection_matches_fixture() {
+    let sample = ProjectDetection {
+        path: "C:/projects/grove".into(),
+        is_git: true,
+        current_branch: Some("feat/ui".into()),
+        branches: vec!["feat/ui".into(), "main".into()],
+        default_branch: Some("main".into()),
+        remote: Some("acme/grove".into()),
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("project-detection.json")
+    );
+}
+
+#[test]
+fn dir_listing_matches_fixture() {
+    let sample = DirListing {
+        path: "C:/Users/ada/code".into(),
+        parent: Some("C:/Users/ada".into()),
+        dirs: vec![
+            DirEntry {
+                name: "agent-hub".into(),
+                path: "C:/Users/ada/code/agent-hub".into(),
+            },
+            DirEntry {
+                name: "grove".into(),
+                path: "C:/Users/ada/code/grove".into(),
+            },
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("dir-listing.json")
+    );
+}
+
+#[test]
+fn install_record_matches_fixture() {
+    let sample = InstallRecord {
+        skill: "provider-adapter".into(),
+        source: "anthropics/skills".into(),
+        target: "agents".into(),
+        path: "C:/projects/grove/.agents/skills/provider-adapter".into(),
+        installed_at: "2025-01-01T00:00:00Z".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("skill-install-record.json")
     );
 }

@@ -19,7 +19,6 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    // Monaco and markdown-it are feature chunks; keep them out of the shell's entry chunk.
     chunkSizeWarningLimit: 900,
   },
   test: {

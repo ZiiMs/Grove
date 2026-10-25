@@ -1,5 +1,4 @@
-use crate::adapters::Capabilities;
-use crate::sessions::event::{HarnessEvent, SessionState};
+use crate::sessions::event::{SessionEvent, SessionState};
 use serde::{Deserialize, Serialize};
 
 /// Header payload for the shell. Pinned by `contract/fixtures/app-info.json`.
@@ -45,12 +44,17 @@ impl<T> EventEnvelope<T> {
 #[serde(rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
-    pub harness: String,
-    /// Forward-slash working directory the harness runs in.
+    /// The provider this session talks to (`anthropic`, `openai`, `google`, `openrouter`).
+    pub provider: String,
+    /// Forward-slash working directory the agent runs in.
     pub cwd: String,
     pub model: Option<String>,
     pub title: String,
     pub status: SessionState,
+    /// The workspace project this session belongs to, or `None` for a loose chat.
+    pub project_id: Option<String>,
+    /// True while a permission request is waiting for the user.
+    pub awaiting: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -71,29 +75,77 @@ pub struct SessionSummary {
 pub struct SessionDetail {
     #[serde(flatten)]
     pub session: Session,
-    pub events: Vec<HarnessEvent>,
-}
-
-/// A registered harness and its honest capabilities, for the session picker.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HarnessInfo {
-    pub id: String,
-    pub capabilities: Capabilities,
+    pub events: Vec<SessionEvent>,
 }
 
 /// Arguments to `session_create`. `cwd` falls back to the process directory, then the app data dir.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
-    pub harness: String,
+    /// The provider to run the session on. Empty means "the configured default provider".
+    pub provider: String,
     #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
-    /// Adapter-specific config from settings. Tests pass `chunkDelayMs` to the mock harness.
+    /// The project this session belongs to; when set, `cwd` resolves from it.
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// A worktree checkout to run in; only meaningful with `project_id`.
+    #[serde(default)]
+    pub worktree_path: Option<String>,
+    /// provider config from settings. The runtime reads `maxSteps` from here.
     #[serde(default)]
     pub config: Option<serde_json::Value>,
+}
+
+/// A workspace project: a folder the user added, with the git facts the tree needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    /// Forward-slash absolute path, as the user picked it.
+    pub path: String,
+    /// `owner/name`, or `None` when the folder has no git remote.
+    pub remote: Option<String>,
+    /// Branch new sessions branch from / PRs target; `None` for a non-git folder.
+    pub default_branch: Option<String>,
+    pub is_git: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// What detection reports about a folder before it becomes a project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDetection {
+    pub path: String,
+    pub is_git: bool,
+    pub current_branch: Option<String>,
+    pub branches: Vec<String>,
+    pub default_branch: Option<String>,
+    pub remote: Option<String>,
+}
+
+/// One folder in the add-project picker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntry {
+    pub name: String,
+    /// Forward-slash absolute path of the folder.
+    pub path: String,
+}
+
+/// One level of directories, for the add-project picker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirListing {
+    /// Forward-slash absolute path of the listed folder.
+    pub path: String,
+    /// Parent folder, or `None` at a filesystem root.
+    pub parent: Option<String>,
+    pub dirs: Vec<DirEntry>,
 }

@@ -8,24 +8,27 @@ parent: grove-goal-and-requirements
 
 # Grove — architecture
 
-Settles the four questions `goal-and-requirements.md` left open (session persistence format,
-diff/spec rendering component, the IPC contract across Rust core / Node sidecar / webview, and the
-adapter interface shape), plus the repository shape the first build is cut into.
+Settles the questions `goal-and-requirements.md` leaves open (session persistence format,
+diff/spec rendering component, the IPC contract across Rust core / webview, and the provider interface
+shape), plus the repository shape the build is cut into.
 
 ## Shape in one paragraph
 
-A Tauri 2 application. The **webview** is a React + TypeScript SPA that renders panels and speaks one
-typed IPC contract. The **Rust core** (`crates/grove-core`) owns everything durable and every external
-process: adapters, sessions, SQLite, spec indexing, plans, skills, MCP, git, secrets. The **Tauri app**
-(`apps/desktop/src-tauri`) is a thin shell: window, IPC command surface, event fan-out. A **Node
-sidecar** exists only for harnesses whose SDK is JS-only (`pi`); it speaks newline-delimited JSON-RPC
-and is replaceable by any process that speaks the same protocol.
+A Tauri 2 application. The **webview** is a React + TypeScript SPA that renders the three-column
+workspace and speaks one typed IPC contract. The **Rust core** (`crates/grove-core`) owns everything
+durable and every external call: projects, providers, the agent runtime, sessions, SQLite, spec
+indexing, plans, skills, MCP, git, secrets. The **Tauri app** (`apps/desktop/src-tauri`) is a thin
+shell: window, IPC command surface, event fan-out.
+
+There is no agent CLI and no sidecar. Grove runs the agent itself: a session picks a provider, a model
+and an API key, and the runtime streams the turn and executes tools in-process. See ADR 0003.
 
 ```
 ┌──────────────────────────── webview (React/TS) ────────────────────────────┐
-│ panels: Sessions · Skills · Specs · Plan · MCP · Git · Settings            │
-│ stores (zustand)  ◄── events ──┐        ── invoke() ──┐                    │
-└────────────────────────────────┼──────────────────────┼────────────────────┘
+│ titlebar · project tree · chat · context (Git · Plan · Spec) · status bar  │
+│ settings sheet (General · Theme · Skills · Providers · MCP)                │
+│ workspace stores (zustand)  ◄── events ──┐   ── invoke() ──┐               │
+└────────────────────────────────────────────┼─────────────────┼─────────────┘
                                  │ grove:// event bus   │ Tauri commands
 ┌────────────────────────────────┴──────────────────────┴────────────────────┐
 │ apps/desktop/src-tauri   thin shell: AppState, command modules, emit       │
@@ -33,18 +36,18 @@ and is replaceable by any process that speaks the same protocol.
                                  │ Rust calls
 ┌────────────────────────────────┴───────────────────────────────────────────┐
 │ crates/grove-core                                                          │
-│  sessions ── adapters (mock · claude · codex · acp · opencode · pi)        │
+│  sessions ── providers (anthropic · openai · google · openrouter)          │
 │  store(SQLite) · specgraph · plan · skills · mcp · gitops · secrets        │
 └────────────────────────────────┬───────────────────────────────────────────┘
-                                 │ stdio / HTTP+SSE / JSON-RPC
-                     harness CLIs, ACP agents, opencode serve, node sidecar
+                                 │ HTTPS + SSE
+                        vendor APIs (Anthropic · OpenAI · Google · OpenRouter)
 ```
 
 ## Repository layout
 
 ```
 Cargo.toml                     workspace: crates/grove-core, apps/desktop/src-tauri
-package.json                   npm workspaces: apps/desktop, sidecar, packages/contract
+package.json                   npm workspaces: apps/desktop, packages/contract
 architecture.md                this file
 goal-and-requirements.md       the goal spec
 AGENTS.md                      agent guide (tracker/domain pointers)
@@ -52,120 +55,134 @@ GLOSSARY.md                    the terms this codebase actually uses
 docs/agents/issue-tracker.md   local-markdown tracker convention
 docs/agents/domain.md          domain doc layout
 docs/adr/                      architecture decision records (decisions that changed during the build)
-docs/adapters.md               "add a sixth harness" contributor guide + ACP worked example
-docs/sidecar-protocol.md       Grove Sidecar Protocol v1 — a spec node (grove-sidecar-protocol)
 scripts/check-bundle.mjs       bundle guard run after `npm run build`
-packages/contract/             zod schemas + TS types + fixture validator (UI ↔ core ↔ sidecar)
+packages/contract/             zod schemas + TS types + fixture validator (UI ↔ core)
 contract/fixtures/             golden JSON, written by Rust tests, parsed by TS tests
 crates/grove-core/src/
-  adapters/{mod,registry,support,mock,claude,codex,acp,opencode,pi}.rs
+  providers/{mod,catalog,credentials,wire,anthropic,openai,google,probe,tools,agent,offline}.rs
   sessions/{mod,event,manager,pump,context}.rs
-  store/{mod,db,repos,plans,pins}.rs
+  projects/mod.rs                 workspace folders + folder browsing
+  store/{mod,db,repos,plans,pins,projects}.rs
   specgraph/{mod,frontmatter,index,watch}.rs
   plan/{mod,service,mirror}.rs
   skills/{mod,catalog,targets,install}.rs
   mcp/{mod,discover,probe}.rs
   gitops/{mod,types,repo,diff,pr}.rs
-  secrets/mod.rs  harness_doctor.rs  settings/mod.rs
+  secrets/mod.rs  settings/mod.rs
   ipc/{mod,types,error}.rs       command DTOs + event envelope
-crates/grove-core/tests/         integration tests (spawn fake harnesses; per-adapter restart matrix)
-fixtures/harnesses/*.mjs         scripted fake CLIs, a real loopback HTTP+SSE server, and a sidecar host
-apps/desktop/src/                React UI
+crates/grove-core/tests/         integration tests (wiremock vendor fakes, tempfile projects)
+apps/desktop/src/                React UI: shell/, session/, context/, settings/, dialogs/, workspace/, state/
+apps/desktop/src/styles/         themes.css (token contract) · design.css (shell) · extras.css · fonts/
+apps/desktop/tools/              visual screenshot harness (not part of `npm test`)
 apps/desktop/src-tauri/src/
-  lib.rs main.rs state.rs events.rs commands/{mod,app,sessions,plan,specs,skills,mcp,git,settings}.rs
-sidecar/src/{main,rpc,pi_host}.ts
+  lib.rs main.rs state.rs events.rs commands/{mod,app,projects,sessions,plan,specs,skills,mcp,git,settings}.rs
 .github/workflows/ci.yml
 .scratch/grove/issues/           the ticket files
 ```
 
-## The adapter contract (settled)
+## The provider contract (settled)
 
-An adapter is the **only** place a harness's protocol is known. Adapters depend on `adapters::mod`
-(the contract), `sessions::event`, `ipc` DTOs and generic crates. An adapter **must not** import
-another adapter, `tauri`, or any UI-facing module. The registry is a plain function, so adding a
-harness is one module + one registry line + fixtures — no UI change.
+A provider module is the **only** place one vendor's HTTP API is known. Providers depend on
+`providers::mod` (the contract), `sessions::event`, the IPC DTOs and generic crates. A provider
+**must not** import another provider, `tauri`, or any UI-facing module. The catalog is a plain
+function, so adding a vendor is one module + one catalog entry + fixtures — no UI change.
 
 ```rust
-pub struct HarnessId(pub &'static str); // "mock" | "claude" | "codex" | "acp" | "opencode" | "pi"
-
-#[derive(Clone, serde::Serialize)]
-pub struct Capabilities {
-    pub streaming_deltas: bool, pub tool_calls: bool, pub diffs: bool,
-    pub permissions: bool, pub resume: bool, pub images: bool,
-    pub mcp: bool, pub usage: bool,
+pub struct ProviderSpec {                 // what the picker and settings pane read
+    pub id: String, pub name: String, pub short: String, pub tint: String,
+    pub wire: Wire,                       // Anthropic | OpenAi | Google
+    pub base_url: String,
+    pub auth: AuthMethod,                 // ApiKey | SignIn
+    pub key_url: String, pub env_var: String,
+    pub models: Vec<String>, pub default_model: String,
+    pub capabilities: Capabilities,
 }
 
 pub struct StartContext {
-    pub cwd: std::path::PathBuf,
-    pub model: Option<String>,
-    pub prompt: Option<String>,
-    pub resume_token: Option<String>,
-    pub config: serde_json::Value,      // adapter-specific, from settings
-    pub context_files: Vec<ContextDoc>, // pinned specs + plan, already rendered to markdown
+    pub cwd: PathBuf, pub model: Option<String>, pub prompt: Option<String>,
+    pub resume_token: Option<String>, pub config: serde_json::Value, // `maxSteps`
+    pub context_files: Vec<ContextDoc>, /                       // pinned specs + plan, as markdown
 }
 
-pub struct AdapterDeps {
-    pub paths: AppPaths,
-    pub http: reqwest::Client,          // offline sessions never touch it
-    pub secrets: std::sync::Arc<dyn SecretStore>,
-}
+pub struct ProviderDeps { pub paths: AppPaths, pub http: reqwest::Client,
+                          pub secrets: Arc<dyn SecretStore> }
 
 #[async_trait::async_trait]
-pub trait HarnessAdapter: Send + Sync {
-    fn id(&self) -> HarnessId;
-    /// Human name for the doctor and any list that would otherwise show an id. Defaulted to the id,
-    /// overridden per adapter: a sixth harness touches no label `match` anywhere.
-    fn display_name(&self) -> &'static str { self.id().as_str() }
-    /// The harness's own skills directory, home-relative; `None` when it has none (mock, ACP). The
-    /// Skills dropdown is built from the registry, so declaring one is all a new adapter does.
-    fn skills_dir(&self) -> Option<&'static str> { None }
+pub trait AgentProvider: Send + Sync {
+    fn id(&self) -> &str;
+    fn spec(&self) -> &ProviderSpec;
     fn capabilities(&self) -> Capabilities;
-    fn detect(&self, deps: &AdapterDeps) -> Detection;             // installed / version / path
-    async fn start(&self, ctx: StartContext, deps: AdapterDeps)
-        -> Result<Box<dyn HarnessSession>, AdapterError>;
+    fn detect(&self, deps: &ProviderDeps) -> Detection;   // is a credential configured?
+    async fn start(&self, ctx: StartContext, deps: ProviderDeps)
+        -> Result<Box<dyn AgentSession>, ProviderError>;
 }
 
 #[async_trait::async_trait]
-pub trait HarnessSession: Send {
-    fn take_events(&mut self) -> tokio::sync::mpsc::Receiver<HarnessEvent>; // once
-    async fn send(&mut self, input: UserInput) -> Result<(), AdapterError>;
+pub trait AgentSession: Send {
+    fn take_events(&mut self) -> tokio::sync::mpsc::Receiver<SessionEvent>;  // once
+    async fn send(&mut self, input: UserInput) -> Result<(), ProviderError>;
     async fn respond_permission(&mut self, request_id: &str, decision: Decision)
-        -> Result<(), AdapterError>;
-    async fn cancel(&mut self) -> Result<(), AdapterError>;
-    async fn shutdown(&mut self) -> Result<(), AdapterError>;
+        -> Result<(), ProviderError>;
+    async fn cancel(&mut self) -> Result<(), ProviderError>;
+    async fn shutdown(&mut self) -> Result<(), ProviderError>;
     fn resume_token(&self) -> Option<String>;
-    /// Adapters that only learn their conversation id mid-stream expose a shared slot; the session
-    /// pump mirrors it into `sessions.resume_token` as soon as it changes.
     fn resume_token_slot(&self) -> Option<ResumeToken> { None }
 }
 
-pub fn builtin_registry() -> Vec<std::sync::Arc<dyn HarnessAdapter>>;
+pub fn registry() -> Vec<Arc<dyn AgentProvider>>;   // providers::agent
 ```
 
-Adapter rules that keep them isolated:
+Provider rules that keep them isolated:
 
-- **Forward compatible by default.** Unknown notifications/JSON-RPC methods are logged and dropped,
-  never fatal. Protocol drift is a log line, not a crashed session.
-- **No panics on the wire.** Every parse error becomes `HarnessEvent::Error` or `AdapterError`.
-- **Capability honesty.** A capability is `true` only when the adapter emits that event kind; the UI
-  degrades from `Capabilities`, never from the harness name.
-- **Explicit command override.** Each adapter reads `config.command` (and `config.args`) through
-  `adapters::support::command_from_config`, so a user or a test can point it at any binary; tests always
-  do. A path configured in Settings reaches that field too (see §Session runtime → "Configured harness
-  paths"). Detection never blocks starting a session.
-- **One copy of each helper.** `adapters/support.rs` owns `find_on_path`, `render_prompt`, `truncate`,
-  `command_from_config`, `kill_tree_by_pid` and `kill_process_tree`. They were byte-identical copies in
-  five adapters, which is how a Windows `taskkill` fix silently misses four harnesses.
+- **One wire format, one client.** `anthropic.rs`, `openai.rs` and `google.rs` each own request
+  encoding and stream decoding behind `wire::StreamDecoder`. OpenAI and OpenRouter share the OpenAI
+  client and differ only by catalog entry.
+- **Forward compatible by default.** Unknown stream frames are dropped, not fatal: a vendor adding an
+  event must degrade to a missing detail, never a dead session.
+- **No panics on the wire.** Every parse error becomes `ProviderError`, which the runtime turns into a
+  transcript `error` row.
+- **Capability honesty.** A capability is `true` only when the runtime really emits that event kind;
+  the UI degrades from `Capabilities`, never from the provider name.
+- **Credentials fail fast.** `start` resolves the key before the first request, so a missing key is a
+  clear `unavailable` at launch instead of an error after the user typed a message.
+- **One copy of each helper.** `providers/wire.rs` owns SSE framing, auth headers and API-error
+  wording, so a fix to the header shape cannot miss a vendor.
+
+## The agent runtime (settled)
+
+`providers/agent.rs` runs one conversation. A turn is spawned rather than awaited inside
+[`AgentSession::send`], because the session manager serializes commands with a mutex: a turn that ran
+under that lock would make `cancel` unreachable. Turns are still serialized against each other by the
+session's own gate.
+
+Ordering is the transcript's contract:
+
+```
+status busy → delta* → message(assistant) → tool_call → permission_request →
+  permission_resolved → tool_result → diff? → (next turn) → usage → status idle
+```
+
+- **Tools** (`providers/tools.rs`): `read_file`, `list_dir`, `grep`, `write_file`, `edit_file`,
+  `run_command`. Paths resolve against the session's working directory; `..`, an absolute path outside
+  it, and a symlink escape are refused.
+- **Approval** is a property of the tool name, not something the model can influence.
+  `needs_approval` covers the three mutating tools; the runtime parks the call on a `oneshot` channel
+  until `respond_permission` resolves it, and a denied call becomes an error tool result the model
+  reads and adapts to.
+- **The loop is bounded** by `maxSteps` (default 24, from `StartContext.config`), so a model that
+  never converges stops and says so instead of spending indefinitely.
+- **Cancellation** aborts the turn task, denies every parked approval, and emits `status idle`, so the
+  session is never left `busy`.
 
 ## Normalized event model (settled)
 
-Every harness reduces to one event enum, persisted and streamed to the UI unchanged. This is the
-contract that makes five harnesses one interface.
+Every provider reduces to one event enum, persisted and streamed to the UI unchanged. This is the
+contract that makes four vendors one interface.
 
 ```rust
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventKind {
-    SessionStarted { harness: String, model: Option<String>, resumed: bool },
+    SessionStarted { provider: String, model: Option<String>, resumed: bool },
     Delta { text: String },
     Message { role: Role, blocks: Vec<Block> },        // Block: Text | Thinking | Code
     ToolCall { call_id: String, name: String, title: String },
@@ -176,66 +193,51 @@ pub enum EventKind {
     Usage { input_tokens: u64, output_tokens: u64 },
     Status { state: SessionState },                    // starting|ready|busy|idle|exited|error
     Error { message: String, retryable: bool },
-    // Additive (ticket 14): the session's knowledge was assembled and handed to a harness. The
-    // transcript renders `note`; `documents` is exactly what the harness received.
-    ContextRefreshed { reason: ContextReason, harness: String,
+    ContextRefreshed { reason: ContextReason, provider: String,
                        documents: Vec<ContextDocument>, note: String },
 }
 
-pub struct HarnessEvent { pub at: String /* RFC3339 */, pub kind: EventKind }
+pub struct SessionEvent { pub at: String /* RFC3339 */, pub kind: EventKind }
 ```
 
 ## Session runtime
 
-`SessionManager` owns live sessions: adapter process + a pump task per session. The pump drains the
-adapter's receiver, appends to the SQLite event log, broadcasts on the in-process bus, and mirrors the
-resume token — watching the adapter's shared slot, so an id learned mid-stream (Claude's `session_id`
-arrives on the first line) is persisted. Commands (`send`, `cancel`, `respond_permission`) go through
-the manager, which holds a `tokio::sync::Mutex` per session so no two commands interleave on one stdio
-pipe.
+`SessionManager` owns live sessions: the agent handle + a pump task per session. The pump drains the
+agent's receiver, appends to the SQLite event log, broadcasts on the in-process bus, and mirrors the
+resume token — watching the runtime's shared slot, so an id learned mid-stream is persisted. Commands
+(`send`, `cancel`, `respond_permission`) go through the manager, which holds a `tokio::sync::Mutex` per
+session so no two commands interleave.
 
-**Configured harness paths (settings → session).** `StartContext.config` is "adapter-specific, from
-settings", and the one key every process-backed adapter reads is `config.command`. The manager resolves
-it through the `AdapterConfigSource` port (`GroveCore::assemble` wires the settings-backed
-`HarnessPathSource`), with **explicit precedence**: a `config.command` on the create request — which is
-also what the row stores — always wins; otherwise `Settings.harness_paths[harness]` fills it in; every
-other key is passed through untouched. The resolution runs on each launch (create, resume, harness
-switch), so changing a path in Settings applies to the next start of an existing conversation. That is
-also what makes the ACP adapter, which has no default binary, startable from the UI at all.
-
-**Answering a permission request.** Codex and ACP emit `PermissionRequest` and claim
+**Answering a permission request.** The runtime emits `PermissionRequest` and claims
 `capabilities.permissions`, so the request has to be answerable: it renders as a card in the transcript
 with Approve/Deny, and those buttons call `session_respond_permission(id, requestId, decision)` →
-`SessionManager::respond_permission` → the adapter's protocol (Codex's `accept`/`decline`, ACP's
-`selected`/`cancelled`). The answer travels under the session's command lock, like every other command.
-The buttons disappear when `permission_resolved` arrives, not when the click happens: what the UI shows
-is what the harness accepted. An adapter that does not claim `permissions` answers `Unsupported`, and
-the UI never offers buttons for a request the harness cannot hear.
+`SessionManager::respond_permission` → the parked tool call. The buttons disappear when
+`permission_resolved` arrives, not when the click happens: what the UI shows is what the runtime
+accepted.
 
-**Restart survival.** Sessions are rows, not processes. `session_resume(id)` restarts the adapter with
-the stored `resume_token` (Claude `--resume`, Codex `thread/resume`, OpenCode session id, ACP session id,
-pi's session file path). If an adapter has no resume capability, Grove replays the conversation tail as
-context — the log is already local, so the plan and history survive either way.
+**Restart survival.** Sessions are rows, not processes. `session_resume(id)` restarts the agent with
+the stored `resume_token` when the provider offers one, otherwise Grove replays the conversation tail
+as context — the log is already local, so the plan and history survive either way.
 
-**Session knowledge (ticket 14).** Start, resume and harness switch assemble `StartContext.context_files`
-from the session's pinned specs (in pin order) followed by its current plan, read fresh from the project's
-spec files and `PlanService`. `sessions/context.rs` enforces a per-document and a total character budget
-and appends an explicit `[truncated: <n> of <total> chars omitted]` marker to any document it cuts; a
-document that cannot fit is dropped and counted. The assembled context is a **snapshot**: nothing re-reads a spec on a
-timer, so an edit cannot silently change a running conversation.
+**Session knowledge.** Start, resume and provider switch assemble `StartContext.context_files` from
+the session's pinned specs (in pin order) followed by its current plan, read fresh from the project's
+spec files and `PlanService`. `sessions/context.rs` enforces a per-document and a total character
+budget and appends an explicit `[truncated: <n> of <total> chars omitted]` marker to any document it
+cuts; a document that cannot fit is dropped and counted. The assembled context is a **snapshot**:
+nothing re-reads a spec on a timer, so an edit cannot silently change a running conversation.
 
 Two runtime operations move it, and both are visible in the transcript as a `ContextRefreshed` note:
 
 - `session_refresh_context(id)` re-reads pins and plan, pushes the rendered documents into the **running**
   session as a turn, and records what was sent.
-- `session_switch_harness(id, harness)` re-launches the same conversation on another registered harness
-  with the same context documents plus a transcript summary (`render_tail`) as its prompt, keeping the
-  transcript and dropping the old harness's resume token and model.
+- `session_switch_provider(id, provider, model)` re-launches the same conversation on another registered
+  provider with the same context documents plus a transcript summary (`render_tail`) as its prompt,
+  keeping the transcript and dropping the old resume token and model.
 
-The manager talks to knowledge through the `ContextSource` port, so it never imports the spec graph or the
-plan service; `GroveCore::assemble` wires the real `SessionContextService` onto `GroveCore::context`. Pins
-live in the `pins` table, are toggled from the Specs panel for the session the Sessions panel has open,
-and survive a restart.
+The manager talks to knowledge through the `ContextSource` port, so it never imports the spec graph or
+the plan service; `GroveCore::assemble` wires the real `SessionContextService` onto `GroveCore::context`.
+Pins live in the `pins` table, are toggled from the Specs panel for the session the Sessions panel has
+open, and survive a restart.
 
 **One notion of "the project".** `GroveCore::project_root` is a `ProjectRoot` — a shared
 `Arc<RwLock<PathBuf>>` — and a session's `cwd` decides it: the shell calls `app_set_project_root` (or
@@ -250,18 +252,23 @@ stale project and no service has to be rebuilt. `GROVE_PROJECT_ROOT` (else the p
 SQLite via `rusqlite` (`bundled`, no system dependency), one file at the Tauri app-data dir:
 `%APPDATA%/Grove/grove.db`. Migrations are an ordered `&[&str]` applied under
 `schema_migrations(version)`; later domains append rather than edit an earlier migration, so an
-existing install upgrades in place. Four migrations shipped in the first build:
+existing install upgrades in place. Six migrations have shipped:
 
-| # | Tables | Feature |
+| # | Tables / columns | Feature |
 |---|---|---|
-| 1 | `sessions`, `events`, `events_by_session` | session runtime (ticket 02) |
-| 2 | `plans` (+ `mirror_hash`) | TODO plan and mirror (ticket 09) |
-| 3 | `settings` | typed settings documents (ticket 07) |
-| 4 | `pins` | specs pinned to a session (ticket 14) |
+| 1 | `sessions`, `events`, `events_by_session` | session runtime |
+| 2 | `plans` (+ `mirror_hash`) | TODO plan and mirror |
+| 3 | `settings` | typed settings documents |
+| 4 | `pins` | specs pinned to a session |
+| 5 | `projects`, `sessions.project_id`, `sessions.awaiting` | workspace tree and "needs you" |
+| 6 | `sessions.provider` (renamed from `harness`) | providers replace harnesses (ADR 0003) |
 
 ```sql
-sessions(id TEXT PK, harness TEXT, cwd TEXT, model TEXT, title TEXT, status TEXT,
-         adapter_config TEXT, resume_token TEXT, created_at TEXT, updated_at TEXT)
+projects(id TEXT PK, name TEXT UNIQUE, path TEXT UNIQUE, remote TEXT, default_branch TEXT,
+         is_git INTEGER, created_at TEXT, updated_at TEXT)
+sessions(id TEXT PK, provider TEXT, cwd TEXT, model TEXT, title TEXT, status TEXT,
+         adapter_config TEXT, resume_token TEXT, project_id TEXT REFERENCES projects(id),
+         awaiting INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT)
 events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, at TEXT,
        kind TEXT, payload TEXT)                       -- payload = full EventKind JSON
 plans(session_id TEXT PK, markdown TEXT, version INTEGER, mirror_hash TEXT, updated_at TEXT)
@@ -269,14 +276,14 @@ pins(session_id TEXT, spec_id TEXT, PRIMARY KEY(session_id, spec_id))
 settings(key TEXT PK, value TEXT)                     -- JSON; never secrets
 ```
 
-**Files stay the source of truth where they already are.** Specs are repo `.md` files; skills live in
-each harness's own directory; the git repo is git. The DB holds only what has no file home: sessions,
-the event log, plan versions, pins, settings. Skill installs are a JSON file under the app-data dir
-behind the `InstallStore` trait (the SQL shape below is the reserve, not a migration):
+`projects` holds only what cannot be read back from disk; worktrees are read from `git worktree list`
+on demand, because git owns checkout state. `awaiting` is mirrored by the pump from permission events,
+so the tree and titlebar can say "needs you" without reading a transcript.
 
-```sql
-installs(skill TEXT, harness TEXT, path TEXT, installed_at TEXT, PRIMARY KEY(skill, harness, path))
-```
+**Files stay the source of truth where they already are.** Specs are repo `.md` files; the git repo is
+git. The DB holds only what has no file home: sessions, the event log, plan versions, pins, settings,
+and project rows. Provider API keys live in the OS keychain, never here. Skill installs are a JSON file
+under the app-data dir behind the `InstallStore` trait.
 
 **Plan dual-edit.** SQLite is the record; every write also mirrors `.grove/sessions/<id>/plan.md` in the
 project (gitignored), atomically (temp file + rename). `mirror_hash` holds the content the record last
@@ -293,13 +300,18 @@ visible without a native watcher. Human and agent edits both move `version`, so 
 Two channels, both typed in `packages/contract`:
 
 1. **Commands** — `invoke(name, payload)` returning `Result<T, IpcError>`; names are
-   `<domain>_<verb>` (`session_create`, `plan_set`, `spec_index`, `git_diff`, `skill_install`, …).
-   Errors: `{ code: "conflict" | "not_found" | "invalid" | "unavailable" | "io", message, detail? }`.
+   `<domain>_<verb>` (`session_create`, `plan_set`, `spec_index`, `git_diff`, `skill_install`,
+   `provider_key_set`, …). Errors: `{ code: "conflict" | "not_found" | "invalid" | "unavailable" | "io",
+   message, detail? }`.
 2. **Events** — Tauri events named `grove://<domain>` with envelope `{ sessionId?, payload }`:
    `grove://session-event`, `grove://plan-changed`, `grove://spec-changed`, `grove://git-changed`.
    There is deliberately no separate status channel: a session's state rides in the `status` event kind
    inside `grove://session-event`, so there is one stream to persist, order and replay. Every channel
    above has a subscriber in `apps/desktop/src/ipc/events.ts` — an event nobody listens to is a bug.
+
+**Provider commands.** `provider_list` (catalogue), `provider_statuses` (credential readiness),
+`provider_key_set` / `provider_key_delete` (keychain writes; neither returns a value) and
+`provider_models` (asks the vendor which models the key can reach — the settings pane's "test" button).
 
 **Drift control without codegen.** `contract/fixtures/<domain>.<case>.json` holds canonical payloads.
 A Rust test serialises a representative sample per DTO and asserts equality with the file; a TS test in
@@ -314,38 +326,29 @@ Command rejections are normalised once, in `apps/desktop/src/ipc/errors.ts`: the
 `{ code, message, detail }` with a message that is never empty. Panels print `errorText(error)` and Git
 renders the code beside the message; no panel formats a rejection itself.
 
-## Sidecar protocol (settled)
-
-`docs/sidecar-protocol.md` defines **Grove Sidecar Protocol v1**: newline-delimited JSON-RPC 2.0 over
-stdio. It is a registered spec node (`grove-sidecar-protocol`, type `architecture-design`, parent
-`grove-architecture`) — not a loose design doc — so the spec graph and every panel that reads it show
-the protocol as part of this architecture. `tests/specgraph.rs` pins the tree it contributes.
-
-- `initialize {protocolVersion:1}` → `{version, harnesses:[...]}`
-- `session.start {sessionId, cwd, model?, prompt?, resumeToken?, config?, context?}` → `{resumeToken?}`
-- `session.send {sessionId, text}`, `session.permission {sessionId, requestId, decision}`,
-  `session.cancel {sessionId}`, `session.stop {sessionId}`
-- notification `session.event {sessionId, event}` — **already-normalized `HarnessEvent`**, because the
-  harness's wire format is known only to the sidecar. Rust re-validates with serde and drops malformed ones.
-
-The `pi` adapter is a host for this protocol, so the sidecar is swappable and the adapter is testable
-against `fixtures/harnesses/pi_sidecar_fake.mjs`. The sidecar fronts pi's RPC mode (`pi --mode rpc`,
-strict JSONL split on `\n` only): an RPC CLI is the stable surface, and an optional SDK path is future
-work rather than a first-build requirement. The decision and the alternatives are recorded in
-`docs/adr/0001-harness-protocols-and-sidecar.md`.
-
 ## Rendering (settled)
 
-- **Diffs and spec editing:** Monaco (`@monaco-editor/react`), lazy-loaded on first open, diff editor
-  for patches, plain editor for specs. Never mounted for anything else.
-- **Spec reading and chat markdown:** `markdown-it` with HTML disabled — render, don't execute.
-- **Lists:** `@tanstack/react-virtual` for the event list; panels mount only when active (state lives
-  in stores), which is the memory strategy for the ~200 MB idle goal.
-- **Build guard:** `scripts/check-bundle.mjs` runs after `npm run build` and fails if Monaco ended up
-  in the entry chunk instead of a lazy one. The manual reasoning is in README §Performance notes.
-- **State:** `zustand` stores per domain; no global event bus in the UI beyond the IPC listener.
-- **Styling:** CSS custom properties in `styles/tokens.css` + one CSS file per panel. No UI kit, no
-  Tailwind — keeps the bundle and the conflict surface small.
+The shipped shell is the three-column workspace from `design-reference/`; ADR 0002 records why the
+seven-panel shell and the spec/plan editors were retired.
+
+- **Shell:** titlebar · 272px project tree · always-mounted chat · 304px context column
+  (Git · Plan · Spec) · status bar. Below 900px the three columns become Navigation · Session ·
+  Context tabs. The centre never swaps for another product surface.
+- **Transcript:** `@tanstack/react-virtual` mounts only the rows in view, so a 10 000-event session
+  costs the same as a short one. Tool cards, diffs and permission cards are transcript rows, not
+  separate panels.
+- **Context views are read-only:** git status/staging/commit/PR, a plan checklist, and a spec peek.
+  There is no in-app spec or plan editor and therefore no code editor in the webview.
+- **Dialogs:** native `<dialog>` with `showModal()` for the settings sheet, new session, add project,
+  diff and pull request, so focus trapping and Escape come from the platform.
+- **Build guard:** `scripts/check-bundle.mjs` runs after `npm run build`, fails if Monaco reappears in
+  the entry chunk or the entry chunk exceeds 600 kB, and reports the largest lazy chunks.
+- **State:** `zustand` stores per domain (`sessionStore` for the transcript, `workspaceStore` for
+  projects/preferences/theme, `contextStore` for git/plan/specs, `skillsStore`, `uiStore`); no global
+  event bus beyond the IPC listener.
+- **Styling:** the exported token contract in `styles/themes.css` (seven themes × dark/light) plus
+  `styles/design.css` for the shell. Components consume tokens only; no UI kit, no Tailwind. Theme
+  fonts are vendored latin subsets, and the saved theme is applied before first paint.
 
 ## Subsystems
 
@@ -355,58 +358,58 @@ work rather than a first-build requirement. The decision and the alternatives ar
   concurrency). `notify` watcher emits `grove://spec-changed`, which the Specs panel subscribes to and
   answers with a debounced re-index (one save costs one pass, a burst costs one pass). The Git panel
   reads a pinned spec beside the diff, so the change and the intent that asked for it are in one view.
-  The index root is `GroveCore::project_root` — the active session's directory, seeded by
-  `GROVE_PROJECT_ROOT`, else the process working directory — and is returned as `SpecGraph.root`, so
-  every panel shares one notion of "the project".
+  The index root is `GroveCore::project_root`, returned as `SpecGraph.root`, so every panel shares one
+  notion of "the project".
 - **plan** — see dual-edit above; `PlanService` owns version bumps and mirror writes.
 - **skills** — sources are GitHub repos (default `anthropics/skills`, `mattpocock/skills`); fetch the
   repo tree, keep entries with a `SKILL.md`, cache the manifest with a TTL and serve it offline.
-  `skill_targets()` lists per-harness directories plus project-local `.agents/skills`; the harness rows
-  come from `builtin_registry()` (each adapter's `display_name()` and `skills_dir()`) and the local one
-  follows `GroveCore::project_root`, so a sixth harness appears in the dropdown by declaring its
-  directory and nothing else.
-  Install copies the folder, refuses `..` traversal and symlink escapes, records the install in a JSON
-  file under the app-data dir (behind `InstallStore`; the `installs` SQL shape is reserved for a later
-  migration). A GitHub token is optional and lives in the keychain.
-- **mcp** — discover server definitions from `.mcp.json`, `~/.claude.json`, `~/.codex/config.toml`,
-  `opencode.json` and adapter config; normalise to `{name, source, transport, command/url}`. Probing
-  (spawn stdio server → `initialize` + `tools/list`, or HTTP `tools/list`) is **explicit**, never
-  automatic: spawning third-party servers is a side effect.
+  `skill_targets()` lists the two places Grove's own agent reads a skill from: the user's
+  `~/.grove/skills` and the project-local `.agents/skills`. Install copies the folder, refuses `..`
+  traversal and symlink escapes, records the install, and removal deletes only a recorded folder under
+  a known target. A GitHub token is optional and lives in the keychain.
+- **mcp** — discover server definitions from `.mcp.json`, `opencode.json` and provider config;
+  normalise to `{name, source, transport, command/url}`. Probing (spawn stdio server → `initialize` +
+  `tools/list`, or HTTP `tools/list`) is **explicit**, never automatic: spawning third-party servers is
+  a side effect.
+- **projects** — a folder the user added, with the git facts detected at add time (`is_git`,
+  `default_branch`, normalized `owner/name` remote). `fs_list_dirs` lists one level for the picker;
+  adding a project backfills `sessions.project_id` for conversations that already ran in the folder or
+  one of its worktrees. Worktrees themselves stay in git.
 - **gitops** — shell out to `git` (no libgit2): `rev-parse --show-toplevel`, status, branches,
-  worktrees, unified diff per file/branch, commit with paths, and `gh pr create --draft` returning the
-  URL. Git and `gh` presence are reported by the doctor, not assumed.
+  worktrees, unified diff per file/branch, stage/unstage selected paths, commit with paths, create a
+  branch plus worktree, and `gh pr create` (draft or ready) returning the URL.
 - **secrets** — `keyring` crate behind `trait SecretStore` (`get/set/delete/status`); the DB only ever
   stores a key *name*. Tests use `MemorySecretStore`; one opt-in integration test touches the real
   Windows Credential Manager.
-- **harness_doctor** — resolve binaries (configured path, else `PATH`), `--version`, plus node presence
-  for the sidecar. Powers the Settings panel and explains an `unavailable` adapter instead of failing
-  at session start. Its harness rows and labels come from the adapter registry, never from a list of
-  names in the doctor.
+- **providers** — the catalog, credentials, the three wire clients, the tool sandbox and the agent
+  runtime described above.
 
 ## Extension seams (single-line conflicts, resolved at merge)
 
-Adding a feature touches one shared list each. Keep edits to one line per file:
+Adding a feature touches one shared list each. Keep edits to one line per file. A provider needs one
+more: `crates/grove-core/src/providers/catalog.rs` is authoritative for models, auth and default model,
+while `apps/desktop/src/workspace/models.ts` holds only a presentation fallback (mark, tint, known
+models) so a row renders before the catalogue has loaded; an unknown id degrades to its initials.
 
 | Seam | File |
 |---|---|
 | Service wiring | `crates/grove-core/src/lib.rs` (`GroveCore` fields) |
 | Commands | `apps/desktop/src-tauri/src/commands/mod.rs` (`invoke_handler!` list) |
-| Adapters | `crates/grove-core/src/adapters/registry.rs` |
-| UI panels | `apps/desktop/src/panels/registry.ts` |
+| Providers | `crates/grove-core/src/providers/catalog.rs` |
+| UI surfaces | `apps/desktop/src/App.tsx` (titlebar, tree, chat, context, status, dialogs) |
 | Dependencies | root `Cargo.toml`, root `package.json`, `apps/desktop/package.json` |
 
 ## Testing
 
-- **Rust:** unit tests next to modules; integration tests in `crates/grove-core/tests/` spawn fake
-  harnesses from `fixtures/harnesses/*.mjs` (Node is already a dependency of the build). No test talks
-  to the network: `opencode`/skills/git tests point at fakes or `tempfile` repos. Three cross-cutting
-  suites pin the release promise: `adapters_conformance.rs` (every registered adapter),
-  `adapters_restart.rs` (create → send → close → reopen → resume per adapter, transcript intact and
-  resume token reused) and `offline.rs` (all six fake harnesses plus the cached skill catalog with
-  `HTTP(S)_PROXY` pointed at a black hole and `NO_PROXY` empty).
+- **Rust:** unit tests next to modules; integration tests in `crates/grove-core/tests/`. No test talks
+  to a real vendor: the wire clients are exercised against `wiremock` servers and recorded frames, and
+  the agent loop against the offline provider. `adapters_*`-style conformance suites are gone with the
+  adapters; `session_runtime.rs`, `session_restart.rs` and `session_context.rs` pin the runtime,
+  restart and knowledge behaviours against the offline provider.
 - **Contract:** fixtures as described; both sides parse them.
 - **TS:** `vitest` + `@testing-library/react` against a `FakeBridge` implementing the same typed bridge
-  the app uses; sidecar tests drive `rpc.ts` with a fake pi runtime.
+  the app uses. `apps/desktop/tools/visual.test.tsx` (not in `npm test`) renders the built shell into
+  `dist/visual-*.html` for screenshot comparison across the viewport matrix.
 - **CI:** `.github/workflows/ci.yml`, `windows-latest`: `npm ci`, `npm run typecheck`, `npm test`,
   `npm run build` (which ends with the bundle guard), `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test -p grove-core`,
@@ -417,13 +420,18 @@ Adding a feature touches one shared list each. Keep edits to one line per file:
 ## Windows-first, offline, security
 
 - Windows is the build target; paths go through `AppPaths`, never string-concatenated separators.
-- Sessions never require the network. Only the skill catalog fetches, and it serves cache when offline.
-- Tokens/keys go to the OS keychain. `settings` JSON is asserted secret-free by test.
-- No model calls are proxied by Grove — adapters launch the user's own CLI/SDK and inherit its auth.
+- A session **is** network traffic: it calls the provider the user configured. Nothing else does except
+  the skill catalog, which serves its cache when offline.
+- Keys go to the OS keychain. `settings` JSON is asserted secret-free by test, and no command returns a
+  key value.
+- Grove sends the model request directly with the user's key. There is no Grove service in the middle,
+  no proxy and no account.
 
 ## Open, deliberately
 
-Issue-tracker integration in-app, cloud sync, and remote/mobile access remain out of the first build
-(as the goal spec says). Protocol coverage for `codex`, `acp`, `opencode` and `pi` is validated against
-recorded fixtures and is version-tolerant; a protocol change shows up as a logged warning and a
-degraded capability, not a broken app.
+Issue-tracker integration in-app, cloud sync, and remote/mobile access remain out of the first build.
+Account sign-in is offered by one of the four vendors: Anthropic, OpenAI and Google restrict
+subscription OAuth to their own first-party clients, but OpenRouter documents "Sign In with OpenRouter"
+(a PKCE flow for third-party apps). This build ships API keys for all four; the OpenRouter sign-in flow
+is the documented next step (ADR 0003). `AuthMethod` already carries `SignIn` and `ProviderSpec::auth`
+drives the settings row, so adding it is not a UI change.

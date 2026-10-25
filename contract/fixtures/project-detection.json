@@ -1,0 +1,8 @@
+{
+  "path": "C:/projects/grove",
+  "isGit": true,
+  "currentBranch": "feat/ui",
+  "branches": ["feat/ui", "main"],
+  "defaultBranch": "main",
+  "remote": "acme/grove"
+}

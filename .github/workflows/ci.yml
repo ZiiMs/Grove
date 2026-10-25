@@ -28,13 +28,13 @@ jobs:
       - name: Install workspace
         run: npm ci
 
-      - name: Typecheck (webview, contract, sidecar)
+      - name: Typecheck (webview, contract)
         run: npm run typecheck
 
-      - name: Unit tests (webview, contract, sidecar)
+      - name: Unit tests (webview, contract)
         run: npm test
 
-      - name: Build webview, sidecar, and run the bundle guard
+      - name: Build the webview and run the bundle guard
         run: npm run build
 
       - name: Rust format

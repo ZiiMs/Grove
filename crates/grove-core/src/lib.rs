@@ -4,13 +4,13 @@
 //! `tauri` (asserted by `tests/architecture.rs`) so that the whole product surface stays testable
 //! headlessly, and so the UI shell can be replaced without touching behaviour.
 
-pub mod adapters;
 pub mod gitops;
-pub mod harness_doctor;
 pub mod ipc;
 pub mod mcp;
 pub mod paths;
 pub mod plan;
+pub mod projects;
+pub mod providers;
 pub mod secrets;
 pub mod sessions;
 pub mod settings;
@@ -46,7 +46,9 @@ pub struct GroveCore {
     pub git: gitops::Git,
     /// One versioned TODO plan per session, mirrored into the session's project for the agent.
     pub plan: Arc<plan::PlanService>,
-    /// Pinned specs plus the plan, assembled into the documents a harness receives at start
+    /// Workspace projects: durable folders plus live git detection.
+    pub projects: Arc<projects::ProjectService>,
+    /// Pinned specs plus the plan, assembled into the documents a provider receives at start
     /// (ticket 14). Also the durable side of the pin commands.
     pub context: Arc<sessions::context::SessionContextService>,
     /// The session runtime: adapters, live sessions, and the SQLite transcript.
@@ -57,8 +59,11 @@ pub struct GroveCore {
     pub secrets: Arc<dyn secrets::SecretStore>,
     /// Typed settings; the durable store lives behind [`SessionManager::store`].
     pub settings: Arc<settings::SettingsService>,
-    /// Resolves harness and tool binaries for the Settings panel.
-    pub doctor: Arc<harness_doctor::HarnessDoctor>,
+    /// Provider API keys: the only way a session authenticates. Values live in the keychain; this
+    /// service is the only reader.
+    pub credentials: Arc<providers::credentials::Credentials>,
+    /// Shared HTTP client for provider probe requests. Sessions build their own through the manager.
+    pub http: reqwest::Client,
 }
 
 impl GroveCore {
@@ -66,7 +71,9 @@ impl GroveCore {
     /// stay in memory. The app calls [`GroveCore::init`]; tests and previews that never persist use
     /// this.
     pub fn new(paths: AppPaths) -> Self {
-        let sessions = SessionManager::in_memory(&paths).expect("open the in-memory Grove store");
+        // Previews and tests run the offline provider: no key, no network, real session runtime.
+        let sessions =
+            SessionManager::in_memory_offline(&paths).expect("open the in-memory Grove store");
         let secrets: Arc<dyn secrets::SecretStore> = Arc::new(secrets::MemorySecretStore::new());
         Self::assemble(paths, Arc::new(sessions), secrets)
     }
@@ -75,9 +82,11 @@ impl GroveCore {
     /// Secrets go to the OS keychain through [`secrets::KeychainSecretStore`].
     pub fn init(paths: AppPaths) -> Result<Self, SessionError> {
         paths.ensure()?;
-        let sessions = SessionManager::open(paths.clone())?;
+        // One keychain, handed to both the session runtime and the settings pane: a key saved in
+        // Settings is the key a session authenticates with.
         let secrets: Arc<dyn secrets::SecretStore> =
             Arc::new(secrets::KeychainSecretStore::grove());
+        let sessions = SessionManager::open_with_secrets(paths.clone(), Arc::clone(&secrets))?;
         Ok(Self::assemble(paths, Arc::new(sessions), secrets))
     }
 
@@ -110,7 +119,7 @@ impl GroveCore {
         Ok(specgraph::SpecIndex::load(self.project_root())?.graph())
     }
 
-    /// The skill destinations: each harness's own directory plus the project-local `.agents/skills`.
+    /// The skill destinations: each provider's own directory plus the project-local `.agents/skills`.
     ///
     /// An explicit `project_root` wins (the UI may pass one); otherwise the local target follows the
     /// active session like every other project-scoped thing, instead of resolving against the
@@ -135,15 +144,16 @@ impl GroveCore {
                 .unwrap_or_else(|| PathBuf::from(".")),
         );
         let settings = Arc::new(settings::SettingsService::new(sessions.store()));
-        let doctor = Arc::new(harness_doctor::HarnessDoctor::new(
-            Arc::clone(&settings),
-            Arc::clone(&sessions),
-        ));
+        let credentials = Arc::new(providers::credentials::Credentials::new(Arc::clone(
+            &secrets,
+        )));
         let skills = skills::SkillService::new(paths.clone(), Arc::clone(&secrets));
         let plan = Arc::new(plan::PlanService::new(
             sessions.store(),
             project_root.clone(),
         ));
+        let git = gitops::Git::system();
+        let projects = Arc::new(projects::ProjectService::new(sessions.store(), git.clone()));
         // The session runtime asks this service for its knowledge; the port keeps `sessions` free of
         // the spec graph and the plan. Wiring it here is the one line that makes pinned specs real.
         let context = Arc::new(sessions::context::SessionContextService::new(
@@ -153,12 +163,6 @@ impl GroveCore {
         ));
         sessions
             .set_context_source(Arc::clone(&context) as Arc<dyn sessions::context::ContextSource>);
-        // `StartContext.config` is "adapter-specific, from settings": a harness path configured in
-        // the Settings panel is the command the next session of that harness launches. The manager
-        // sees the port, not the settings store.
-        sessions.set_config_source(Arc::new(settings::HarnessPathSource::new(Arc::clone(
-            &settings,
-        ))));
         // Settings own the catalog sources; apply them at startup so the Skills panel agrees. A bad
         // settings row keeps the built-in defaults instead of blocking the app.
         if let Ok(current) = settings.get() {
@@ -172,7 +176,7 @@ impl GroveCore {
         }
         Self {
             skills: Arc::new(skills),
-            git: gitops::Git::system(),
+            git,
             mcp: Arc::new(mcp::McpService::with_project_root(
                 mcp::McpConfig {
                     project_root: Some(project_root.path()),
@@ -181,14 +185,29 @@ impl GroveCore {
                 project_root.clone(),
             )),
             plan,
+            projects,
             context,
             paths,
             project_root,
             sessions,
             secrets,
             settings,
-            doctor,
+            credentials,
+            http: reqwest::Client::new(),
         }
+    }
+
+    /// The models the credential for `provider` can reach. One small request; used by the settings
+    /// pane's "test key" action and to refresh the model picker from what the account really has.
+    pub async fn provider_models(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<String>, providers::ProviderError> {
+        let spec = providers::catalog::find(provider).ok_or_else(|| {
+            providers::ProviderError::Unavailable(format!("unknown provider: {provider}"))
+        })?;
+        let (key, _) = self.credentials.key(provider)?;
+        providers::probe::list_models(&self.http, &spec, &key).await
     }
 
     /// What the webview shows in its header. Shape is pinned by `contract/fixtures/app-info.json`.

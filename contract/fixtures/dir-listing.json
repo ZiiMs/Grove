@@ -1,0 +1,8 @@
+{
+  "path": "C:/Users/ada/code",
+  "parent": "C:/Users/ada",
+  "dirs": [
+    { "name": "agent-hub", "path": "C:/Users/ada/code/agent-hub" },
+    { "name": "grove", "path": "C:/Users/ada/code/grove" }
+  ]
+}

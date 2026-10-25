@@ -1,12 +1,12 @@
-//! Settings, secrets and the harness doctor.
+//! Settings, secrets and the provider doctor.
 //!
 //! Policy lives in `grove-core`; these handlers only adapt arguments and errors. Secret commands
 //! expose set / status / delete — there is deliberately no command that returns a secret value, and no
 //! handler logs one.
 
 use crate::state::AppState;
-use grove_core::harness_doctor::DoctorReport;
-use grove_core::ipc::{IpcError, IpcResult};
+use grove_core::ipc::{IpcError, IpcResult, ProviderStatus};
+use grove_core::providers::ProviderError;
 use grove_core::secrets::SecretError;
 use grove_core::settings::{SecretStatusView, Settings, SettingsPatch};
 use grove_core::skills::SkillSource;
@@ -89,10 +89,62 @@ pub async fn secret_delete(
     })
 }
 
-/// Probe every harness and the `node`/`git`/`gh` tools. Never fails: a missing binary is a row.
+/// Every provider's readiness: whether a key is configured, and which model a session would use.
 #[tauri::command]
-pub async fn doctor_report(state: tauri::State<'_, AppState>) -> IpcResult<DoctorReport> {
-    Ok(state.core.doctor.report().await)
+pub async fn provider_statuses(
+    state: tauri::State<'_, AppState>,
+) -> IpcResult<Vec<ProviderStatus>> {
+    Ok(state.core.credentials.statuses())
+}
+
+/// Store an API key for one provider. Returns the refreshed row; the value never comes back.
+#[tauri::command]
+pub async fn provider_key_set(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+    key: String,
+) -> IpcResult<ProviderStatus> {
+    state
+        .core
+        .credentials
+        .set(&provider, &key)
+        .map_err(provider_error)?;
+    Ok(state.core.credentials.status(&provider))
+}
+
+/// Remove a stored key. The environment fallback, if any, then applies again.
+#[tauri::command]
+pub async fn provider_key_delete(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+) -> IpcResult<ProviderStatus> {
+    state
+        .core
+        .credentials
+        .delete(&provider)
+        .map_err(provider_error)?;
+    Ok(state.core.credentials.status(&provider))
+}
+
+/// The models the configured key can reach. This is the "test connection" button: it proves the key
+/// by using it, and the picker can then offer what the account actually has.
+#[tauri::command]
+pub async fn provider_models(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+) -> IpcResult<Vec<String>> {
+    state
+        .core
+        .provider_models(&provider)
+        .await
+        .map_err(provider_error)
+}
+
+fn provider_error(error: ProviderError) -> IpcError {
+    match error {
+        ProviderError::Unavailable(message) => IpcError::unavailable(message),
+        other => IpcError::invalid(other.to_string()),
+    }
 }
 
 fn secret_key(key: String) -> IpcResult<String> {

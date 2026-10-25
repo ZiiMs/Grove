@@ -9,7 +9,6 @@ use grove_core::secrets::{MemorySecretStore, SecretStatus, SecretStore, GITHUB_T
 use grove_core::settings::{Settings, SettingsPatch, SettingsService, Theme};
 use grove_core::store::Store;
 use grove_core::GroveCore;
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::field::{Field, Visit};
@@ -26,10 +25,6 @@ fn settings_survive_reopening_the_database() {
         let settings = SettingsService::new(store);
         settings
             .set(SettingsPatch {
-                harness_paths: Some(BTreeMap::from([(
-                    "claude".to_string(),
-                    "C:/Tools/claude.exe".to_string(),
-                )])),
                 catalog_sources: Some(vec!["acme/skills".to_string()]),
                 theme: Some(Theme::Dark),
                 ..Default::default()
@@ -42,10 +37,6 @@ fn settings_survive_reopening_the_database() {
     let current = settings.get().unwrap();
     assert_eq!(current.theme, Theme::Dark);
     assert_eq!(current.catalog_sources, vec!["acme/skills".to_string()]);
-    assert_eq!(
-        current.harness_paths.get("claude").map(String::as_str),
-        Some("C:/Tools/claude.exe")
-    );
 
     // A partial patch keeps the rest, including across the restart.
     let current = settings
@@ -56,7 +47,6 @@ fn settings_survive_reopening_the_database() {
         .unwrap();
     assert_eq!(current.theme, Theme::Light);
     assert_eq!(current.catalog_sources, vec!["acme/skills".to_string()]);
-    assert_eq!(current.harness_paths.len(), 1);
 }
 
 #[test]
@@ -104,10 +94,6 @@ fn no_secret_value_reaches_the_database_or_the_logs() {
         // A realistic settings write while the secret is held: settings must not absorb it.
         settings
             .set(SettingsPatch {
-                harness_paths: Some(BTreeMap::from([(
-                    "claude".to_string(),
-                    "C:/Tools/claude.exe".to_string(),
-                )])),
                 theme: Some(Theme::Dark),
                 ..Default::default()
             })
@@ -143,7 +129,7 @@ fn no_secret_value_reaches_the_database_or_the_logs() {
     );
     // The settings write the test made really is in there, so the scan covers real rows.
     assert!(
-        contains(&bytes, b"harnessPaths"),
+        contains(&bytes, b"theme"),
         "the settings table is part of the scanned bytes"
     );
 }

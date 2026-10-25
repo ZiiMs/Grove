@@ -1,27 +1,9 @@
 [
   {
-    "id": "claude",
-    "label": "Claude Code",
-    "path": "C:/Users/demo/.claude/skills",
+    "id": "user",
+    "label": "Grove skills (this user)",
+    "path": "C:/Users/demo/.grove/skills",
     "exists": true
-  },
-  {
-    "id": "pi",
-    "label": "pi",
-    "path": "C:/Users/demo/.pi/skills",
-    "exists": false
-  },
-  {
-    "id": "opencode",
-    "label": "OpenCode",
-    "path": "C:/Users/demo/.config/opencode/skills",
-    "exists": false
-  },
-  {
-    "id": "codex",
-    "label": "Codex",
-    "path": "C:/Users/demo/.codex/skills",
-    "exists": false
   },
   {
     "id": "agents",

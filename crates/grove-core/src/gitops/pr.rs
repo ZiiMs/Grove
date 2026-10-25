@@ -10,7 +10,8 @@ use super::{non_empty, tail, validate_ref, CommandOutput, CommandSpec, Git, PrRe
 use crate::ipc::{IpcError, IpcResult};
 
 impl Git {
-    /// `gh pr create --draft`, returning the URL gh prints on success.
+    /// `gh pr create`, returning the URL gh prints on success. `request.draft` decides whether
+    /// `--draft` is passed; a ready PR is the default in the redesigned dialog.
     pub fn open_pr(&self, repo: Option<&Path>, request: &PrRequest) -> IpcResult<PrResult> {
         let root = self.discover(repo)?;
         let title = non_empty(&request.title)
@@ -27,12 +28,14 @@ impl Git {
         let mut args = vec![
             "pr".to_string(),
             "create".to_string(),
-            "--draft".to_string(),
             "--title".to_string(),
             title,
             "--body".to_string(),
             request.body.clone(),
         ];
+        if request.draft {
+            args.insert(2, "--draft".to_string());
+        }
         if let Some(base) = &base {
             args.push("--base".to_string());
             args.push(base.clone());
@@ -61,7 +64,7 @@ impl Git {
         match url {
             Some(url) => Ok(PrResult {
                 url: url.to_string(),
-                draft: true,
+                draft: request.draft,
                 base,
             }),
             None => Err(

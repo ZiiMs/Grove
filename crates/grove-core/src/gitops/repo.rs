@@ -3,11 +3,11 @@
 //! Parsing is split from process launching (`parse_status`, `parse_branches`, `parse_worktrees`) so the
 //! porcelain formats are unit-tested against literal samples as well as against a real repository.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{
-    git_failure, non_empty, validate_path, Git, GitBranch, GitStatus, GitStatusFile, GitWorktree,
-    MAX_OUTPUT_BYTES,
+    git_failure, non_empty, tail, validate_path, validate_ref, Git, GitBranch, GitDetection,
+    GitStatus, GitStatusFile, GitWorktree, MAX_OUTPUT_BYTES,
 };
 use crate::ipc::{IpcError, IpcResult};
 use crate::paths::display_path;
@@ -132,6 +132,196 @@ impl Git {
         }
 
         self.status(Some(&root))
+    }
+
+    /// Stage or unstage exactly the selected paths, then return the fresh status.
+    ///
+    /// Committing already stages its own selection; this is the separate checkbox operation the UI
+    /// exposes, so "staged" in the changes list reflects git rather than a client-side set.
+    pub fn stage(
+        &self,
+        repo: Option<&Path>,
+        paths: &[String],
+        staged: bool,
+    ) -> IpcResult<GitStatus> {
+        let root = self.discover(repo)?;
+        if paths.is_empty() {
+            return Err(IpcError::invalid("select at least one path to stage"));
+        }
+        for path in paths {
+            validate_path(path)?;
+        }
+
+        let mut args = if staged {
+            vec!["add".to_string(), "--all".to_string(), "--".to_string()]
+        } else {
+            vec![
+                "restore".to_string(),
+                "--staged".to_string(),
+                "--".to_string(),
+            ]
+        };
+        args.extend(paths.iter().cloned());
+        let output = self.run_args(&root, &args)?;
+        if !output.success() {
+            if !staged {
+                // Before the first commit `git restore --staged` has no HEAD to restore from; reset
+                // is the same operation in that state.
+                let mut reset = vec![
+                    "reset".to_string(),
+                    "-q".to_string(),
+                    "HEAD".to_string(),
+                    "--".to_string(),
+                ];
+                reset.extend(paths.iter().cloned());
+                let fallback = self.run_args(&root, &reset)?;
+                if fallback.success() {
+                    return self.status(Some(&root));
+                }
+            }
+            return Err(git_failure(if staged { "add" } else { "restore" }, &output));
+        }
+        self.status(Some(&root))
+    }
+
+    /// Create a branch and a checkout for it, then report the new worktree.
+    ///
+    /// `path` may be outside the repository (that is the point of a worktree); only the branch and
+    /// base refs are validated as git names. An existing non-empty folder is refused rather than
+    /// reusing a checkout the user did not choose.
+    pub fn create_worktree(
+        &self,
+        repo: Option<&Path>,
+        branch: &str,
+        base: &str,
+        path: &str,
+    ) -> IpcResult<GitWorktree> {
+        let root = self.discover(repo)?;
+        let branch = validate_ref("branch", branch)?;
+        let base = validate_ref("base", base)?;
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(IpcError::invalid("a worktree path is required"));
+        }
+        let target = PathBuf::from(path);
+        if target.exists() {
+            let empty = std::fs::read_dir(&target)
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(false);
+            if !empty {
+                return Err(IpcError::invalid(format!(
+                    "the worktree path already exists and is not empty: {path}"
+                )));
+            }
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                IpcError::io(format!("cannot create {}: {error}", parent.display()))
+            })?;
+        }
+
+        let args = vec![
+            "worktree".to_string(),
+            "add".to_string(),
+            "-b".to_string(),
+            branch,
+            path.to_string(),
+            base,
+        ];
+        let output = self.run_args(&root, &args)?;
+        if !output.success() {
+            let detail = tail(&output.stderr, 500);
+            return Err(IpcError::invalid("could not create the worktree").with_detail(detail));
+        }
+
+        let wanted = display_path(&target);
+        self.worktrees(Some(&root))?
+            .into_iter()
+            .find(|worktree| same_path(&worktree.path, &wanted))
+            .ok_or_else(|| {
+                IpcError::io(format!(
+                    "git created the worktree but it is missing from worktree list: {wanted}"
+                ))
+            })
+    }
+
+    /// What the add-project form needs before saving: whether this is a repository, its branches,
+    /// current/default branch, and the normalized `owner/name` remote (if one exists).
+    pub fn detect(&self, path: &Path) -> IpcResult<GitDetection> {
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            IpcError::invalid(format!("cannot read {}: {error}", path.display()))
+        })?;
+        if !metadata.is_dir() {
+            return Err(IpcError::invalid(format!(
+                "{} is not a folder",
+                path.display()
+            )));
+        }
+
+        let probe = self.run(path, &["rev-parse", "--show-toplevel"])?;
+        if !probe.success() {
+            let stderr = probe.stderr.to_lowercase();
+            if stderr.contains("not a git repository") {
+                return Ok(GitDetection {
+                    is_git: false,
+                    current_branch: None,
+                    branches: Vec::new(),
+                    default_branch: None,
+                    remote: None,
+                });
+            }
+            return Err(git_failure("rev-parse", &probe));
+        }
+        let root = PathBuf::from(probe.stdout.lines().next().unwrap_or_default().trim());
+        if root.as_os_str().is_empty() {
+            return Ok(GitDetection {
+                is_git: false,
+                current_branch: None,
+                branches: Vec::new(),
+                default_branch: None,
+                remote: None,
+            });
+        }
+
+        let current_branch = self.status(Some(&root))?.branch;
+        let mut branches: Vec<String> = self
+            .branches(Some(&root))?
+            .into_iter()
+            .filter(|branch| branch.remote.is_none())
+            .map(|branch| branch.name)
+            .collect();
+        branches.sort();
+
+        let remote_output = self.run(&root, &["config", "--get", "remote.origin.url"])?;
+        let remote = if remote_output.success() {
+            normalize_remote(remote_output.stdout.trim())
+        } else {
+            None
+        };
+
+        let symbolic = self.run(
+            &root,
+            &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        )?;
+        let default_branch = if symbolic.success() {
+            non_empty(&symbolic.stdout).map(|name| {
+                name.strip_prefix("origin/")
+                    .unwrap_or(name.as_str())
+                    .to_string()
+            })
+        } else {
+            None
+        }
+        .or_else(|| current_branch.clone())
+        .or_else(|| branches.first().cloned());
+
+        Ok(GitDetection {
+            is_git: true,
+            current_branch,
+            branches,
+            default_branch,
+            remote,
+        })
     }
 }
 
@@ -308,6 +498,31 @@ fn parse_worktrees(raw: &str, root: &str) -> Vec<GitWorktree> {
     }
     flush(current.take(), &mut worktrees);
     worktrees
+}
+
+fn normalize_remote(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let without_git = raw.strip_suffix(".git").unwrap_or(raw);
+    let tail = if let Some(rest) = without_git.split_once(':').map(|(_, rest)| rest) {
+        if !without_git.contains("://") && !without_git.starts_with('/') {
+            rest
+        } else {
+            without_git
+        }
+    } else {
+        without_git
+    };
+    let cleaned = tail.trim_start_matches('/');
+    let mut parts = cleaned.rsplit('/');
+    let repo = parts.next().unwrap_or_default();
+    let owner = parts.next().unwrap_or_default();
+    if owner.is_empty() || repo.is_empty() {
+        return non_empty(without_git);
+    }
+    Some(format!("{owner}/{repo}"))
 }
 
 fn same_path(left: &str, right: &str) -> bool {

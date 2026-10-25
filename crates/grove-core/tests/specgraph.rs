@@ -39,7 +39,7 @@ fn indexes_this_repository_as_a_spec_graph() {
     assert_eq!(goal.path, "goal-and-requirements.md");
     assert_eq!(
         goal.title.as_deref(),
-        Some("Grove — one desktop home for every AI coding harness")
+        Some("Grove — one desktop home for every AI coding provider")
     );
 
     let architecture = index
@@ -60,26 +60,13 @@ fn indexes_this_repository_as_a_spec_graph() {
         ids(index.ancestors("grove-architecture")),
         vec!["grove-goal-and-requirements".to_string()]
     );
-    let sidecar = index
-        .node("grove-sidecar-protocol")
-        .expect("the sidecar protocol is a registered spec node");
-    assert_eq!(sidecar.spec_type, "architecture-design");
-    assert_eq!(sidecar.path, "docs/sidecar-protocol.md");
-    assert_eq!(sidecar.parent.as_deref(), Some("grove-architecture"));
-
     assert_eq!(
         ids(index.subtree("grove-goal-and-requirements")),
-        vec![
-            "grove-architecture".to_string(),
-            "grove-sidecar-protocol".to_string()
-        ]
+        vec!["grove-architecture".to_string()]
     );
     assert_eq!(
         ids(index.neighbours("grove-architecture")),
-        vec![
-            "grove-goal-and-requirements".to_string(),
-            "grove-sidecar-protocol".to_string()
-        ]
+        vec!["grove-goal-and-requirements".to_string()]
     );
 
     assert!(

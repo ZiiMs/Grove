@@ -1,21 +1,24 @@
 # Grove
 
-One desktop home for every AI coding harness — with the project's intent, not just its chat, kept in
+One desktop home for every AI coding model — with the project's intent, not just its chat, kept in
 view.
 
-Grove runs Claude Code, Codex, generic ACP agents, OpenCode and `pi` behind one interface, and wraps
-them in the layer each harness reinvents badly: a skill catalog that installs into the harness you
-use, a spec graph, a TODO plan that survives restarts, a git/PR panel, and an MCP server viewer.
+Grove talks to Anthropic, OpenAI, Google and OpenRouter directly: pick a provider, a model and an API
+key, and Grove runs the agent itself. Around that loop sits the layer each vendor leaves out: a skill
+catalog, a spec graph, a TODO plan that survives restarts, a git/PR panel, and an MCP server viewer.
 
 - Intent of record: `goal-and-requirements.md`
 - How it is built: `architecture.md`, with changed decisions in `docs/adr/`
 - Terms used by the code: `GLOSSARY.md`
-- Writing a harness adapter: `docs/adapters.md`; the sidecar boundary: `docs/sidecar-protocol.md`
+- Why providers replaced harnesses: `docs/adr/0003-providers-replace-harnesses.md`
 
 ## Status
 
 First build, feature-complete and hardened. All fifteen tickets in `.scratch/grove/issues/` are
-`done`; the dependency graph is in `.scratch/grove/spec.md`. The automated gates below run on
+`done`; the dependency graph is in `.scratch/grove/spec.md`. The redesigned shell from
+`design-reference/` is now the production UI: a project tree, an always-mounted conversation, a Git ·
+Plan · Spec context column, and a settings sheet with seven themes. The decision record is
+`docs/adr/0002-workspace-projects-and-the-redesigned-shell.md`. The automated gates below run on
 `windows-latest`, and the manual smoke checklist is the part no test can paint for you.
 
 ## Prerequisites
@@ -25,42 +28,49 @@ First build, feature-complete and hardened. All fifteen tickets in `.scratch/gro
 - Rust stable with the MSVC target (`rustup default stable-msvc`)
 - WebView2 runtime (preinstalled on Windows 11)
 - `git` on `PATH` (the Git panel shells out to it); `gh` is optional and only needed to open a draft PR
-- A real harness CLI is optional: the **mock** harness is built in and works with nothing installed.
-  `pi` additionally needs the Node sidecar build that `npm run build` writes.
+- A provider API key (Anthropic, OpenAI, Google or OpenRouter). Settings → Providers stores it in the
+  OS keychain; the vendor's own environment variable works as a fallback.
 
 ## Quickstart: your first session
 
 ```sh
-npm ci               # install the workspaces: apps/desktop, packages/contract, sidecar
+npm ci               # install the workspaces: apps/desktop, packages/contract
 npm run tauri dev    # builds the Rust shell and opens the desktop window
 ```
 
 `npm run dev` alone serves the webview at http://localhost:1420 for UI work; it is not a desktop app.
 
-1. **Create a session.** The Sessions panel opens first. Pick a harness — choose `mock` to try Grove
-   with no harness installed — optionally set the working directory, and create the session.
-2. **Send a message.** Type into the composer. The normalized transcript streams deltas, tool calls,
-   results and usage as the harness emits them, and is written to SQLite as it arrives.
-3. **Give it project knowledge.** Open a session in Sessions, switch to Specs and pin a spec; the Plan
-   panel holds the session's TODO plan. Back in Sessions, `Refresh context` re-reads the pins and plan
-   and pushes the snapshot into the running harness; the transcript records what was sent.
-4. **Install a skill.** Skills lists the cached GitHub catalog; preview a `SKILL.md` and install it
-   into a harness directory (or project-local `.agents/skills`). With no network, the catalog serves
-   its cache.
-5. **See the diff and open a PR.** Git takes a repository path, shows status and a unified diff, and
-   `Open draft PR` runs `gh pr create --draft` (an authenticated `gh` is required).
-6. **Restart and resume.** Quit the window and launch it again. Sessions are rows, not processes: the
+1. **Add a project.** `Add project` in the tree opens the folder picker; a git repository is detected
+   and its default branch and remote are filled in. A plain folder is added as a workspace with no
+   branches or diffs.
+2. **Create a session.** `New session` picks the project (or `Chat — no project`), an optional model
+   (the provider follows from it), and optionally creates a worktree on a new branch. Add a provider
+   key in Settings first; the offline provider is only registered in preview and test builds.
+3. **Send a message.** Type into the composer. The normalized transcript streams deltas, tool calls,
+   results and usage as the runtime emits them, and is written to SQLite as it arrives. A turn that
+   asks permission appears as a card in the transcript; the tree and titlebar show that the session
+   needs you.
+4. **Give it project knowledge.** The Spec tab lists the project's spec graph; open one and
+   `Attach to session` pins it, and a running session receives the refreshed snapshot immediately. The
+   Plan tab shows the session's TODO checklist. A start, resume or provider switch always assembles the
+   current pins and plan.
+5. **Install a skill.** Settings → Skills lists the cached GitHub catalog; preview a `SKILL.md` and
+   install it into the project's `.agents/skills`. With no network, the catalog serves its cache.
+6. **See the diff and open a PR.** The Git tab shows the active checkout, per-file counts and
+   stage/commit; a file opens the read-only diff. `Commit & open PR` runs `gh pr create` (an
+   authenticated `gh` is required); the PR can be opened ready or as a draft.
+7. **Restart and resume.** Quit the window and launch it again. Sessions are rows, not processes: the
    open session comes back marked `exited` with its transcript intact. Press `Resume` and continue the
-   same conversation — the adapter receives the resume token it stored, and the transcript keeps both
+   same conversation — the runtime receives the resume token it stored, and the transcript keeps both
    turns.
 
-The sidebar footer shows the app version and platform from the core. Everything except the GitHub
-catalog fetch runs offline; sessions never require the network.
+The tree footer shows the session and awaiting counts, and the status bar carries the version from the
+core. Only the skill catalog and a session's own model call touch the network; everything else runs locally.
 
 ## Develop
 
 ```sh
-npm ci            # install the workspaces: apps/desktop, packages/contract, sidecar
+npm ci            # install the workspaces: apps/desktop, packages/contract
 npm run dev       # Vite dev server on http://localhost:1420
 npm run tauri dev # the desktop window (runs the dev server for you)
 ```
@@ -70,7 +80,7 @@ npm run tauri dev # the desktop window (runs the dev server for you)
 ```sh
 npm run typecheck
 npm test
-npm run build        # Vite production build + sidecar dist + the bundle guard
+npm run build        # Vite production build + the bundle guard
 npm run check:bundle # the bundle guard alone, against an existing dist
 
 cargo test -p grove-core
@@ -79,7 +89,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`npm run build` ends with `scripts/check-bundle.mjs`: it fails if Monaco is inside the entry chunk.
+`npm run build` ends with `scripts/check-bundle.mjs`: it fails if Monaco reappears in the entry
+chunk or the entry chunk exceeds its size budget.
 CI runs exactly these gates on `windows-latest` (`.github/workflows/ci.yml`), in this order: install,
 typecheck, vitest, build (with the bundle guard), rustfmt `--check`, clippy with `-D warnings`,
 `cargo test -p grove-core`, and `cargo check -p grove-desktop`.
@@ -88,64 +99,67 @@ The cross-cutting Rust suites that pin the release promise:
 
 | Suite | What it proves |
 |---|---|
-| `tests/adapters_conformance.rs` | all six adapters (mock + five) pass one conformance suite against their fixtures |
-| `tests/adapters_restart.rs` | per adapter: create → send → close → reopen the store → resume; transcript intact, resume token reused |
-| `tests/offline.rs` | all six fake harnesses run and the skill catalog serves its cache with `HTTP(S)_PROXY` at a black hole and `NO_PROXY` empty |
+| `tests/session_runtime.rs` | one turn against the offline provider: deltas, message, tool call, usage, idle — persisted in the order the UI saw it |
+| `tests/session_restart.rs` | create → send → close → reopen the store → resume; transcript intact, resume token reused |
+| `providers::agent` tests | a provider with no key fails before any request; an unanswered approval is refused, not parked |
+| `providers::anthropic/openai/google` tests | each vendor's stream decoder against recorded frames, including unknown-frame tolerance |
 
 ## Manual smoke checklist
 
 Automated tests cover the core and the webview in isolation; the window itself needs a human:
 
-- [ ] `npm run tauri dev` opens a window titled Grove with a seven-panel sidebar (Sessions, Skills,
-      Specs, Plan, MCP, Git, Settings).
-- [ ] The sidebar footer shows the version and platform from the core.
-- [ ] Switching panels mounts only the selected panel, and every panel renders real content (no
-      placeholder bodies).
-- [ ] A mock session can be created, given a message, and streams a reply.
-- [ ] A skill previews and installs into a chosen directory, and appears again from cache with the
-      network disabled.
-- [ ] The Git panel shows status and a diff, and opens a draft PR through an authenticated `gh`.
+- [ ] `npm run tauri dev` opens the window with the titlebar (Grove, git chip, awaiting chip,
+      New session), the project tree, the centre conversation, the context column and the status bar.
+- [ ] `Add project` detects a git folder's branches/remote and adds a plain folder without git.
+- [ ] A mock session can be created (with or without a new worktree), given a message, and streams a
+      reply; the tree shows it under its project or `Chats`.
+- [ ] A permission request shows as a transcript card, marks the session "awaiting you", and
+      approving/denying resolves it.
+- [ ] The Git tab stages a file, commits, opens the diff, and opens a PR (ready or draft) through an
+      authenticated `gh`; the titlebar chip shows the branch and real +/− counts.
+- [ ] The Plan tab shows the session checklist, and the Spec tab pins a spec; the composer shows the
+      pinned chip.
+- [ ] Settings switches all seven themes in dark and light, installs/removes a skill, adds or removes a
+      provider key, and probes an MCP server.
 - [ ] Quitting and relaunching leaves the session `exited` with its transcript; `Resume` continues it
       and the second turn appears after the first.
-- [ ] With a real harness installed (Codex, ACP, OpenCode or `pi`), the picker and Settings → Doctor
-      report accurate capabilities and detection state; `mock` remains selectable.
+- [ ] At 390px wide the window shows Navigation · Session · Context tabs with no horizontal scroll.
 
 ## Performance notes
 
 The ~200 MB idle-memory goal is a design constraint, not an afterthought:
 
-- **Panels mount on demand.** `apps/desktop/src/App.tsx` renders only the active panel; every other
-  panel's component is unmounted, and its state lives in the zustand store, not the DOM.
 - **The event list is virtualized.** `@tanstack/react-virtual` mounts only the transcript rows in view,
   so a 10 000-event session costs the same as a short one.
-- **Monaco is lazy and only for editing.** The diff viewer and spec editor reach it through
-  `React.lazy`/`import()`, so a window launch never parses the editor; it loads on first open and is
-  never mounted for chat markdown (`markdown-it`, HTML disabled).
+- **The webview has no code editor.** Spec and plan surfaces are read-only, so Monaco and
+  `markdown-it` are not dependencies and never parse at launch.
+- **Theme fonts are local.** The seven theme families ship as latin WOFF2 subsets in
+  `apps/desktop/src/styles/fonts/`, so a launch has no font request and every theme renders offline.
 - **The bundle guards it.** `scripts/check-bundle.mjs` runs after `npm run build` and fails if
-  `monaco-editor` appears in the entry chunk or if no lazy chunk contains it. The successful build
-  output ends with a line like
-  `Bundle guard: entry index-…js 390.7 kB (no Monaco); lazy index-…js 14.2 kB`.
-- **No background polling on the session path.** Plans are reconciled by a read-time hash check, not a
-  filesystem watcher; sessions do not poll the network (only the skill catalog fetches, and it falls
-  back to its cache).
+  `monaco-editor` appears in the entry chunk or the entry exceeds 600 kB, then reports the largest
+  lazy chunks. The successful output ends with a line like
+  `Bundle guard: entry index-…js 299.7 kB (budget 600 kB); lazy …`.
+- **No background polling on the session path.** Plans are reconciled by a read-time hash check and
+  re-read when the Plan tab opens; sessions do not poll the network (only the skill catalog fetches,
+  and it falls back to its cache).
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `crates/grove-core` | Durable core: adapters, sessions, store, spec graph, plan, skills, MCP, git. No Tauri. |
+| `crates/grove-core` | Durable core: providers, the agent runtime, sessions, store, spec graph, plan, skills, MCP, git. No Tauri. |
 | `apps/desktop/src-tauri` | Thin Tauri shell: window, commands, event fan-out. |
-| `apps/desktop/src` | React webview: panels, stores, typed IPC bridge. |
+| `apps/desktop/src` | React webview: shell, chat, context column, settings, dialogs, stores, typed IPC bridge. |
 | `packages/contract` | zod schemas + TS types for the IPC contract, validated against `contract/fixtures/`. |
-| `sidecar` | Node process for JS-only harness SDKs (`pi`), speaking Grove Sidecar Protocol v1. |
 | `contract/fixtures` | Golden JSON written by Rust tests and parsed by TS tests — the drift alarm. |
-| `fixtures/harnesses` | Fake CLIs, a real loopback HTTP+SSE server, and a sidecar host used by tests. |
-| `scripts/check-bundle.mjs` | Post-build performance guard (Monaco must be a lazy chunk). |
+| `apps/desktop/tools` | Screenshot harness for visual comparison (not part of `npm test`). |
+| `scripts/check-bundle.mjs` | Post-build performance guard (entry budget; no editor at launch). |
 
 ## Local state
 
-Grove keeps sessions, the event log, plans, pins and settings in `%APPDATA%/Grove/grove.db`. Project
-state stays where it belongs: specs are repo files, skills live in each harness's own directory, and the
-git repo is git. `.grove/` in a project holds per-session plan mirrors and is gitignored.
+Grove keeps projects, sessions, the event log, plans, pins and settings in
+`%APPDATA%/Grove/grove.db`. Project state stays where it belongs: specs are repo files, worktrees are
+git, skills live in `.grove/skills` or the project's `.agents/skills`, and the git repo is git. `.grove/` in a project holds
+per-session plan mirrors and is gitignored.
 
-Tokens live in the OS keychain, never in the database or in `settings`.
+Provider API keys live in the OS keychain, never in the database or in `settings`.

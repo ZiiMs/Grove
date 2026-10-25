@@ -23,6 +23,14 @@ impl Git {
             }
             None => None,
         };
+        if request.target == DiffTarget::WorkingTree {
+            if let Some(path) = &path {
+                if let Some(diff) = self.untracked_diff(&root, path)? {
+                    return Ok(diff);
+                }
+            }
+        }
+
         let (base, branch) = match request.target {
             DiffTarget::Branch => {
                 let base = validate_ref("base", request.base.as_deref().unwrap_or_default())?;
@@ -79,6 +87,65 @@ impl Git {
             patch,
             truncated,
         })
+    }
+
+    /// `git diff` never shows an untracked file. Synthesize the new-file patch the design's diff
+    /// inspector expects, so clicking a file the session just created shows its content instead of
+    /// an empty modal. Binary files are named rather than sprayed into the webview.
+    fn untracked_diff(&self, root: &Path, path: &str) -> IpcResult<Option<GitDiff>> {
+        let status = self.status(Some(root))?;
+        let Some(file) = status.files.iter().find(|file| file.path == path) else {
+            return Ok(None);
+        };
+        if !file.untracked {
+            return Ok(None);
+        }
+
+        let full = root.join(path);
+        let bytes = std::fs::read(&full).map_err(|error| {
+            crate::ipc::IpcError::io(format!("cannot read untracked file {path}: {error}"))
+        })?;
+        let (patch, truncated) = if bytes.contains(&0) {
+            (
+                format!(
+                    "Binary file {path} not shown
+"
+                ),
+                false,
+            )
+        } else {
+            let text = String::from_utf8_lossy(&bytes);
+            let lines: Vec<&str> = text.lines().collect();
+            let body: String = lines
+                .iter()
+                .map(|line| {
+                    format!(
+                        "+{line}
+"
+                    )
+                })
+                .collect();
+            let patch = format!(
+                "diff --git a/{path} b/{path}
+new file mode 100644
+--- /dev/null
++++ b/{path}
+@@ -0,0 +1,{} @@
+{body}",
+                lines.len()
+            );
+            truncate_output(&patch, MAX_OUTPUT_BYTES)
+        };
+
+        Ok(Some(GitDiff {
+            repo_root: display_path(root),
+            target: DiffTarget::WorkingTree,
+            path: Some(path.to_string()),
+            base: None,
+            branch: None,
+            patch,
+            truncated,
+        }))
     }
 
     fn head_exists(&self, root: &Path) -> IpcResult<bool> {

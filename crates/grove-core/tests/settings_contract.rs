@@ -1,7 +1,6 @@
 //! Golden-fixture half of the settings/doctor contract. The TS side parses the same files with zod
 //! (`packages/contract/test/settings.test.ts`), so either side drifting breaks a test.
 
-use grove_core::harness_doctor::{DoctorReport, HarnessHealth, ToolHealth};
 use grove_core::secrets::{SecretStatus, GITHUB_TOKEN};
 use grove_core::settings::{SecretStatusView, Settings, Theme};
 use std::collections::BTreeMap;
@@ -18,10 +17,6 @@ fn fixture(name: &str) -> serde_json::Value {
 #[test]
 fn settings_matches_fixture() {
     let sample = Settings {
-        harness_paths: BTreeMap::from([
-            ("claude".to_string(), "C:/Tools/claude.exe".to_string()),
-            ("mock".to_string(), "C:/Tools/fake-harness.cmd".to_string()),
-        ]),
         catalog_sources: vec![
             "anthropics/skills".to_string(),
             "mattpocock/skills".to_string(),
@@ -47,56 +42,48 @@ fn secret_status_matches_fixture_and_never_carries_a_value() {
 }
 
 #[test]
-fn doctor_report_matches_fixture() {
-    let sample = DoctorReport {
-        harnesses: vec![
-            HarnessHealth {
-                id: "mock".to_string(),
-                label: "Mock (builtin)".to_string(),
-                installed: true,
-                version: Some("0.1.0".to_string()),
-                path: Some("builtin:mock".to_string()),
-                detail: None,
-            },
-            HarnessHealth {
-                id: "claude".to_string(),
-                label: "Claude Code".to_string(),
-                installed: false,
-                version: None,
-                path: Some("C:/Tools/claude.exe".to_string()),
-                detail: Some("configured path does not exist: C:/Tools/claude.exe".to_string()),
-            },
-        ],
-        tools: vec![
-            ToolHealth {
-                id: "node".to_string(),
-                label: "Node.js".to_string(),
-                installed: true,
-                version: Some("v20.11.1".to_string()),
-                path: Some("C:/Program Files/nodejs/node.exe".to_string()),
-                detail: None,
-            },
-            ToolHealth {
-                id: "git".to_string(),
-                label: "Git".to_string(),
-                installed: true,
-                version: Some("git version 2.43.0.windows.1".to_string()),
-                path: Some("C:/Program Files/Git/cmd/git.exe".to_string()),
-                detail: None,
-            },
-            ToolHealth {
-                id: "gh".to_string(),
-                label: "GitHub CLI".to_string(),
-                installed: false,
-                version: None,
-                path: None,
-                detail: Some("gh is not installed or not on PATH".to_string()),
-            },
-        ],
-        checked_at: "2026-10-24T18:00:00.000Z".to_string(),
-    };
-    assert_eq!(
-        serde_json::to_value(&sample).unwrap(),
-        fixture("doctor.json")
-    );
+fn provider_statuses_match_fixture() {
+    use grove_core::ipc::ProviderStatus;
+    use grove_core::providers::credentials::KeySource;
+    use grove_core::providers::{catalog, AuthMethod};
+
+    let anthropic = catalog::find("anthropic").unwrap();
+    let openai = catalog::find("openai").unwrap();
+    let sample = vec![
+        ProviderStatus {
+            id: anthropic.id.clone(),
+            name: anthropic.name.clone(),
+            short: anthropic.short.clone(),
+            tint: anthropic.tint.clone(),
+            method: AuthMethod::ApiKey,
+            key_url: anthropic.key_url.clone(),
+            env_var: anthropic.env_var.clone(),
+            default_model: anthropic.default_model.clone(),
+            models: anthropic.models.clone(),
+            configured: true,
+            source: Some(KeySource::Keychain),
+            detail: None,
+        },
+        ProviderStatus {
+            id: openai.id.clone(),
+            name: openai.name.clone(),
+            short: openai.short.clone(),
+            tint: openai.tint.clone(),
+            method: AuthMethod::ApiKey,
+            key_url: openai.key_url.clone(),
+            env_var: openai.env_var.clone(),
+            default_model: openai.default_model.clone(),
+            models: openai.models.clone(),
+            configured: false,
+            source: None,
+            detail: Some(format!(
+                "Add an API key from {}, or set {}.",
+                openai.key_url, openai.env_var
+            )),
+        },
+    ];
+    let value = serde_json::to_value(&sample).unwrap();
+    assert_eq!(value, fixture("provider-statuses.json"));
+    // The row exists to drive a settings pane; a key value must never appear in it.
+    assert!(value[0].get("key").is_none());
 }

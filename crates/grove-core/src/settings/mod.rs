@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub const DEFAULT_CATALOG_SOURCES: [&str; 2] = ["anthropics/skills", "mattpocock/skills"];
 
 /// The keys this build understands. Everything else is preserved verbatim in [`Settings::extra`].
-const KNOWN_KEYS: [&str; 3] = ["harnessPaths", "catalogSources", "theme"];
+const KNOWN_KEYS: [&str; 2] = ["catalogSources", "theme"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -32,8 +32,6 @@ pub enum Theme {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
-    /// Harness id → binary path override. An empty map means "resolve every harness on `PATH`".
-    pub harness_paths: BTreeMap<String, String>,
     /// `owner/name` GitHub repositories, in display order.
     pub catalog_sources: Vec<String>,
     pub theme: Theme,
@@ -45,7 +43,6 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            harness_paths: BTreeMap::new(),
             catalog_sources: DEFAULT_CATALOG_SOURCES
                 .iter()
                 .map(|source| source.to_string())
@@ -60,26 +57,6 @@ impl Settings {
     /// Apply a partial update in memory. Validation happens before anything is written, so a rejected
     /// patch leaves both these settings and the database untouched.
     pub fn apply(&mut self, patch: SettingsPatch) -> Result<(), SettingsError> {
-        if let Some(paths) = patch.harness_paths {
-            let mut next = BTreeMap::new();
-            for (harness, path) in paths {
-                let harness = harness.trim();
-                validate_key("harness id", harness)?;
-                let path = path.trim();
-                // An empty override is how the UI clears a row; it means "use PATH again".
-                if path.is_empty() {
-                    continue;
-                }
-                if path.contains('\0') || path.contains('\n') || path.contains('\r') {
-                    return Err(SettingsError::Invalid(format!(
-                        "path for harness '{harness}' contains a control character"
-                    )));
-                }
-                next.insert(harness.to_string(), path.to_string());
-            }
-            self.harness_paths = next;
-        }
-
         if let Some(sources) = patch.catalog_sources {
             let mut next: Vec<String> = Vec::new();
             for source in sources {
@@ -129,10 +106,6 @@ impl Settings {
     fn write_rows(&self, rows: &mut BTreeMap<String, serde_json::Value>) {
         rows.clear();
         rows.insert(
-            "harnessPaths".to_string(),
-            serde_json::json!(self.harness_paths),
-        );
-        rows.insert(
             "catalogSources".to_string(),
             serde_json::json!(self.catalog_sources),
         );
@@ -148,7 +121,6 @@ impl Settings {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
-    pub harness_paths: Option<BTreeMap<String, String>>,
     pub catalog_sources: Option<Vec<String>>,
     pub theme: Option<Theme>,
     #[serde(flatten)]
@@ -235,50 +207,9 @@ pub struct SettingsService {
     store: Arc<Store>,
 }
 
-/// The settings-backed command source the session manager resolves `config.command` from.
-///
-/// A harness path configured here is a promise: the next session of that harness launches it, unless
-/// the request itself named a command. See `sessions::manager::AdapterConfigSource` for the rule.
-pub struct HarnessPathSource {
-    settings: Arc<SettingsService>,
-}
-
-impl HarnessPathSource {
-    pub fn new(settings: Arc<SettingsService>) -> Self {
-        Self { settings }
-    }
-}
-
-impl crate::sessions::manager::AdapterConfigSource for HarnessPathSource {
-    fn command_for(&self, harness: &str) -> Option<String> {
-        self.settings.harness_command(harness)
-    }
-}
-
 impl SettingsService {
     pub fn new(store: Arc<Store>) -> Self {
         Self { store }
-    }
-
-    /// The configured binary for one harness, or `None` when nothing is configured.
-    ///
-    /// An unreadable settings row reads as "nothing configured": a broken document must not stop
-    /// every session from starting, and the doctor is where the problem is explained.
-    pub fn harness_command(&self, harness: &str) -> Option<String> {
-        match self.get() {
-            Ok(settings) => settings
-                .harness_paths
-                .get(harness)
-                .map(|path| path.trim().to_string())
-                .filter(|path| !path.is_empty()),
-            Err(error) => {
-                tracing::warn!(
-                    target: "grove::settings",
-                    "cannot read harness paths for {harness}: {error}"
-                );
-                None
-            }
-        }
     }
 
     /// The stored document, with defaults for missing keys and unknown keys preserved.
@@ -324,34 +255,6 @@ mod tests {
             DEFAULT_CATALOG_SOURCES.map(String::from).to_vec()
         );
         assert_eq!(current.theme, Theme::System);
-        assert!(current.harness_paths.is_empty());
-    }
-
-    #[test]
-    fn a_configured_harness_path_is_the_command_a_session_launches() {
-        let (service, _store) = service();
-        assert_eq!(
-            service.harness_command("claude"),
-            None,
-            "nothing configured yet"
-        );
-
-        service
-            .set(patch(serde_json::json!({
-                "harnessPaths": { "claude": "  C:/tools/claude.cmd  " },
-            })))
-            .unwrap();
-
-        assert_eq!(
-            service.harness_command("claude").as_deref(),
-            Some("C:/tools/claude.cmd"),
-            "the path is trimmed and reaches the session's config.command"
-        );
-        assert_eq!(
-            service.harness_command("codex"),
-            None,
-            "another harness keeps its own default binary"
-        );
     }
 
     #[test]
@@ -369,16 +272,11 @@ mod tests {
         let (service, store) = service();
         let saved = service
             .set(patch(serde_json::json!({
-                "harnessPaths": { "claude": "C:/Tools/claude.exe" },
                 "catalogSources": ["acme/skills"],
                 "theme": "dark",
                 "futureFlag": { "enabled": true }
             })))
             .unwrap();
-        assert_eq!(
-            saved.harness_paths.get("claude").map(String::as_str),
-            Some("C:/Tools/claude.exe")
-        );
         assert_eq!(saved.theme, Theme::Dark);
         assert_eq!(
             saved.extra.get("futureFlag"),
@@ -411,10 +309,6 @@ mod tests {
         let (service, _store) = service();
         let error = service
             .set(SettingsPatch {
-                harness_paths: Some(BTreeMap::from([(
-                    "claude".to_string(),
-                    "C:/Tools/claude.exe".to_string(),
-                )])),
                 catalog_sources: Some(vec!["not-a-repository".to_string()]),
                 ..Default::default()
             })
@@ -428,30 +322,23 @@ mod tests {
     }
 
     #[test]
-    fn empty_paths_clear_an_override_and_empty_sources_fall_back_to_none() {
+    fn empty_sources_fall_back_to_none() {
         let (service, _store) = service();
         service
             .set(patch(serde_json::json!({
-                "harnessPaths": { "claude": "C:/Tools/claude.exe", "pi": "" },
                 "catalogSources": ["acme/skills"]
             })))
             .unwrap();
         let saved = service
-            .set(patch(serde_json::json!({
-                "harnessPaths": { "claude": "" },
-                "catalogSources": []
-            })))
+            .set(patch(serde_json::json!({ "catalogSources": [] })))
             .unwrap();
-        assert!(saved.harness_paths.is_empty());
         assert!(saved.catalog_sources.is_empty());
     }
 
     #[test]
-    fn harness_ids_and_catalog_sources_are_validated() {
+    fn catalog_sources_are_validated() {
         let (service, _store) = service();
         for invalid in [
-            serde_json::json!({ "harnessPaths": { "": "C:/Tools/claude.exe" } }),
-            serde_json::json!({ "harnessPaths": { "claude": "C:/bad\npath" } }),
             serde_json::json!({ "catalogSources": ["owner/name/extra"] }),
             serde_json::json!({ "catalogSources": ["owner"] }),
             serde_json::json!({ "catalogSources": ["../escape"] }),

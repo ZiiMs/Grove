@@ -9,25 +9,23 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "visual": "vite build && vitest run --config vitest.visual.config.ts"
   },
   "dependencies": {
     "@grove/contract": "*",
-    "@monaco-editor/react": "^4.6.0",
-    "@tanstack/react-virtual": "^3.10.8",
     "@tauri-apps/api": "^2.1.1",
-    "markdown-it": "^14.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^3.23.8",
-    "zustand": "^5.0.2"
+    "zustand": "^5.0.2",
+    "@tanstack/react-virtual": "^3.10.8"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",
-    "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",

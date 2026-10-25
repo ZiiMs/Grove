@@ -16,11 +16,13 @@ use std::sync::Arc;
 fn session_row(id: &str, project: &Path) -> Session {
     Session {
         id: id.into(),
-        harness: "mock".into(),
+        provider: "mock".into(),
         cwd: display_path(project),
         model: None,
         title: "Plan fixture".into(),
         status: SessionState::Idle,
+        project_id: None,
+        awaiting: false,
         created_at: "2025-01-01T00:00:00.000Z".into(),
         updated_at: "2025-01-01T00:00:00.000Z".into(),
     }

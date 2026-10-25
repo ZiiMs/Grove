@@ -31,6 +31,21 @@ export interface GitOpenPrArgs {
   body: string;
   base?: string;
   head?: string;
+  draft?: boolean;
+}
+
+export interface GitStageArgs {
+  repoPath?: string;
+  paths: string[];
+  /** `true` stages, `false` unstages. */
+  staged: boolean;
+}
+
+export interface GitWorktreeCreateArgs {
+  repoPath: string;
+  branch: string;
+  base: string;
+  path: string;
 }
 
 export interface GitCommands {
@@ -39,5 +54,8 @@ export interface GitCommands {
   git_worktrees: { args: GitStatusArgs; result: GitWorktree[] };
   git_diff: { args: GitDiffArgs; result: GitDiff };
   git_commit: { args: GitCommitArgs; result: GitStatus };
+  git_stage: { args: GitStageArgs; result: GitStatus };
   git_open_pr: { args: GitOpenPrArgs; result: PrResult };
+  /** Create a branch and a checkout for it, then report the new worktree. */
+  git_worktree_create: { args: GitWorktreeCreateArgs; result: GitWorktree };
 }

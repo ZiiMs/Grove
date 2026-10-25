@@ -1,7 +1,7 @@
 import type {
   Decision,
-  HarnessEvent,
-  HarnessInfo,
+  SessionEvent,
+  ProviderSpec,
   SessionContext,
   SessionDetail,
   SessionSummary,
@@ -20,28 +20,34 @@ import { errorText } from "../ipc/errors";
  */
 
 export interface CreateSessionInput {
-  harness: string;
+  provider: string;
   cwd?: string | null;
   model?: string | null;
   title?: string | null;
+  /** The workspace project the session belongs to; `cwd` then resolves from it. */
+  projectId?: string | null;
+  /** A worktree checkout to run in; only meaningful with `projectId`. */
+  worktreePath?: string | null;
   /**
-   * Adapter-specific config (`config.command`, `config.args`). No form field sets it yet, but the
-   * command carries it: it is how a caller — a test, or a future "ACP command" field — launches a
-   * harness other than its default binary. Omitted when undefined, so the request stays minimal.
+   * Provider config, passed straight through to the runtime. The documented key is `maxSteps`, the
+   * tool-loop ceiling. No form field sets it yet, so it stays untyped here rather than inventing a
+   * shape per provider. Omitted when undefined, so the request stays minimal.
    */
   config?: unknown;
 }
 
 interface SessionStoreData {
-  harnesses: HarnessInfo[];
+  providers: ProviderSpec[];
   sessions: SessionSummary[];
   activeId: string | null;
   detail: SessionDetail | null;
-  events: HarnessEvent[];
+  events: SessionEvent[];
   /** Session ids open as tabs, in the order they were opened. */
   openIds: string[];
   /** Compose text per session: a draft belongs to its tab, not to the panel. */
   drafts: Record<string, string>;
+  /** Messages typed while a turn is running, sent one at a time as the session goes idle. */
+  queues: Record<string, string[]>;
   /** The active session's knowledge (pins, plan, the documents a start would send). */
   context: SessionContext | null;
   loading: boolean;
@@ -50,44 +56,50 @@ interface SessionStoreData {
 }
 
 export interface SessionStore extends SessionStoreData {
-  /** Harness picker contents and the session list. */
+  /** Provider catalogue and the session list. */
   load: (bridge: GroveBridge) => Promise<void>;
-  create: (bridge: GroveBridge, input: CreateSessionInput) => Promise<void>;
+  create: (bridge: GroveBridge, input: CreateSessionInput) => Promise<boolean>;
   /** Open (or focus) a session as a tab. */
   select: (bridge: GroveBridge, id: string) => Promise<void>;
   /** Close a tab; the next open one becomes active. The session itself is untouched. */
   closeTab: (bridge: GroveBridge, id: string) => Promise<void>;
   setDraft: (id: string, text: string) => void;
+  enqueue: (id: string, text: string) => void;
+  dequeue: (id: string, index: number) => void;
+  /** Send the first queued message if the active session is no longer busy. */
+  flushQueue: (bridge: GroveBridge) => Promise<void>;
   /** Returns whether the message was accepted, so the panel knows when to clear the compose box. */
   send: (bridge: GroveBridge, text: string) => Promise<boolean>;
   cancel: (bridge: GroveBridge) => Promise<void>;
   /**
    * Answer a pending permission request for the active session. The transcript does not change here:
-   * the buttons disappear when the harness's `permission_resolved` event arrives, so the UI shows
-   * what the harness actually accepted.
+   * the buttons disappear when the agent's `permission_resolved` event arrives, so the UI shows
+   * what the agent actually accepted.
    */
   respondPermission: (bridge: GroveBridge, requestId: string, decision: Decision) => Promise<void>;
   resume: (bridge: GroveBridge) => Promise<void>;
   close: (bridge: GroveBridge) => Promise<void>;
   /** Adopt a snapshot another panel produced (the Specs panel pins and unpins). */
   applyContext: (context: SessionContext) => void;
-  /** Re-send the current pins and plan to the running harness, then show the new snapshot. */
-  refreshContext: (bridge: GroveBridge) => Promise<void>;
-  /** Re-launch the active session on another registered harness, keeping its transcript. */
-  switchHarness: (bridge: GroveBridge, harness: string) => Promise<void>;
+  /** Re-send the current pins and plan to the running agent, then show the new snapshot. */
+  /** Returns whether the running agent accepted the refreshed snapshot. */
+  refreshContext: (bridge: GroveBridge) => Promise<boolean>;
+  /** Re-launch the active session on another registered provider, keeping its transcript. */
+  switchProvider: (bridge: GroveBridge, provider: string, model?: string) => Promise<void>;
   /** Fold one live `grove://session-event` into the list and, when it belongs to the open session, the transcript. */
-  applyEvent: (sessionId: string | null, event: HarnessEvent) => void;
+  applyEvent: (sessionId: string | null, event: SessionEvent) => void;
   reset: () => void;
 }
 
 const initial: SessionStoreData = {
-  harnesses: [],
+  providers: [],
   sessions: [],
   activeId: null,
   detail: null,
   events: [],
   openIds: [],
   drafts: {},
+  queues: {},
   context: null,
   loading: true,
   busy: false,
@@ -135,11 +147,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   load: async (bridge) => {
     set({ loading: true, error: null });
     try {
-      const [harnesses, sessions] = await Promise.all([
-        bridge.invoke("harness_list"),
+      const [providers, sessions] = await Promise.all([
+        bridge.invoke("provider_list"),
         bridge.invoke("session_list"),
       ]);
-      set({ harnesses, sessions, loading: false });
+      set({ providers, sessions, loading: false });
     } catch (error) {
       set({ loading: false, error: errorText(error) });
     }
@@ -162,8 +174,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         context,
         sessions: [summaryOf(detail), ...state.sessions.filter((row) => row.id !== detail.id)],
       }));
+      try {
+        localStorage.setItem("grove.lastSession", detail.id);
+      } catch {
+        // Storage can be blocked; the new session is still open.
+      }
+      return true;
     } catch (error) {
       set({ busy: false, error: errorText(error) });
+      return false;
     }
   },
 
@@ -175,6 +194,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       // Activating a tab is choosing that project: this is the call that keeps the Specs, MCP and
       // Skills panels pointed at the session the user is actually looking at.
       await syncProjectRoot(bridge, detail.cwd);
+      try {
+        localStorage.setItem("grove.lastSession", id);
+      } catch {
+        // A blocked storage must not stop opening the conversation.
+      }
       set((state) => ({
         busy: false,
         activeId: id,
@@ -211,6 +235,46 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   setDraft: (id, text) => {
     set((state) => ({ drafts: { ...state.drafts, [id]: text } }));
+  },
+
+  enqueue: (id, text) => {
+    const message = text.trim();
+    if (!message) return;
+    set((state) => ({
+      queues: { ...state.queues, [id]: [...(state.queues[id] ?? []), message] },
+    }));
+  },
+
+  dequeue: (id, index) => {
+    set((state) => {
+      const queue = [...(state.queues[id] ?? [])];
+      queue.splice(index, 1);
+      return { queues: { ...state.queues, [id]: queue } };
+    });
+  },
+
+  flushQueue: async (bridge) => {
+    const { activeId, queues, detail } = get();
+    if (!activeId) return;
+    const queue = queues[activeId] ?? [];
+    if (queue.length === 0) return;
+    if (
+      detail &&
+      (detail.awaiting ||
+        detail.status === "starting" ||
+        detail.status === "ready" ||
+        detail.status === "busy")
+    ) {
+      return;
+    }
+    const [next, ...rest] = queue;
+    set((state) => ({ queues: { ...state.queues, [activeId]: rest } }));
+    const accepted = await get().send(bridge, next);
+    if (!accepted) {
+      set((state) => ({
+        queues: { ...state.queues, [activeId]: [next, ...(state.queues[activeId] ?? [])] },
+      }));
+    }
   },
 
   send: async (bridge, text) => {
@@ -282,22 +346,24 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   refreshContext: async (bridge) => {
     const id = get().activeId;
-    if (!id) return;
+    if (!id) return false;
     set({ busy: true, error: null });
     try {
       const context = await bridge.invoke("session_refresh_context", { id });
       set({ busy: false, context });
+      return true;
     } catch (error) {
       set({ busy: false, error: errorText(error) });
+      return false;
     }
   },
 
-  switchHarness: async (bridge, harness) => {
+  switchProvider: async (bridge, provider, model) => {
     const id = get().activeId;
     if (!id) return;
     set({ busy: true, error: null });
     try {
-      const detail = await bridge.invoke("session_switch_harness", { id, harness });
+      const detail = await bridge.invoke("session_switch_provider", { id, provider, model });
       const context = await contextOf(bridge, id);
       set((state) => ({
         busy: false,
@@ -305,7 +371,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         events: detail.events,
         context,
         sessions: state.sessions.map((row) =>
-          row.id === id ? { ...row, harness: detail.harness, status: detail.status } : row,
+          row.id === id
+            ? { ...row, provider: detail.provider, model: detail.model, status: detail.status }
+            : row,
         ),
       }));
     } catch (error) {
@@ -318,12 +386,22 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set((state) => {
       const isActive = state.activeId === sessionId;
       const status = event.kind === "status" ? event.state : null;
+      const stopped =
+        event.kind === "status" &&
+        (event.state === "exited" || event.state === "error");
+      const awaiting =
+        event.kind === "permission_request"
+          ? true
+          : event.kind === "permission_resolved" || stopped
+            ? false
+            : null;
       return {
         sessions: state.sessions.map((row) =>
           row.id === sessionId
             ? {
                 ...row,
                 status: status ?? row.status,
+                awaiting: awaiting ?? row.awaiting,
                 eventCount: row.eventCount + 1,
                 updatedAt: event.at,
               }
@@ -331,7 +409,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ),
         detail:
           isActive && state.detail
-            ? { ...state.detail, status: status ?? state.detail.status, updatedAt: event.at }
+            ? {
+                ...state.detail,
+                status: status ?? state.detail.status,
+                awaiting: awaiting ?? state.detail.awaiting,
+                updatedAt: event.at,
+              }
             : state.detail,
         events: isActive ? [...state.events, event] : state.events,
       };

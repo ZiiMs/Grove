@@ -1,0 +1,61 @@
+import { z } from "zod";
+
+/**
+ * Workspace contract: the projects the user added, the folders the add-project picker can browse,
+ * and what git detection reports before a project is saved.
+ *
+ * Rust (`grove_core::projects`) owns the wire shape; these schemas must accept exactly what it
+ * serialises. Both sides are pinned by `contract/fixtures/project*.json` and
+ * `contract/fixtures/dir-listing.json`.
+ */
+
+export const projectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  /** Forward-slash absolute path, as the user picked it. */
+  path: z.string(),
+  /** `owner/name`, or null when the folder has no git remote. */
+  remote: z.string().nullable(),
+  /** Branch new sessions branch from / PRs target; null for a non-git folder. */
+  defaultBranch: z.string().nullable(),
+  isGit: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type Project = z.infer<typeof projectSchema>;
+
+/** What `project_detect` reports about a folder before it is added. */
+export const projectDetectionSchema = z.object({
+  path: z.string(),
+  isGit: z.boolean(),
+  currentBranch: z.string().nullable(),
+  branches: z.array(z.string()),
+  defaultBranch: z.string().nullable(),
+  remote: z.string().nullable(),
+});
+export type ProjectDetection = z.infer<typeof projectDetectionSchema>;
+
+/** Arguments to `project_add`. Every optional field falls back to what detection found. */
+export const addProjectRequestSchema = z.object({
+  path: z.string(),
+  name: z.string().nullish(),
+  defaultBranch: z.string().nullish(),
+  remote: z.string().nullish(),
+});
+export type AddProjectRequest = z.infer<typeof addProjectRequestSchema>;
+
+export const dirEntrySchema = z.object({
+  name: z.string(),
+  /** Forward-slash absolute path of the folder. */
+  path: z.string(),
+});
+export type DirEntry = z.infer<typeof dirEntrySchema>;
+
+export const dirListingSchema = z.object({
+  /** Forward-slash absolute path of the listed folder. */
+  path: z.string(),
+  /** Parent folder, or null at a filesystem root. */
+  parent: z.string().nullable(),
+  dirs: z.array(dirEntrySchema),
+});
+export type DirListing = z.infer<typeof dirListingSchema>;

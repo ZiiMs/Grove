@@ -1,7 +1,7 @@
 //! Read server definitions from the config files other tools already own.
 //!
 //! Grove never writes these files. The scanner is deliberately forgiving: an absent file is simply a
-//! harness the user does not use, and a file it cannot parse becomes a [`McpConfigWarning`] row so the
+//! provider the user does not use, and a file it cannot parse becomes a [`McpConfigWarning`] row so the
 //! panel can still show everything the other files declare.
 
 use super::{McpConfigWarning, McpDiscovery, McpServerView, McpService, McpTransport};
@@ -79,7 +79,7 @@ pub(crate) fn discover(service: &McpService) -> McpDiscovery {
     for source in sources {
         let raw = match read_if_present(&source.path) {
             Ok(Some(raw)) => raw,
-            // A harness the user does not use is not a warning.
+            // A provider the user does not use is not a warning.
             Ok(None) => continue,
             Err(err) => {
                 warnings.push(McpConfigWarning {

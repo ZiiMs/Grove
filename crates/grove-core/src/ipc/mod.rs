@@ -4,8 +4,9 @@
 pub mod error;
 pub mod types;
 
+pub use crate::providers::credentials::ProviderStatus;
 pub use error::{ErrorCode, IpcError, IpcResult};
 pub use types::{
-    AppInfo, CreateSessionRequest, EventEnvelope, HarnessInfo, Session, SessionDetail,
-    SessionSummary,
+    AppInfo, CreateSessionRequest, DirEntry, DirListing, EventEnvelope, Project, ProjectDetection,
+    Session, SessionDetail, SessionSummary,
 };

@@ -1,0 +1,202 @@
+/* Additions the export left implicit: transcript details, MCP rows, error text. */
+
+.session-error {
+  color: var(--red);
+  font-size: 12px;
+}
+
+.stream-caret {
+  display: inline-block;
+  width: 6px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--jade);
+  animation: caretBlink 1.05s steps(2, start) infinite;
+}
+
+@keyframes caretBlink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  55%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.turn-thinking {
+  margin: 8px 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--line-2);
+  color: var(--fg-3);
+  font-size: 12.5px;
+  font-style: italic;
+  line-height: 1.55;
+}
+
+.turn-code {
+  margin: 9px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--sunken);
+  color: var(--fg-2);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.diff-lines {
+  display: flex;
+  flex-direction: column;
+  min-width: max-content;
+}
+
+.diff-lines .dl {
+  display: flex;
+  align-items: flex-start;
+  padding: 0;
+}
+
+.diff-lines .dl-code {
+  font-family: var(--mono);
+  font-size: 11.4px;
+  line-height: 1.7;
+  white-space: pre;
+}
+
+.diff-lines .dl.hunk {
+  background: var(--elev);
+  color: var(--fg-3);
+  padding: 2px 0;
+}
+
+.mcp-list {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.mcp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.mcp-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-name {
+  display: block;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.mcp-meta {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+
+.mcp-probe {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--sunken);
+  font-size: 11.5px;
+  color: var(--fg-2);
+}
+
+.mcp-probe[data-state="error"] {
+  border-color: color-mix(in srgb, var(--t-bad) 42%, var(--line));
+  color: var(--red);
+}
+
+.mcp-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.mcp-stderr {
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--red);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mcp-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 11.5px;
+  color: var(--amber);
+}
+
+.mcp-warnings p {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.mcp-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.insp-tab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-rows {
+  position: relative;
+}
+
+.run-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+/* The app root must fill the webview even when `dvh` is unavailable (older WebView2 runtimes). */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+.app {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Hard guarantee: the shell owns the whole webview even if viewport units are unsupported. */
+.app {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  inset: 0;
+  height: auto;
+}

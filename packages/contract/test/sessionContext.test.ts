@@ -17,7 +17,7 @@ describe("session context fixtures", () => {
   it("session-context.json matches the zod schema", () => {
     const parsed = sessionContextSchema.parse(fixture("session-context.json"));
     expect(parsed.sessionId).toBe("session-1");
-    expect(parsed.harness).toBe("claude");
+    expect(parsed.provider).toBe("claude");
     expect(parsed.planVersion).toBe(3);
     expect(parsed.totalChars).toBe(1776);
     expect(parsed.limits).toEqual({ perDocChars: 8000, totalChars: 24000 });
@@ -41,7 +41,7 @@ describe("context budgets and pins", () => {
     ).toEqual({ specId: "grove-architecture", title: "Grove — architecture" });
   });
 
-  it("a document records what the harness received, marker included", () => {
+  it("a document records what the provider received, marker included", () => {
     expect(
       contextDocumentSchema.parse({
         id: "plan",

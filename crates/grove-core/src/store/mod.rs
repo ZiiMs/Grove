@@ -4,6 +4,7 @@
 pub mod db;
 pub mod pins;
 pub mod plans;
+pub mod projects;
 pub mod repos;
 
 pub use db::{Store, StoreError, MIGRATIONS};

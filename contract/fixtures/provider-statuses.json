@@ -1,0 +1,30 @@
+[
+  {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "short": "AN",
+    "tint": "#c08a63",
+    "method": "api_key",
+    "keyUrl": "https://console.anthropic.com/settings/keys",
+    "envVar": "ANTHROPIC_API_KEY",
+    "defaultModel": "claude-sonnet-4-5",
+    "models": ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"],
+    "configured": true,
+    "source": "keychain",
+    "detail": null
+  },
+  {
+    "id": "openai",
+    "name": "OpenAI",
+    "short": "OA",
+    "tint": "#6f9ad1",
+    "method": "api_key",
+    "keyUrl": "https://platform.openai.com/api-keys",
+    "envVar": "OPENAI_API_KEY",
+    "defaultModel": "gpt-5",
+    "models": ["gpt-5", "gpt-5-mini", "o4-mini"],
+    "configured": false,
+    "source": null,
+    "detail": "Add an API key from https://platform.openai.com/api-keys, or set OPENAI_API_KEY."
+  }
+]

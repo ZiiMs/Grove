@@ -17,8 +17,8 @@ mod repo;
 mod types;
 
 pub use types::{
-    DiffRequest, DiffTarget, GitBranch, GitDiff, GitStatus, GitStatusFile, GitWorktree, PrRequest,
-    PrResult,
+    DiffRequest, DiffTarget, GitBranch, GitDetection, GitDiff, GitStatus, GitStatusFile,
+    GitWorktree, PrRequest, PrResult,
 };
 
 use std::fmt;

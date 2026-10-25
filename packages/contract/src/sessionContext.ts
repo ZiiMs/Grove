@@ -2,7 +2,7 @@ import { z } from "zod";
 import { contextDocumentSchema } from "./sessions";
 
 /**
- * Session knowledge contract: which specs a session carries, and what its harness is given.
+ * Session knowledge contract: which specs a session carries, and what its provider is given.
  *
  * A pin is a durable fact about a session (the `pins` table), not a copy of the spec: the id is the
  * stable handle, and the title is resolved from the spec graph at read time. The documents are the
@@ -33,7 +33,7 @@ export type ContextPin = z.infer<typeof contextPinSchema>;
  */
 export const sessionContextSchema = z.object({
   sessionId: z.string(),
-  harness: z.string(),
+  provider: z.string(),
   pins: z.array(contextPinSchema),
   documents: z.array(contextDocumentSchema),
   totalChars: z.number().int().nonnegative(),

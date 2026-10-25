@@ -1,8 +1,8 @@
-//! End-to-end session runtime against the built-in mock adapter: no Tauri, no network, no processes.
+//! End-to-end session runtime against the offline provider: no Tauri, no network, no keys.
 
 use grove_core::ipc::{CreateSessionRequest, EventEnvelope};
 use grove_core::paths::AppPaths;
-use grove_core::sessions::event::{EventKind, HarnessEvent, Role, SessionState, ToolStatus};
+use grove_core::sessions::event::{EventKind, Role, SessionEvent, SessionState, ToolStatus};
 use grove_core::sessions::manager::SessionManager;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -11,12 +11,14 @@ use tokio::time::timeout;
 const WAIT: Duration = Duration::from_secs(5);
 
 fn manager(dir: &tempfile::TempDir) -> SessionManager {
-    SessionManager::open(AppPaths::new(dir.path())).expect("the store opens")
+    SessionManager::open_offline(AppPaths::new(dir.path())).expect("the store opens")
 }
 
 fn mock_session(chunk_delay_ms: u64) -> CreateSessionRequest {
     CreateSessionRequest {
-        harness: "mock".into(),
+        provider: "mock".into(),
+        project_id: None,
+        worktree_path: None,
         config: Some(serde_json::json!({ "chunkDelayMs": chunk_delay_ms })),
         ..Default::default()
     }
@@ -26,7 +28,7 @@ fn is_state(kind: &EventKind, state: SessionState) -> bool {
     matches!(kind, EventKind::Status { state: current } if *current == state)
 }
 
-async fn next_event(bus: &mut broadcast::Receiver<EventEnvelope<HarnessEvent>>) -> HarnessEvent {
+async fn next_event(bus: &mut broadcast::Receiver<EventEnvelope<SessionEvent>>) -> SessionEvent {
     timeout(WAIT, bus.recv())
         .await
         .expect("an event arrives in time")
@@ -42,7 +44,7 @@ async fn a_mock_session_streams_deltas_a_message_and_a_tool_call() {
 
     let detail = manager.create(mock_session(1)).await.unwrap();
     let id = detail.session.id.clone();
-    assert_eq!(detail.session.harness, "mock");
+    assert_eq!(detail.session.provider, "mock");
     assert_eq!(detail.session.status, SessionState::Starting);
 
     manager.send(&id, "hello grove").await.unwrap();
@@ -119,7 +121,7 @@ async fn a_mock_session_streams_deltas_a_message_and_a_tool_call() {
 
     let session = manager.get(&id).unwrap().session;
     assert_eq!(session.status, SessionState::Idle);
-    assert_eq!(session.harness, "mock");
+    assert_eq!(session.provider, "mock");
     assert_eq!(session.title, "mock session");
 
     let summary = manager.list().unwrap();
@@ -178,13 +180,13 @@ async fn cancel_stops_a_stream_and_returns_the_session_to_idle() {
 }
 
 #[tokio::test]
-async fn an_unknown_harness_cannot_be_started() {
+async fn an_unknown_provider_cannot_be_started() {
     let dir = tempfile::tempdir().unwrap();
     let manager = manager(&dir);
     let error = manager
         .create(CreateSessionRequest {
-            // Ticket 08 registered `claude`; this name must never be a harness.
-            harness: "not-a-harness".into(),
+            // Ticket 08 registered `claude`; this name must never be a provider.
+            provider: "not-a-provider".into(),
             ..Default::default()
         })
         .await

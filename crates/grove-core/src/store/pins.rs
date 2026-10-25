@@ -55,11 +55,13 @@ mod tests {
     fn session(id: &str) -> Session {
         Session {
             id: id.into(),
-            harness: "mock".into(),
+            provider: "mock".into(),
             cwd: "C:/projects/grove".into(),
             model: None,
             title: "Pinned specs".into(),
             status: SessionState::Idle,
+            project_id: None,
+            awaiting: false,
             created_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-01T00:00:00.000Z".into(),
         }

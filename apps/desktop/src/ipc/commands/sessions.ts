@@ -1,7 +1,7 @@
 import type {
   CreateSessionRequest,
   Decision,
-  HarnessInfo,
+  ProviderSpec,
   Session,
   SessionDetail,
   SessionSummary,
@@ -12,8 +12,8 @@ import type {
  * `commands/index.ts` — one line each, so parallel merges stay trivial.
  */
 export interface SessionsCommands {
-  /** Every registered harness, for the session picker. */
-  harness_list: { args: Record<string, never>; result: HarnessInfo[] };
+  /** Every registered provider, for the session picker. */
+  provider_list: { args: Record<string, never>; result: ProviderSpec[] };
   session_list: { args: Record<string, never>; result: SessionSummary[] };
   session_get: { args: { id: string }; result: SessionDetail };
   session_create: { args: { req: CreateSessionRequest }; result: SessionDetail };

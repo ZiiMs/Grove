@@ -2,6 +2,7 @@ import type { AppCommands } from "./app";
 import type { GitCommands } from "./git";
 import type { McpCommands } from "./mcp";
 import type { PlanCommands } from "./plan";
+import type { ProjectsCommands } from "./projects";
 import type { SessionContextCommands } from "./sessionContext";
 import type { SessionsCommands } from "./sessions";
 import type { SettingsCommands } from "./settings";
@@ -17,6 +18,7 @@ export type CommandMap = AppCommands &
   GitCommands &
   McpCommands &
   PlanCommands &
+  ProjectsCommands &
   SessionContextCommands &
   SessionsCommands &
   SettingsCommands &

@@ -52,6 +52,8 @@ pub struct InstallRecord {
 pub trait InstallStore: Send + Sync {
     fn record(&self, record: InstallRecord) -> Result<(), SkillError>;
     fn list(&self) -> Result<Vec<InstallRecord>, SkillError>;
+    /// Forget one installation. The folder itself is removed by [`SkillService::remove_install`].
+    fn remove(&self, path: &str) -> Result<(), SkillError>;
 }
 
 /// File-backed store under the app-data dir. Writes are atomic; the primary key is
@@ -105,6 +107,16 @@ impl InstallStore for JsonInstallStore {
     fn list(&self) -> Result<Vec<InstallRecord>, SkillError> {
         Ok(self.read())
     }
+
+    fn remove(&self, path: &str) -> Result<(), SkillError> {
+        let _guard = self
+            .lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut records = self.read();
+        records.retain(|existing| existing.path != path);
+        self.write(&records)
+    }
 }
 
 /// In-memory store for tests and headless use.
@@ -139,6 +151,11 @@ impl InstallStore for MemoryInstallStore {
 
     fn list(&self) -> Result<Vec<InstallRecord>, SkillError> {
         Ok(self.lock().clone())
+    }
+
+    fn remove(&self, path: &str) -> Result<(), SkillError> {
+        self.lock().retain(|existing| existing.path != path);
+        Ok(())
     }
 }
 

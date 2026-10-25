@@ -18,7 +18,7 @@ pub enum ErrorCode {
     Conflict,
     NotFound,
     Invalid,
-    /// A tool or harness is not installed, not configured, or not reachable.
+    /// A tool or provider is not installed, not configured, or not reachable.
     Unavailable,
     Io,
 }

@@ -57,32 +57,14 @@ fn preview_matches_fixture() {
 
 #[test]
 fn targets_match_fixture() {
-    // Registry order: the dropdown is built from `builtin_registry()` and each adapter's own
-    // `skills_dir()`, so the golden file follows the adapter list rather than a list of its own.
+    // Grove runs the agent itself, so a skill is installed where Grove reads it: the user's folder
+    // and the project's `.agents/skills`. There is no per-vendor directory to enumerate.
     let sample = vec![
         SkillTarget {
-            id: "claude".into(),
-            label: "Claude Code".into(),
-            path: "C:/Users/demo/.claude/skills".into(),
+            id: "user".into(),
+            label: "Grove skills (this user)".into(),
+            path: "C:/Users/demo/.grove/skills".into(),
             exists: true,
-        },
-        SkillTarget {
-            id: "pi".into(),
-            label: "pi".into(),
-            path: "C:/Users/demo/.pi/skills".into(),
-            exists: false,
-        },
-        SkillTarget {
-            id: "opencode".into(),
-            label: "OpenCode".into(),
-            path: "C:/Users/demo/.config/opencode/skills".into(),
-            exists: false,
-        },
-        SkillTarget {
-            id: "codex".into(),
-            label: "Codex".into(),
-            path: "C:/Users/demo/.codex/skills".into(),
-            exists: false,
         },
         SkillTarget {
             id: "agents".into(),
@@ -102,8 +84,8 @@ fn install_result_matches_fixture() {
     let sample = InstallResult {
         skill: "pdf".into(),
         source: "anthropics/skills".into(),
-        target: "claude".into(),
-        path: "C:/Users/demo/.claude/skills/pdf".into(),
+        target: "user".into(),
+        path: "C:/Users/demo/.grove/skills/pdf".into(),
         overwritten: true,
         installed_at: "2026-10-24T18:00:00Z".into(),
     };
