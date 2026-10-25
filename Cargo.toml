@@ -11,6 +11,19 @@ authors = ["Grove contributors"]
 [workspace.dependencies]
 grove-core = { path = "crates/grove-core" }
 
+# Local build speed: skip optimisation and full debug info, let rustc split the work widely, and
+# cache compiled crates with sccache. sccache refuses incremental compilation, so incremental stays
+# off while the wrapper is configured; remove the wrapper first if you want the old incremental loop.
 [profile.dev]
-# Tauri's docs use this for a faster dev loop; keeps debug info out of the hot path.
-incremental = true
+opt-level = 0
+debug = "line-tables-only"
+incremental = false
+codegen-units = 256
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+opt-level = 0
+debug = "line-tables-only"
+incremental = false

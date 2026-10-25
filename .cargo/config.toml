@@ -1,0 +1,9 @@
+# Local build speed. sccache is the rustc wrapper, so it must be on PATH; see README §Fast Rust builds.
+[build]
+jobs = 8
+rustc-wrapper = "sccache"
+
+# sccache cannot cache incremental crates and exits when this is 1, so pin it off even if a shell
+# exports it. Remove the wrapper and this line together to use incremental locally again.
+[env]
+CARGO_INCREMENTAL = { value = "0", force = true }

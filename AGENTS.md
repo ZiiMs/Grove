@@ -38,10 +38,15 @@ npm ci                 # workspace install (apps/desktop, packages/contract)
 npm run typecheck      # tsc --noEmit across workspaces
 npm test               # vitest (UI, contract)
 npm run build          # vite production build + the entry-size bundle guard
-cargo test -p grove-core
+cargo nextest run -p grove-core
+cargo test -p grove-core --doc   # nextest does not run doctests
 cargo check -p grove-desktop
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+Rust builds go through sccache (`.cargo/config.toml`) and tests through nextest; both must be on
+`PATH`. `cargo nextest run` does not run doctests, so run the separate `--doc` command when a crate
+adds one.
 
 Never add a network call to a session path: only the skill catalog fetches, and it falls back to its
 cache. Secrets go through `SecretStore` (OS keychain) — never into `settings`, fixtures, or logs.

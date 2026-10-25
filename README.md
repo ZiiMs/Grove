@@ -30,6 +30,9 @@ there is no CI — and the manual smoke checklist is the part no test can paint 
 - `git` on `PATH` (the Git panel shells out to it); `gh` is optional and only needed to open a draft PR
 - A provider API key (Anthropic, OpenAI, Google, OpenRouter or OpenCode Go). Settings → Providers
   stores it in the OS keychain; the vendor's own environment variable works as a fallback.
+- [sccache](https://github.com/mozilla/sccache) and
+  [cargo-nextest](https://github.com/nextest-rs/nextest) on `PATH` for the configured Rust build and
+  test loop (`cargo install --locked sccache cargo-nextest`).
 
 ## Quickstart: your first session
 
@@ -83,17 +86,36 @@ npm test
 npm run build        # Vite production build + the bundle guard
 npm run check:bundle # the bundle guard alone, against an existing dist
 
-cargo test -p grove-core
+cargo nextest run -p grove-core
+cargo test -p grove-core --doc # nextest does not run doctests
 cargo check -p grove-desktop
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+### Fast Rust builds
+
+Rust builds go through [sccache](https://github.com/mozilla/sccache) and tests through
+[nextest](https://github.com/nextest-rs/nextest), both configured in `.cargo/config.toml` and
+`Cargo.toml`. Install them once:
+
+```sh
+cargo install --locked sccache cargo-nextest
+```
+
+or download the Windows x86_64 releases from those repositories. `sccache --show-stats` reports the
+cache hit rate.
+
+sccache cannot cache incrementally compiled crates and refuses to run when `CARGO_INCREMENTAL=1`, so
+the profiles keep incremental off while the wrapper is configured. To go back to the incremental
+local loop, remove `rustc-wrapper` and the `CARGO_INCREMENTAL` pin from `.cargo/config.toml` and set
+`incremental = true` in the dev and test profiles.
+
 `npm run build` ends with `scripts/check-bundle.mjs`: it fails if Monaco reappears in the entry
 chunk or the entry chunk exceeds its size budget.
 There is no CI. Run these gates yourself before landing a change, in this order: install,
 typecheck, vitest, build (with the bundle guard), rustfmt `--check`, clippy with `-D warnings`,
-`cargo test -p grove-core`, and `cargo check -p grove-desktop`.
+`cargo nextest run -p grove-core`, and `cargo check -p grove-desktop`.
 
 The cross-cutting Rust suites that pin the release promise:
 
