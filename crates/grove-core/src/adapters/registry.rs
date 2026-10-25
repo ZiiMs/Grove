@@ -7,6 +7,7 @@ use super::acp::AcpAdapter;
 use super::claude::ClaudeAdapter;
 use super::mock::MockAdapter;
 use super::pi::PiAdapter;
+use super::opencode::OpenCodeAdapter;
 use super::HarnessAdapter;
 use std::sync::Arc;
 
@@ -16,6 +17,7 @@ pub fn builtin_registry() -> Vec<Arc<dyn HarnessAdapter>> {
         Arc::new(ClaudeAdapter::default()),
         Arc::new(AcpAdapter::default()),
         Arc::new(PiAdapter::default()),
+        Arc::new(OpenCodeAdapter::default()),
     ]
 }
 

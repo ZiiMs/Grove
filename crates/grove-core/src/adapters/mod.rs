@@ -8,11 +8,13 @@ pub mod acp;
 pub mod claude;
 pub mod mock;
 pub mod pi;
+pub mod opencode;
 pub mod registry;
 
 pub use acp::AcpAdapter;
 pub use claude::ClaudeAdapter;
 pub use pi::PiAdapter;
+pub use opencode::OpenCodeAdapter;
 
 use crate::paths::AppPaths;
 use crate::secrets::SecretStore;
