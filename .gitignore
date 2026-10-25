@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+target/
+dist/
+dist-ssr/
+
+# Build / tool artifacts
+*.log
+.vite/
+coverage/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Grove local runtime state (sessions, plan mirrors, caches)
+.grove/
+
+# Tauri generated
+apps/desktop/src-tauri/gen/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Env
+.env
+.env.*
+!.env.example

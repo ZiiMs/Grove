@@ -1,0 +1,22 @@
+{
+  "root": "C:/demo/grove",
+  "nodes": [
+    {
+      "id": "grove-architecture",
+      "type": "architecture-design",
+      "title": "Grove — architecture",
+      "status": "active",
+      "path": "architecture.md",
+      "parent": "grove-goal-and-requirements",
+      "dependsOn": ["grove-goal-and-requirements"],
+      "references": ["grove-ipc-contract"],
+      "implements": ["grove-goal-and-requirements"],
+      "covers": ["specgraph"]
+    }
+  ],
+  "validation": {
+    "danglingLinks": [],
+    "duplicateIds": [],
+    "parentCycles": []
+  }
+}

@@ -1,0 +1,58 @@
+/**
+ * PROTOTYPE — throwaway. Shell chrome: the chat surface (no breadcrumb bar, no panel tabs) and the
+ * slim in-chat header that replaces them.
+ */
+
+.pv-centre {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.pv-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 var(--pad-x);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.pv-chat-title {
+  font-weight: 600;
+  font-size: var(--font-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.pv-chat-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Prototype-only controls live in the status bar now that the top strips are gone. */
+.pv-proto-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 10px;
+}
+
+.pv-section-select {
+  width: 150px;
+  height: 20px;
+  font-size: 10.5px;
+  border-radius: var(--radius-sm);
+  padding: 0 18px 0 6px;
+  background-position: calc(100% - 10px) 9px, calc(100% - 5px) 9px;
+}

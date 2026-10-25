@@ -1,0 +1,18 @@
+{
+  "name": "grove",
+  "version": "0.1.0",
+  "private": true,
+  "description": "One desktop home for every AI coding harness",
+  "workspaces": ["apps/desktop", "packages/contract", "sidecar"],
+  "scripts": {
+    "dev": "npm run dev -w @grove/desktop",
+    "build": "npm run build --workspaces --if-present && node scripts/check-bundle.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "tauri": "npm run tauri -w @grove/desktop"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

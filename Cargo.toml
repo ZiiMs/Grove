@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/grove-core", "apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Grove contributors"]
+
+[workspace.dependencies]
+grove-core = { path = "crates/grove-core" }
+
+[profile.dev]
+# Tauri's docs use this for a faster dev loop; keeps debug info out of the hot path.
+incremental = true

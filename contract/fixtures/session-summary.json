@@ -1,0 +1,11 @@
+{
+  "createdAt": "2025-01-01T00:00:00.000Z",
+  "cwd": "C:/projects/grove",
+  "eventCount": 12,
+  "harness": "mock",
+  "id": "session-1",
+  "model": "mock-1",
+  "status": "idle",
+  "title": "Refactor the store",
+  "updatedAt": "2025-01-01T00:00:05.000Z"
+}

@@ -1,0 +1,22 @@
+{
+  "danglingLinks": [
+    {
+      "from": "grove-architecture",
+      "path": "architecture.md",
+      "field": "references",
+      "target": "grove-missing-spec"
+    }
+  ],
+  "duplicateIds": [
+    {
+      "id": "grove-spec",
+      "paths": ["specs/one.md", "specs/two.md"]
+    }
+  ],
+  "parentCycles": [
+    {
+      "ids": ["cycle-a", "cycle-b"],
+      "paths": ["specs/cycle-a.md", "specs/cycle-b.md"]
+    }
+  ]
+}

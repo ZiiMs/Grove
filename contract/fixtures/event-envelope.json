@@ -1,0 +1,7 @@
+{
+  "sessionId": "session-1",
+  "payload": {
+    "kind": "status",
+    "state": "idle"
+  }
+}

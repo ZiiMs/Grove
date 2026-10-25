@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main, integration]
+  pull_request:
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install workspace
+        run: npm ci
+
+      - name: Typecheck (webview, contract, sidecar)
+        run: npm run typecheck
+
+      - name: Unit tests (webview, contract, sidecar)
+        run: npm test
+
+      - name: Build webview, sidecar, and run the bundle guard
+        run: npm run build
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Rust lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Core tests
+        run: cargo test -p grove-core
+
+      - name: Desktop shell check
+        run: cargo check -p grove-desktop

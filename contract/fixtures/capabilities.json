@@ -1,0 +1,10 @@
+{
+  "streamingDeltas": true,
+  "toolCalls": true,
+  "diffs": false,
+  "permissions": false,
+  "resume": true,
+  "images": false,
+  "mcp": false,
+  "usage": true
+}

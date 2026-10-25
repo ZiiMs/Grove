@@ -1,0 +1,106 @@
+[
+  {
+    "at": "2025-01-01T00:00:00.500Z",
+    "harness": "mock",
+    "kind": "session_started",
+    "model": "mock-1",
+    "resumed": false
+  },
+  {
+    "at": "2025-01-01T00:00:00.600Z",
+    "kind": "status",
+    "state": "ready"
+  },
+  {
+    "at": "2025-01-01T00:00:01.000Z",
+    "kind": "delta",
+    "text": "Mock "
+  },
+  {
+    "at": "2025-01-01T00:00:01.500Z",
+    "blocks": [
+      {
+        "text": "Mock reply: hello",
+        "type": "text"
+      },
+      {
+        "text": "the mock has nothing to think about",
+        "type": "thinking"
+      },
+      {
+        "language": "rust",
+        "text": "fn main() {}",
+        "type": "code"
+      }
+    ],
+    "kind": "message",
+    "role": "assistant"
+  },
+  {
+    "at": "2025-01-01T00:00:02.000Z",
+    "call_id": "mock-call-1",
+    "kind": "tool_call",
+    "name": "echo",
+    "title": "echo hello"
+  },
+  {
+    "at": "2025-01-01T00:00:02.500Z",
+    "call_id": "mock-call-1",
+    "kind": "tool_result",
+    "status": "ok",
+    "summary": "echoed 5 chars"
+  },
+  {
+    "added": 1,
+    "at": "2025-01-01T00:00:03.000Z",
+    "kind": "diff",
+    "patch": "@@ -1 +1 @@\n-old\n+new",
+    "path": "src/main.rs",
+    "removed": 1
+  },
+  {
+    "at": "2025-01-01T00:00:03.500Z",
+    "detail": "rm -rf build",
+    "kind": "permission_request",
+    "request_id": "req-1",
+    "title": "Run a command"
+  },
+  {
+    "at": "2025-01-01T00:00:03.600Z",
+    "decision": "deny",
+    "kind": "permission_resolved",
+    "request_id": "req-1"
+  },
+  {
+    "at": "2025-01-01T00:00:04.000Z",
+    "input_tokens": 5,
+    "kind": "usage",
+    "output_tokens": 4
+  },
+  {
+    "at": "2025-01-01T00:00:04.500Z",
+    "kind": "status",
+    "state": "idle"
+  },
+  {
+    "at": "2025-01-01T00:00:05.000Z",
+    "kind": "error",
+    "message": "harness exited",
+    "retryable": true
+  },
+  {
+    "at": "2025-01-01T00:00:06.000Z",
+    "documents": [
+      {
+        "chars": 1200,
+        "id": "grove-architecture",
+        "title": "Grove — architecture",
+        "truncated": false
+      }
+    ],
+    "harness": "mock",
+    "kind": "context_refreshed",
+    "note": "Context refreshed for mock: 1 document (1200 chars)",
+    "reason": "refresh"
+  }
+]

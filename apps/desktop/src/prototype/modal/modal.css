@@ -1,0 +1,67 @@
+/**
+ * PROTOTYPE — throwaway. Settings modal: near-fullscreen, sectioned, and the home of the skill catalog
+ * and MCP inspector.
+ */
+
+.pv-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 4vh 4vw;
+  background: rgb(0 0 0 / 58%);
+  backdrop-filter: blur(2px);
+}
+
+.pv-modal {
+  width: min(1120px, 92vw);
+  height: min(840px, 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 30px 90px rgb(0 0 0 / 55%);
+}
+
+.pv-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 var(--pad-x);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  flex-shrink: 0;
+}
+
+.pv-modal-head b {
+  font-size: var(--font-lg);
+  font-weight: 620;
+}
+
+.pv-modal-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.pv-modal-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  min-height: 0;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+}
+
+.pv-modal-content {
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--pad-x);
+}

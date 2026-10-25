@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Default capability for the Grove window: core IPC plus event listen/emit.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
