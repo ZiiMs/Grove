@@ -6,7 +6,7 @@ use crate::state::AppState;
 use grove_core::ipc::{CreateSessionRequest, IpcResult, Session, SessionDetail, SessionSummary};
 use grove_core::providers::ProviderSpec;
 use grove_core::sessions::context::SessionContext;
-use grove_core::sessions::event::Decision;
+use grove_core::sessions::event::{Decision, QuestionAnswer};
 
 /// Every registered provider, with models and auth, for the picker and settings.
 #[tauri::command]
@@ -66,6 +66,22 @@ pub async fn session_respond_permission(
         .core
         .sessions
         .respond_permission(&id, &request_id, decision)
+        .await?)
+}
+
+/// Answer a pending `question_request` for one session. Like a permission answer, the command is a
+/// thin forwarder; the accepted answer comes back as `question_resolved`.
+#[tauri::command]
+pub async fn session_respond_question(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    request_id: String,
+    answers: Vec<QuestionAnswer>,
+) -> IpcResult<()> {
+    Ok(state
+        .core
+        .sessions
+        .respond_question(&id, &request_id, answers)
         .await?)
 }
 

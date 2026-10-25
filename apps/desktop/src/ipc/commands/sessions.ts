@@ -2,6 +2,7 @@ import type {
   CreateSessionRequest,
   Decision,
   ProviderSpec,
+  QuestionAnswer,
   Session,
   SessionDetail,
   SessionSummary,
@@ -27,6 +28,11 @@ export interface SessionsCommands {
    */
   session_respond_permission: {
     args: { id: string; requestId: string; decision: Decision };
+    result: null;
+  };
+  /** Answer a pending structured question; `question_resolved` carries what the runtime accepted. */
+  session_respond_question: {
+    args: { id: string; requestId: string; answers: QuestionAnswer[] };
     result: null;
   };
   session_close: { args: { id: string }; result: null };

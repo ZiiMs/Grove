@@ -41,9 +41,10 @@ normalized events the transcript records, and asks the user before a tool change
 
 ## Tool
 
-One capability the model may call: `read_file`, `list_dir`, `grep`, `write_file`, `edit_file` and
-`run_command` (`providers/tools.rs`). Tools run locally in the session's working directory, resolve
-paths against it, and refuse anything that escapes it. The three mutating tools need approval.
+One capability the model may call: `read_file`, `list_dir`, `grep`, `write_file`, `edit_file`,
+`run_command` and `ask_user` (`providers/tools.rs`). Tools run locally in the session's working
+directory, resolve paths against it, and refuse anything that escapes it. The three mutating tools need
+approval; `ask_user` parks on the user's answer instead.
 
 ## Permission request
 
@@ -51,6 +52,14 @@ The card the transcript shows before a mutating tool runs. The runtime emits `pe
 parks the tool, and waits for `session_respond_permission`; it emits `permission_resolved` with the
 user's answer and only then proceeds. The buttons disappear when the resolution arrives, so what the
 UI shows is what the runtime accepted.
+
+## Question request
+
+The inline card the transcript shows when the model calls `ask_user`. The runtime emits
+`question_request` with one or more questions, parks the tool, and waits for
+`session_respond_question`; it emits `question_resolved` and returns the structured answers as the
+tool result. The card supports single- and multi-select options, per-choice notes, a free-text
+"Other" answer, and pages through multiple questions before sending them together.
 
 ## Session
 

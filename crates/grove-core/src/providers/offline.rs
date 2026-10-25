@@ -210,6 +210,14 @@ impl AgentSession for OfflineSession {
         Ok(())
     }
 
+    async fn respond_question(
+        &mut self,
+        _request_id: &str,
+        _answers: Vec<crate::sessions::event::QuestionAnswer>,
+    ) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
     async fn cancel(&mut self) -> Result<(), ProviderError> {
         if let Some(turn) = self.turn.lock().await.take() {
             turn.abort();

@@ -91,6 +91,24 @@ pub(crate) fn publish(store: &Store, bus: &SessionBus, session_id: &str, event: 
                 );
             }
         }
+        EventKind::QuestionRequest { .. } => {
+            if let Err(error) = store.update_session_awaiting(session_id, true) {
+                tracing::warn!(
+                    target: "grove::sessions",
+                    session = session_id,
+                    "failed to mirror awaiting: {error}"
+                );
+            }
+        }
+        EventKind::QuestionResolved { .. } => {
+            if let Err(error) = store.update_session_awaiting(session_id, false) {
+                tracing::warn!(
+                    target: "grove::sessions",
+                    session = session_id,
+                    "failed to clear awaiting: {error}"
+                );
+            }
+        }
         _ => {}
     }
     // No receivers is normal (headless tests, a closed window); the event is still on disk.
@@ -236,6 +254,32 @@ mod tests {
             EventKind::PermissionResolved {
                 request_id: "req-1".into(),
                 decision: Decision::Approve,
+            },
+        );
+        assert!(!awaiting(&store));
+    }
+
+    #[test]
+    fn a_question_request_sets_awaiting_until_it_is_resolved() {
+        let store = store_with_session();
+        let (bus, _) = broadcast::channel(8);
+
+        publish_kind(
+            &store,
+            &bus,
+            EventKind::QuestionRequest {
+                request_id: "q-1".into(),
+                questions: Vec::new(),
+            },
+        );
+        assert!(awaiting(&store));
+
+        publish_kind(
+            &store,
+            &bus,
+            EventKind::QuestionResolved {
+                request_id: "q-1".into(),
+                answers: Vec::new(),
             },
         );
         assert!(!awaiting(&store));

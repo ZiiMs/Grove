@@ -75,6 +75,16 @@ pub enum EventKind {
         request_id: String,
         decision: Decision,
     },
+    /// The agent paused to ask the user a structured question. The tool call stays parked until
+    /// `QuestionResolved` arrives; the UI renders this as one inline card, not a tool row.
+    QuestionRequest {
+        request_id: String,
+        questions: Vec<Question>,
+    },
+    QuestionResolved {
+        request_id: String,
+        answers: Vec<QuestionAnswer>,
+    },
     Usage {
         input_tokens: u64,
         output_tokens: u64,
@@ -98,6 +108,52 @@ pub enum EventKind {
         /// One human-readable line for the transcript.
         note: String,
     },
+}
+
+/// One option in a question the agent asks. Labels are what the model receives; descriptions are
+/// only for the card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// A single question in a `QuestionRequest`. A request may carry several questions; the UI pages
+/// through them and sends every answer together.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Question {
+    /// Stable id within the request, used to match the answer back to this question.
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub hint: String,
+    /// Whether more than one option may be selected.
+    #[serde(default)]
+    pub multi: bool,
+    /// Whether the card offers a free-text "Other" answer.
+    #[serde(default = "default_true")]
+    pub other: bool,
+    pub options: Vec<QuestionOption>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// One selected answer. `note` is the optional annotation the user typed beside the choice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionChoice {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// The user's answer to one question. Empty `answers` means the question was cancelled or expired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionAnswer {
+    pub question_id: String,
+    pub answers: Vec<QuestionChoice>,
 }
 
 /// What caused a session's context documents to be assembled and handed to the provider.
@@ -155,6 +211,8 @@ impl EventKind {
             EventKind::Diff { .. } => "diff",
             EventKind::PermissionRequest { .. } => "permission_request",
             EventKind::PermissionResolved { .. } => "permission_resolved",
+            EventKind::QuestionRequest { .. } => "question_request",
+            EventKind::QuestionResolved { .. } => "question_resolved",
             EventKind::Usage { .. } => "usage",
             EventKind::Status { .. } => "status",
             EventKind::Error { .. } => "error",

@@ -9,8 +9,8 @@ use grove_core::plan::{Plan, PlanUpdate};
 use grove_core::providers::{Capabilities, Detection};
 use grove_core::sessions::context::{ContextLimits, ContextPin, SessionContext};
 use grove_core::sessions::event::{
-    Block, ContextDocument, ContextReason, Decision, EventKind, Role, SessionEvent, SessionState,
-    ToolStatus,
+    Block, ContextDocument, ContextReason, Decision, EventKind, Question, QuestionAnswer,
+    QuestionChoice, QuestionOption, Role, SessionEvent, SessionState, ToolStatus,
 };
 use grove_core::skills::InstallRecord;
 
@@ -418,6 +418,64 @@ fn sample_events() -> Vec<SessionEvent> {
             "2025-01-01T00:00:03.600Z",
         ),
         event(
+            EventKind::QuestionRequest {
+                request_id: "question-call-1".into(),
+                questions: vec![
+                    Question {
+                        id: "scope".into(),
+                        title: "Which scope should this change cover?".into(),
+                        hint: "This decides how much I touch before handing back.".into(),
+                        multi: false,
+                        other: true,
+                        options: vec![
+                            QuestionOption {
+                                label: "Session module only".into(),
+                                description: "Smallest diff.".into(),
+                            },
+                            QuestionOption {
+                                label: "Session module + adapter trait".into(),
+                                description: "Lets other providers reuse the loop.".into(),
+                            },
+                        ],
+                    },
+                    Question {
+                        id: "verify".into(),
+                        title: "How should I verify it?".into(),
+                        hint: "Pick any that apply.".into(),
+                        multi: true,
+                        other: true,
+                        options: vec![QuestionOption {
+                            label: "Run the crate tests".into(),
+                            description: "cargo test -p grove-auth oauth".into(),
+                        }],
+                    },
+                ],
+            },
+            "2025-01-01T00:00:03.700Z",
+        ),
+        event(
+            EventKind::QuestionResolved {
+                request_id: "question-call-1".into(),
+                answers: vec![
+                    QuestionAnswer {
+                        question_id: "scope".into(),
+                        answers: vec![QuestionChoice {
+                            label: "Session module only".into(),
+                            note: Some("Keep the diff small".into()),
+                        }],
+                    },
+                    QuestionAnswer {
+                        question_id: "verify".into(),
+                        answers: vec![QuestionChoice {
+                            label: "Run the crate tests".into(),
+                            note: None,
+                        }],
+                    },
+                ],
+            },
+            "2025-01-01T00:00:03.800Z",
+        ),
+        event(
             EventKind::Usage {
                 input_tokens: 5,
                 output_tokens: 4,
@@ -509,6 +567,8 @@ fn every_harness_event_variant_matches_the_fixture() {
         "diff",
         "permission_request",
         "permission_resolved",
+        "question_request",
+        "question_resolved",
         "usage",
         "status",
         "error",

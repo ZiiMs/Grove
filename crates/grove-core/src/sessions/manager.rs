@@ -21,7 +21,8 @@ use crate::providers::{
 use crate::secrets::MemorySecretStore;
 use crate::sessions::context::{render_documents, ContextAssembly, ContextSource};
 use crate::sessions::event::{
-    now, render_tail, Block, ContextReason, Decision, EventKind, Role, SessionEvent, SessionState,
+    now, render_tail, Block, ContextReason, Decision, EventKind, QuestionAnswer, Role,
+    SessionEvent, SessionState,
 };
 use crate::sessions::pump::{self, InjectedEvent, SessionBus};
 use crate::store::{Store, StoreError};
@@ -400,6 +401,18 @@ impl SessionManager {
         let live = self.live_session(id).await?;
         let mut handle = live.commands.lock().await;
         handle.respond_permission(request_id, decision).await?;
+        Ok(())
+    }
+
+    pub async fn respond_question(
+        &self,
+        id: &str,
+        request_id: &str,
+        answers: Vec<QuestionAnswer>,
+    ) -> Result<(), SessionError> {
+        let live = self.live_session(id).await?;
+        let mut handle = live.commands.lock().await;
+        handle.respond_question(request_id, answers).await?;
         Ok(())
     }
 
@@ -884,6 +897,14 @@ mod tests {
             decision: Decision,
         ) -> Result<(), ProviderError> {
             lock(&self.permissions).push((request_id.to_string(), decision));
+            Ok(())
+        }
+
+        async fn respond_question(
+            &mut self,
+            _request_id: &str,
+            _answers: Vec<crate::sessions::event::QuestionAnswer>,
+        ) -> Result<(), ProviderError> {
             Ok(())
         }
 

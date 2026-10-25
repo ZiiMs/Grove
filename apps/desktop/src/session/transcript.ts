@@ -1,6 +1,8 @@
 import type {
   Block,
   Decision,
+  Question,
+  QuestionAnswer,
   SessionEvent,
   Role,
   ToolStatus,
@@ -47,6 +49,14 @@ export type TranscriptItem =
       at: string;
     }
   | { id: string; kind: "notice"; tone: "info" | "error"; text: string; at: string }
+  | {
+      id: string;
+      kind: "question";
+      requestId: string;
+      questions: Question[];
+      answers: QuestionAnswer[] | null;
+      at: string;
+    }
   | {
       id: string;
       kind: "usage";
@@ -197,6 +207,26 @@ export function foldTranscript(events: SessionEvent[]): TranscriptItem[] {
             text: `Permission ${event.decision}: ${event.request_id}`,
             at: event.at,
           });
+        }
+        break;
+      }
+      case "question_request":
+        items.push({
+          id,
+          kind: "question",
+          requestId: event.request_id,
+          questions: event.questions,
+          answers: null,
+          at: event.at,
+        });
+        break;
+      case "question_resolved": {
+        for (let i = items.length - 1; i >= 0; i -= 1) {
+          const item = items[i];
+          if (item.kind === "question" && item.requestId === event.request_id) {
+            items[i] = { ...item, answers: event.answers };
+            break;
+          }
         }
         break;
       }

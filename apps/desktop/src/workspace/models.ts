@@ -167,7 +167,7 @@ export type SessionVisual = "running" | "waiting" | "failed" | "done" | "idle";
 
 export const SESSION_UI_STATE: Record<SessionVisual, string> = {
   running: "Running",
-  waiting: "Awaiting approval",
+  waiting: "Waiting on you",
   failed: "Failed",
   done: "Done",
   idle: "Ready",

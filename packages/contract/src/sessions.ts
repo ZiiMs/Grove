@@ -36,6 +36,38 @@ export type ToolStatus = z.infer<typeof toolStatusSchema>;
 export const decisionSchema = z.enum(["approve", "deny"]);
 export type Decision = z.infer<typeof decisionSchema>;
 
+/** One option in a structured question. */
+export const questionOptionSchema = z.object({
+  label: z.string(),
+  description: z.string().default(""),
+});
+export type QuestionOption = z.infer<typeof questionOptionSchema>;
+
+/** One question the agent pauses to ask. */
+export const questionSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  hint: z.string().default(""),
+  multi: z.boolean().default(false),
+  other: z.boolean().default(true),
+  options: z.array(questionOptionSchema),
+});
+export type Question = z.infer<typeof questionSchema>;
+
+/** One selected option and the optional note the user attached to it. */
+export const questionChoiceSchema = z.object({
+  label: z.string(),
+  note: z.string().optional(),
+});
+export type QuestionChoice = z.infer<typeof questionChoiceSchema>;
+
+/** The answer to one question. Empty `answers` means it was cancelled or expired. */
+export const questionAnswerSchema = z.object({
+  question_id: z.string(),
+  answers: z.array(questionChoiceSchema),
+});
+export type QuestionAnswer = z.infer<typeof questionAnswerSchema>;
+
 /**
  * Why a session's context documents were assembled and handed to the provider: a new session, a
  * resume, an explicit refresh, or a switch to another provider.
@@ -112,6 +144,18 @@ export const sessionEventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("permission_resolved"),
     request_id: z.string(),
     decision: decisionSchema,
+  }),
+  z.object({
+    at: z.string(),
+    kind: z.literal("question_request"),
+    request_id: z.string(),
+    questions: z.array(questionSchema),
+  }),
+  z.object({
+    at: z.string(),
+    kind: z.literal("question_resolved"),
+    request_id: z.string(),
+    answers: z.array(questionAnswerSchema),
   }),
   z.object({
     at: z.string(),

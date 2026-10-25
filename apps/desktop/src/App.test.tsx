@@ -237,6 +237,42 @@ describe("redesigned shell", () => {
     await waitFor(() => expect(bridge.invocations).toContain("session_send"));
   });
 
+  it("answers an inline question and renders the resolved summary", async () => {
+    const questionEvents: SessionEvent[] = [
+      {
+        at: "2025-01-01T00:00:01.000Z",
+        kind: "question_request",
+        request_id: "question-1",
+        questions: [
+          {
+            id: "scope",
+            title: "Which scope?",
+            hint: "This decides the diff size.",
+            multi: false,
+            other: true,
+            options: [
+              { label: "Session module only", description: "Keep the diff small." },
+              { label: "Whole workspace", description: "Touch every caller." },
+            ],
+          },
+        ],
+      },
+    ];
+    const waiting = { ...session, awaiting: true };
+    const bridge = renderApp({
+      sessions: [fakeSummary(waiting, questionEvents.length)],
+      details: {
+        [session.id]: { ...detail, events: questionEvents, awaiting: true },
+      },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    await userEvent.click(screen.getByRole("radio", { name: /Session module only/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Send answer" }));
+    await waitFor(() => expect(bridge.invocations).toContain("session_respond_question"));
+    await screen.findByRole("group", { name: "Answered questions" });
+  });
+
   it("answers a permission request from the transcript", async () => {
     const bridge = await ready();
     await userEvent.click(screen.getByRole("button", { name: "Approve and run" }));

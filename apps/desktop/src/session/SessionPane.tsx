@@ -1,5 +1,11 @@
-import type { Decision, Project, SessionSummary } from "@grove/contract";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  Decision,
+  Project,
+  QuestionAnswer,
+  QuestionChoice,
+  SessionSummary,
+} from "@grove/contract";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 const EMPTY_QUEUE: string[] = [];
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -54,6 +60,7 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
   const openSettings = useUiStore((state) => state.openSettings);
   const resume = useSessionStore((state) => state.resume);
   const respondPermission = useSessionStore((state) => state.respondPermission);
+  const respondQuestion = useSessionStore((state) => state.respondQuestion);
   const busy = useSessionStore((state) => state.busy);
   const error = useSessionStore((state) => state.error);
   const applyContext = useSessionStore((state) => state.applyContext);
@@ -61,6 +68,10 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
   const openNewSession = useUiStore((state) => state.openNewSession);
 
   const items = useMemo(() => foldTranscript(events), [events]);
+  const questionPending = useMemo(
+    () => items.some((item) => item.kind === "question" && item.answers === null),
+    [items],
+  );
   const live = detail ? detail.status !== "exited" && detail.status !== "error" : false;
   const working = turnInFlight(summary ?? detail);
   const visual = sessionVisual(summary ?? detail);
@@ -122,6 +133,7 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
         working={working}
         providerName={provider?.name ?? "the provider"}
         onDecide={(requestId, decision) => void respondPermission(bridge, requestId, decision)}
+        onAnswer={(requestId, answers) => respondQuestion(bridge, requestId, answers)}
         empty={!detail}
         onNewSession={() => openNewSession({ projectId: project?.id ?? null })}
       />
@@ -130,6 +142,7 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
         <Composer
           sessionId={detail.id}
           model={detail.model}
+          locked={questionPending}
           pinned={pinned}
           onUnpin={async (specId) => {
             try {
@@ -160,6 +173,7 @@ function Transcript({
   working,
   providerName,
   onDecide,
+  onAnswer,
   empty,
   onNewSession,
 }: {
@@ -167,6 +181,7 @@ function Transcript({
   working: boolean;
   providerName: string;
   onDecide: (requestId: string, decision: Decision) => void;
+  onAnswer: (requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
   empty: boolean;
   onNewSession: () => void;
 }) {
@@ -248,6 +263,7 @@ function Transcript({
                     open={expanded.has(item.id)}
                     onToggle={() => toggle(item.id)}
                     onDecide={onDecide}
+                    onAnswer={onAnswer}
                   />
                 </div>
               );
@@ -289,11 +305,13 @@ function TranscriptRow({
   open,
   onToggle,
   onDecide,
+  onAnswer,
 }: {
   item: TranscriptItem;
   open: boolean;
   onToggle: () => void;
   onDecide: (requestId: string, decision: Decision) => void;
+  onAnswer: (requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
 }) {
   const [answered, setAnswered] = useState<Decision | null>(null);
   const detail = useSessionStore((state) => state.detail);
@@ -467,9 +485,324 @@ function TranscriptRow({
           </div>
         </div>
       );
+    case "question":
+      return <QuestionCard item={item} onAnswer={onAnswer} />;
     case "usage":
       return null;
   }
+}
+
+type QuestionItem = Extract<TranscriptItem, { kind: "question" }>;
+
+function answerSummary(answers: QuestionAnswer[], questionId: string): string {
+  const answer = answers.find((entry) => entry.question_id === questionId);
+  if (!answer || answer.answers.length === 0) return "";
+  return answer.answers
+    .map((choice) => (choice.note ? `${choice.label} — ${choice.note}` : choice.label))
+    .join(", ");
+}
+
+function ResolvedQuestionCard({ item }: { item: QuestionItem }) {
+  const answers = item.answers ?? [];
+  return (
+    <div className="turn">
+      <div className="qa-list" role="group" aria-label="Answered questions">
+        {item.questions.map((question) => {
+          const line = answerSummary(answers, question.id);
+          return (
+            <div className="qa" key={question.id}>
+              <span className="qk">{line ? "answered" : "closed"}</span>
+              <span className="qv">
+                <b>{question.title}</b>
+                {line ? ` — ${line}` : " — no answer was sent."}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** An inline question card: one question at a time, all answers sent together. */
+function QuestionCard({
+  item,
+  onAnswer,
+}: {
+  item: QuestionItem;
+  onAnswer: (requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
+}) {
+  const detail = useSessionStore((state) => state.detail);
+  const live = detail ? detail.status !== "exited" && detail.status !== "error" : false;
+  const [index, setIndex] = useState(0);
+  const [answers, setAnswers] = useState<Record<string, QuestionChoice[]>>({});
+  const [other, setOther] = useState<Record<string, string>>({});
+  const [otherOpen, setOtherOpen] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const resolved = item.answers !== null;
+  const total = item.questions.length;
+  const current = item.questions[Math.min(index, total - 1)];
+  const selected = current ? (answers[current.id] ?? []) : [];
+  const currentOther = current ? (other[current.id] ?? "") : "";
+  const isSelected = (label: string) => selected.some((choice) => choice.label === label);
+
+  const answered = (question: (typeof item.questions)[number]) =>
+    (answers[question.id]?.length ?? 0) > 0 || Boolean(other[question.id]?.trim());
+  const currentAnswered = current ? answered(current) : false;
+  const allAnswered = item.questions.every(answered);
+
+  useEffect(() => {
+    if (!resolved && !dismissed) cardRef.current?.focus();
+  }, [dismissed, resolved]);
+
+  useEffect(() => {
+    if (index >= total && total > 0) setIndex(total - 1);
+  }, [index, total]);
+
+  if (resolved) return <ResolvedQuestionCard item={item} />;
+  if (!current) return null;
+  if (!live) {
+    return (
+      <div className="turn">
+        <div className="qcard qcard-closed" role="group" aria-label={current.title}>
+          <div className="qhead">
+            <span className="qkind">
+              <Icon name="alert" size="sm" /> question
+            </span>
+            <span className="qstep">closed</span>
+          </div>
+          <p className="qtitle">{current.title}</p>
+          <p className="qhint">The session stopped before this question was answered.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const select = (label: string) => {
+    if (!current) return;
+    const existing = answers[current.id] ?? [];
+    if (current.multi) {
+      const next = isSelected(label)
+        ? existing.filter((choice) => choice.label !== label)
+        : [...existing, { label }];
+      setAnswers((state) => ({ ...state, [current.id]: next }));
+    } else {
+      setAnswers((state) => ({ ...state, [current.id]: [{ label }] }));
+    }
+  };
+
+  const setNote = (label: string, note: string) => {
+    if (!current) return;
+    const trimmed = note.trim();
+    setAnswers((state) => ({
+      ...state,
+      [current.id]: (state[current.id] ?? []).map((choice) =>
+        choice.label === label ? { ...choice, note: trimmed || undefined } : choice,
+      ),
+    }));
+  };
+
+  const next = () => {
+    if (index < total - 1) {
+      setIndex((value) => value + 1);
+      setOtherOpen(false);
+    }
+  };
+
+  const submit = async () => {
+    if (!allAnswered || submitting) return;
+    setSubmitting(true);
+    const payload: QuestionAnswer[] = item.questions.map((question) => {
+      const typed = other[question.id]?.trim();
+      let choices = [...(answers[question.id] ?? [])];
+      if (typed) {
+        const freeform = { label: `Other: ${typed}` };
+        choices = question.multi ? [...choices, freeform] : [freeform];
+      }
+      return { question_id: question.id, answers: choices };
+    });
+    const accepted = await onAnswer(item.requestId, payload);
+    if (!accepted) setSubmitting(false);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDismissed(true);
+      }
+      return;
+    }
+    if (/^[1-9]$/.test(event.key)) {
+      const option = current.options[Number(event.key) - 1];
+      if (option) {
+        event.preventDefault();
+        select(option.label);
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setDismissed(true);
+      return;
+    }
+    if (event.key === "Enter" && !(event.target instanceof HTMLButtonElement)) {
+      event.preventDefault();
+      if (!currentAnswered) return;
+      if (index === total - 1) void submit();
+      else next();
+    }
+  };
+
+  if (dismissed) {
+    return (
+      <div className="turn">
+        <div className="dismissed-card">
+          <Icon name="alert" size="sm" />
+          <span>Question dismissed — the agent is paused.</span>
+          <button className="btn-ghost sm" type="button" onClick={() => setDismissed(false)}>
+            Answer it
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="turn">
+      <div
+        className="qcard"
+        role="group"
+        aria-label={current.title}
+        ref={cardRef}
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+      >
+        <div className="qhead">
+          <span className="qkind">
+            <Icon name="alert" size="sm" /> question
+          </span>
+          <span className="qstep">
+            {index + 1} of {total}
+          </span>
+        </div>
+        <p className="qtitle">{current.title}</p>
+        {current.hint ? <p className="qhint">{current.hint}</p> : null}
+        <div className="qopts">
+          {current.options.map((option) => {
+            const on = isSelected(option.label);
+            const note = selected.find((choice) => choice.label === option.label)?.note ?? "";
+            return (
+              <div className="qwrap" key={option.label}>
+                <button
+                  className="qopt"
+                  type="button"
+                  role={current.multi ? "checkbox" : "radio"}
+                  aria-checked={on}
+                  onClick={() => select(option.label)}
+                >
+                  <span className="box" aria-hidden="true">
+                    {on ? <Icon name="check" size="sm" /> : null}
+                  </span>
+                  <span className="grow">
+                    <span className="t">{option.label}</span>
+                    {option.description ? <span className="s">{option.description}</span> : null}
+                  </span>
+                </button>
+                {on ? (
+                  <div className="qnote">
+                    <span className="ico" aria-hidden="true">
+                      <Icon name="message" size="sm" />
+                    </span>
+                    <label className="sr-only" htmlFor={`note-${item.id}-${option.label}`}>
+                      Add a note to {option.label}
+                    </label>
+                    <input
+                      id={`note-${item.id}-${option.label}`}
+                      type="text"
+                      value={note}
+                      placeholder="Add a note to this answer — optional"
+                      autoComplete="off"
+                      onChange={(event) => setNote(option.label, event.target.value)}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+        <button className="other-link" type="button" onClick={() => setOtherOpen((open) => !open)}>
+          Other — type your own answer
+        </button>
+        {otherOpen ? (
+          <div className="other-row">
+            <input
+              type="text"
+              value={currentOther}
+              placeholder="Type your answer…"
+              autoComplete="off"
+              aria-label={`Other answer for ${current.title}`}
+              onChange={(event) =>
+                setOther((state) => ({ ...state, [current.id]: event.target.value }))
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  setOtherOpen(false);
+                }
+              }}
+            />
+            <button
+              className="btn-ghost sm"
+              type="button"
+              disabled={!currentOther.trim()}
+              onClick={() => setOtherOpen(false)}
+            >
+              Use
+            </button>
+          </div>
+        ) : null}
+        <p className="note-hint">
+          <Icon name="message" size="sm" /> Any answer can carry a note — it goes back to the agent
+          with the choice.
+        </p>
+        <div className="qfoot">
+          <span className="qkeys">
+            <span className="kbd">1</span>–<span className="kbd">{current.options.length}</span>
+            <b>choose</b>
+            <span className="kbd">↵</span>
+            <b>{index === total - 1 ? "send" : "next"}</b>
+          </span>
+          {index > 0 ? (
+            <button
+              className="btn-ghost sm qback"
+              type="button"
+              onClick={() => setIndex((value) => Math.max(0, value - 1))}
+            >
+              Back
+            </button>
+          ) : null}
+          <button
+            className="btn-primary sm"
+            type="button"
+            disabled={submitting || !currentAnswered}
+            onClick={() => (index === total - 1 ? void submit() : next())}
+          >
+            {submitting
+              ? "Sending…"
+              : index === total - 1
+                ? allAnswered
+                  ? "Send answer"
+                  : "Answer all questions"
+                : "Next question"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function DiffBody({ patch }: { patch: string }) {
@@ -493,11 +826,13 @@ function DiffBody({ patch }: { patch: string }) {
 function Composer({
   sessionId,
   model,
+  locked,
   pinned,
   onUnpin,
 }: {
   sessionId: string;
   model: string | null;
+  locked: boolean;
   pinned: { specId: string; title: string }[];
   onUnpin: (specId: string) => void;
 }) {
@@ -540,7 +875,7 @@ function Composer({
   }, [draft]);
 
   const submit = async () => {
-    if (!typed) return;
+    if (!typed || locked) return;
     if (working) {
       enqueue(sessionId, draft);
       setDraft(sessionId, "");
@@ -610,12 +945,14 @@ function Composer({
             ref={inputRef}
             rows={1}
             placeholder={
-              isStopped
-                ? "Type a message, then resume this session to send…"
-                : "Ask for the next change…"
+              locked
+                ? "Answer the question in the transcript to continue…"
+                : isStopped
+                  ? "Type a message, then resume this session to send…"
+                  : "Ask for the next change…"
             }
             value={draft}
-            disabled={!detail}
+            disabled={!detail || locked}
             onChange={(event) => setDraft(sessionId, event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -668,7 +1005,7 @@ function Composer({
               <button
                 className="btn-send"
                 type="button"
-                disabled={!typed || isStopped}
+                disabled={!typed || isStopped || locked}
                 onClick={() => void submit()}
                 aria-label={working ? "Queue this message for the next turn" : "Send message"}
               >

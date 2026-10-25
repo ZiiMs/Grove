@@ -3,6 +3,7 @@ import type {
   SessionEvent,
   ProviderSpec,
   ProviderStatus,
+  QuestionAnswer,
   SessionContext,
   SessionDetail,
   SessionSummary,
@@ -80,6 +81,7 @@ export interface SessionStore extends SessionStoreData {
    * what the agent actually accepted.
    */
   respondPermission: (bridge: GroveBridge, requestId: string, decision: Decision) => Promise<void>;
+  respondQuestion: (bridge: GroveBridge, requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
   resume: (bridge: GroveBridge) => Promise<void>;
   close: (bridge: GroveBridge) => Promise<void>;
   /** Adopt a snapshot another panel produced (the Specs panel pins and unpins). */
@@ -315,6 +317,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
+  respondQuestion: async (bridge, requestId, answers) => {
+    const id = get().activeId;
+    if (!id) return false;
+    set({ error: null });
+    try {
+      await bridge.invoke("session_respond_question", { id, requestId, answers });
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
   resume: async (bridge) => {
     const id = get().activeId;
     if (!id) return;
@@ -392,9 +407,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         event.kind === "status" &&
         (event.state === "exited" || event.state === "error");
       const awaiting =
-        event.kind === "permission_request"
+        event.kind === "permission_request" || event.kind === "question_request"
           ? true
-          : event.kind === "permission_resolved" || stopped
+          : event.kind === "permission_resolved" ||
+              event.kind === "question_resolved" ||
+              stopped
             ? false
             : null;
       return {

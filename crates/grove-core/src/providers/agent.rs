@@ -26,8 +26,10 @@ use super::{
     Wire,
 };
 use crate::sessions::event::{
-    Block, Decision, EventKind, Role, SessionEvent, SessionState, ToolStatus,
+    Block, Decision, EventKind, Question, QuestionAnswer, Role, SessionEvent, SessionState,
+    ToolStatus,
 };
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -43,6 +45,12 @@ const TOOL_SUMMARY_CHARS: usize = 280;
 /// How many events may queue for the pump before new ones are dropped. A transcript row lost to a
 /// full buffer is better than a turn that blocks on the writer.
 const EVENT_BUFFER: usize = 1024;
+
+/// The model-facing shape of the `ask_user` tool.
+#[derive(Deserialize)]
+struct AskUserInput {
+    questions: Vec<Question>,
+}
 
 /// One provider, as the registry holds it. The wire format decides the encoding, so one
 /// implementation serves OpenAI and OpenRouter without either knowing about the other.
@@ -157,6 +165,8 @@ pub struct AgentSessionImpl {
     tx: mpsc::Sender<SessionEvent>,
     /// Requests waiting for a decision, keyed by request id.
     permits: Arc<Mutex<HashMap<String, oneshot::Sender<Decision>>>>,
+    /// Structured questions waiting for an answer, keyed by request id.
+    questions: Arc<Mutex<HashMap<String, oneshot::Sender<Vec<QuestionAnswer>>>>>,
     /// Serializes turns. `send` returns as soon as the turn is queued.
     gate: Arc<Mutex<()>>,
     turn: Option<JoinHandle<()>>,
@@ -189,6 +199,7 @@ impl AgentSessionImpl {
             events: Some(rx),
             tx,
             permits: Arc::new(Mutex::new(HashMap::new())),
+            questions: Arc::new(Mutex::new(HashMap::new())),
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps,
@@ -303,9 +314,66 @@ impl AgentSessionImpl {
         Ok(TurnOutput { uses, stop })
     }
 
+    /// Park the turn on a structured question and return the user's answers as the tool result. The
+    /// generic tool-call/result rows are intentionally not emitted: the question card is the row.
+    async fn ask_user(&self, call_id: &str, input: &Value) -> MsgBlock {
+        let ask: AskUserInput = match serde_json::from_value(input.clone()) {
+            Ok(ask) => ask,
+            Err(error) => {
+                return MsgBlock::ToolResult {
+                    id: call_id.to_string(),
+                    content: format!("invalid ask_user input: {error}"),
+                    is_error: true,
+                };
+            }
+        };
+        if ask.questions.is_empty()
+            || ask.questions.iter().any(|question| {
+                question.id.trim().is_empty()
+                    || question.title.trim().is_empty()
+                    || question.options.is_empty()
+            })
+        {
+            return MsgBlock::ToolResult {
+                id: call_id.to_string(),
+                content: "ask_user needs at least one question with a title and options".into(),
+                is_error: true,
+            };
+        }
+
+        let request_id = format!("question-{call_id}");
+        let (sender, receiver) = oneshot::channel();
+        self.questions
+            .lock()
+            .await
+            .insert(request_id.clone(), sender);
+        self.emit(EventKind::QuestionRequest {
+            request_id: request_id.clone(),
+            questions: ask.questions,
+        });
+        let answers: Vec<QuestionAnswer> = receiver.await.unwrap_or_default();
+        self.questions.lock().await.remove(&request_id);
+        self.emit(EventKind::QuestionResolved {
+            request_id,
+            answers: answers.clone(),
+        });
+        if answers.is_empty() {
+            return MsgBlock::ToolResult {
+                id: call_id.to_string(),
+                content: "the question was cancelled before it was answered".into(),
+                is_error: true,
+            };
+        }
+        MsgBlock::ToolResult {
+            id: call_id.to_string(),
+            content: serde_json::json!({ "answers": answers }).to_string(),
+            is_error: false,
+        }
+    }
+
     /// Execute one tool call, asking for approval first when it mutates the machine.
     async fn run_tool(&self, call: &MsgBlock) -> MsgBlock {
-        let MsgBlock::ToolUse { id, name, .. } = call else {
+        let MsgBlock::ToolUse { id, name, input } = call else {
             return MsgBlock::ToolResult {
                 id: String::new(),
                 content: "internal error: not a tool call".into(),
@@ -313,6 +381,9 @@ impl AgentSessionImpl {
             };
         };
         let call_id = id.clone();
+        if name == "ask_user" {
+            return self.ask_user(&call_id, input).await;
+        }
         self.emit(EventKind::ToolCall {
             call_id: call_id.clone(),
             name: name.clone(),
@@ -439,6 +510,7 @@ impl AgentSession for AgentSessionImpl {
         let history = Arc::clone(&self.history);
         let tx = self.tx.clone();
         let permits = Arc::clone(&self.permits);
+        let questions = Arc::clone(&self.questions);
         let gate = Arc::clone(&self.gate);
         let max_steps = self.max_steps;
         let turn = tokio::spawn(async move {
@@ -454,6 +526,7 @@ impl AgentSession for AgentSessionImpl {
                 events: None,
                 tx,
                 permits,
+                questions,
                 gate,
                 turn: None,
                 max_steps,
@@ -483,6 +556,23 @@ impl AgentSession for AgentSessionImpl {
         }
     }
 
+    async fn respond_question(
+        &mut self,
+        request_id: &str,
+        answers: Vec<QuestionAnswer>,
+    ) -> Result<(), ProviderError> {
+        let sender = self.questions.lock().await.remove(request_id);
+        match sender {
+            Some(sender) => {
+                let _ = sender.send(answers);
+                Ok(())
+            }
+            None => Err(ProviderError::Other(format!(
+                "no question is waiting under {request_id}"
+            ))),
+        }
+    }
+
     async fn cancel(&mut self) -> Result<(), ProviderError> {
         if let Some(turn) = self.turn.take() {
             turn.abort();
@@ -493,6 +583,18 @@ impl AgentSession for AgentSessionImpl {
             let _ = sender.send(Decision::Deny);
         }
         drop(permits);
+        // A question has no meaningful default answer; resolve it as empty so its card closes.
+        let mut questions = self.questions.lock().await;
+        for (request_id, sender) in questions.drain() {
+            let _ = sender.send(Vec::new());
+            let _ = self
+                .tx
+                .try_send(SessionEvent::new(EventKind::QuestionResolved {
+                    request_id,
+                    answers: Vec::new(),
+                }));
+        }
+        drop(questions);
         let _ = self.tx.try_send(SessionEvent::new(EventKind::Status {
             state: SessionState::Idle,
         }));
@@ -502,6 +604,16 @@ impl AgentSession for AgentSessionImpl {
     async fn shutdown(&mut self) -> Result<(), ProviderError> {
         if let Some(turn) = self.turn.take() {
             turn.abort();
+        }
+        let mut questions = self.questions.lock().await;
+        for (request_id, sender) in questions.drain() {
+            let _ = sender.send(Vec::new());
+            let _ = self
+                .tx
+                .try_send(SessionEvent::new(EventKind::QuestionResolved {
+                    request_id,
+                    answers: Vec::new(),
+                }));
         }
         Ok(())
     }
@@ -673,6 +785,90 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("no tool approval"));
+    }
+
+    #[tokio::test]
+    async fn answering_an_unknown_question_is_an_error_not_a_hang() {
+        let mut session = AgentSessionImpl::new(
+            catalog::find("anthropic").unwrap(),
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "claude-sonnet-4-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "test-session".into(),
+        );
+        let error = session
+            .respond_question("question-nope", Vec::new())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no question"));
+    }
+
+    #[tokio::test]
+    async fn ask_user_parks_the_call_and_returns_the_answers() {
+        use crate::sessions::event::QuestionChoice;
+
+        let mut session = AgentSessionImpl::new(
+            catalog::find("anthropic").unwrap(),
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "claude-sonnet-4-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "test-session".into(),
+        );
+        let mut events = session.take_events();
+        let questions = Arc::clone(&session.questions);
+        let call = MsgBlock::ToolUse {
+            id: "call-1".into(),
+            name: "ask_user".into(),
+            input: serde_json::json!({
+                "questions": [{
+                    "id": "scope",
+                    "title": "Which scope?",
+                    "options": [{ "label": "Small", "description": "Keep it tight." }]
+                }]
+            }),
+        };
+        let turn = tokio::spawn(async move { session.run_tool(&call).await });
+
+        let request = events.recv().await.expect("a question request");
+        let request_id = match &request.kind {
+            EventKind::QuestionRequest { request_id, .. } => request_id.clone(),
+            other => panic!("expected a question_request, got {other:?}"),
+        };
+        let sender = questions
+            .lock()
+            .await
+            .remove(&request_id)
+            .expect("the question is parked");
+        sender
+            .send(vec![QuestionAnswer {
+                question_id: "scope".into(),
+                answers: vec![QuestionChoice {
+                    label: "Small".into(),
+                    note: None,
+                }],
+            }])
+            .unwrap();
+
+        let result = turn.await.unwrap();
+        let MsgBlock::ToolResult {
+            content, is_error, ..
+        } = result
+        else {
+            panic!("ask_user must return a tool result");
+        };
+        assert!(!is_error);
+        assert!(content.contains("Small"), "{content}");
+
+        let resolved = events.recv().await.expect("a question resolution");
+        assert!(matches!(resolved.kind, EventKind::QuestionResolved { .. }));
     }
 
     #[tokio::test]

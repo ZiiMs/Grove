@@ -290,6 +290,12 @@ pub trait AgentSession: Send {
         request_id: &str,
         decision: crate::sessions::event::Decision,
     ) -> Result<(), ProviderError>;
+    /// Answer a structured question. Until it is answered the tool call is parked.
+    async fn respond_question(
+        &mut self,
+        request_id: &str,
+        answers: Vec<crate::sessions::event::QuestionAnswer>,
+    ) -> Result<(), ProviderError>;
     /// Stop the current turn. The conversation survives and stays resumable.
     async fn cancel(&mut self) -> Result<(), ProviderError>;
     async fn shutdown(&mut self) -> Result<(), ProviderError>;

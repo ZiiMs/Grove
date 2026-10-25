@@ -5,6 +5,7 @@ import type {
   GitBranch,
   GitStatus,
   GitWorktree,
+  QuestionAnswer,
   SessionEvent,
   ProviderSpec,
   Plan,
@@ -415,6 +416,27 @@ export function createFakeBridge(
           kind: "permission_resolved",
           request_id: requestId,
           decision,
+        };
+        detail.events = [...detail.events, event];
+        detail.awaiting = false;
+        const row = sessions.find((session) => session.id === id);
+        if (row) row.awaiting = false;
+        bridge.emitSessionEvent({ sessionId: id, payload: event });
+        return null as CommandMap[K]["result"];
+      }
+      if (command === "session_respond_question") {
+        const { id, requestId, answers } = args as {
+          id: string;
+          requestId: string;
+          answers: QuestionAnswer[];
+        };
+        const detail = details[id];
+        if (!detail) throw new Error(`FakeBridge has no session: ${id}`);
+        const event: SessionEvent = {
+          at: "2025-01-01T00:00:04.100Z",
+          kind: "question_resolved",
+          request_id: requestId,
+          answers,
         };
         detail.events = [...detail.events, event];
         detail.awaiting = false;

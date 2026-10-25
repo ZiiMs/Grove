@@ -166,16 +166,17 @@ status busy → delta* → message(assistant) → tool_call → permission_reque
 ```
 
 - **Tools** (`providers/tools.rs`): `read_file`, `list_dir`, `grep`, `write_file`, `edit_file`,
-  `run_command`. Paths resolve against the session's working directory; `..`, an absolute path outside
-  it, and a symlink escape are refused.
+  `run_command`, `ask_user`. Paths resolve against the session's working directory; `..`, an absolute
+  path outside it, and a symlink escape are refused.
 - **Approval** is a property of the tool name, not something the model can influence.
   `needs_approval` covers the three mutating tools; the runtime parks the call on a `oneshot` channel
   until `respond_permission` resolves it, and a denied call becomes an error tool result the model
-  reads and adapts to.
+  reads and adapts to. `ask_user` is a separate parked call: it emits `question_request`, renders as
+  an inline card, and returns the structured answer as its tool result.
 - **The loop is bounded** by `maxSteps` (default 24, from `StartContext.config`), so a model that
   never converges stops and says so instead of spending indefinitely.
-- **Cancellation** aborts the turn task, denies every parked approval, and emits `status idle`, so the
-  session is never left `busy`.
+- **Cancellation** aborts the turn task, denies every parked approval, resolves every parked question
+  as empty, and emits `status idle`, so the session is never left `busy`.
 
 ## Normalized event model (settled)
 
@@ -193,6 +194,8 @@ pub enum EventKind {
     Diff { path: String, patch: String, added: u32, removed: u32 },
     PermissionRequest { request_id: String, title: String, detail: String },
     PermissionResolved { request_id: String, decision: Decision },
+    QuestionRequest { request_id: String, questions: Vec<Question> },
+    QuestionResolved { request_id: String, answers: Vec<QuestionAnswer> },
     Usage { input_tokens: u64, output_tokens: u64 },
     Status { state: SessionState },                    // starting|ready|busy|idle|exited|error
     Error { message: String, retryable: bool },
@@ -208,8 +211,8 @@ pub struct SessionEvent { pub at: String /* RFC3339 */, pub kind: EventKind }
 `SessionManager` owns live sessions: the agent handle + a pump task per session. The pump drains the
 agent's receiver, appends to the SQLite event log, broadcasts on the in-process bus, and mirrors the
 resume token — watching the runtime's shared slot, so an id learned mid-stream is persisted. Commands
-(`send`, `cancel`, `respond_permission`) go through the manager, which holds a `tokio::sync::Mutex` per
-session so no two commands interleave.
+(`send`, `cancel`, `respond_permission`, `respond_question`) go through the manager, which holds a
+`tokio::sync::Mutex` per session so no two commands interleave.
 
 **Answering a permission request.** The runtime emits `PermissionRequest` and claims
 `capabilities.permissions`, so the request has to be answerable: it renders as a card in the transcript
@@ -217,6 +220,13 @@ with Approve/Deny, and those buttons call `session_respond_permission(id, reques
 `SessionManager::respond_permission` → the parked tool call. The buttons disappear when
 `permission_resolved` arrives, not when the click happens: what the UI shows is what the runtime
 accepted.
+
+**Answering a question.** `ask_user` emits `QuestionRequest` with one or more questions and parks the
+tool call on a `oneshot` channel. The transcript renders one inline card that pages through them,
+accepts option choices and optional notes, and calls `session_respond_question(id, requestId,
+answers)` → `SessionManager::respond_question`. The runtime emits `question_resolved` and hands the
+answers back to the model as the tool result. A cancelled turn resolves any parked question as empty,
+so the card cannot stay interactive after the agent has gone.
 
 **Restart survival.** Sessions are rows, not processes. `session_resume(id)` restarts the agent with
 the stored `resume_token` when the provider offers one, otherwise Grove replays the conversation tail
@@ -338,8 +348,8 @@ seven-panel shell and the spec/plan editors were retired.
   (Git · Plan · Spec) · status bar. Below 900px the three columns become Navigation · Session ·
   Context tabs. The centre never swaps for another product surface.
 - **Transcript:** `@tanstack/react-virtual` mounts only the rows in view, so a 10 000-event session
-  costs the same as a short one. Tool cards, diffs and permission cards are transcript rows, not
-  separate panels.
+  costs the same as a short one. Tool rows, diffs, permission cards, and inline question cards are
+  transcript rows, not separate panels.
 - **Context views are read-only:** git status/staging/commit/PR, a plan checklist, and a spec peek.
   There is no in-app spec or plan editor and therefore no code editor in the webview.
 - **Dialogs:** native `<dialog>` with `showModal()` for the settings sheet, new session, add project,

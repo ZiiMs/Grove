@@ -101,6 +101,35 @@ describe("foldTranscript", () => {
     expect(items[0]).toMatchObject({ kind: "permission", decision: "approve" });
   });
 
+  it("folds a question request and its resolved answer into one row", () => {
+    const items = foldTranscript([
+      {
+        at: AT,
+        kind: "question_request",
+        request_id: "q-1",
+        questions: [
+          {
+            id: "scope",
+            title: "Which scope?",
+            hint: "",
+            multi: false,
+            other: true,
+            options: [{ label: "Small", description: "Keep it tight." }],
+          },
+        ],
+      },
+      {
+        at: LATER,
+        kind: "question_resolved",
+        request_id: "q-1",
+        answers: [{ question_id: "scope", answers: [{ label: "Small", note: "Yes" }] }],
+      },
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "question", requestId: "q-1" });
+    expect(items[0].kind === "question" ? items[0].answers : null).toHaveLength(1);
+  });
+
   it("renders errors as an error notice and status as nothing", () => {
     const items = foldTranscript([
       { at: AT, kind: "status", state: "busy" },

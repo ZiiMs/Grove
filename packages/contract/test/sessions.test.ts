@@ -52,6 +52,8 @@ describe("session contract fixtures", () => {
       "diff",
       "permission_request",
       "permission_resolved",
+      "question_request",
+      "question_resolved",
       "usage",
       "status",
       "error",

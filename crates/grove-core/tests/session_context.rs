@@ -128,6 +128,14 @@ impl AgentSession for RecordingSession {
         Ok(())
     }
 
+    async fn respond_question(
+        &mut self,
+        _request_id: &str,
+        _answers: Vec<grove_core::sessions::event::QuestionAnswer>,
+    ) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
     async fn cancel(&mut self) -> Result<(), ProviderError> {
         Ok(())
     }

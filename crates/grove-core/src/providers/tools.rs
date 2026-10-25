@@ -68,6 +68,44 @@ pub fn specs() -> Vec<ToolSpec> {
             description: "Run a shell command in the project root and return its combined output. Use for builds, tests and the project's own tooling.",
             input_schema: object(&[("command", "The command line to run.")]),
         },
+        ToolSpec {
+            name: "ask_user",
+            description: "Pause and ask the user a structured question when a decision is genuinely theirs. Send one or more questions with short option labels; the user can select options, add notes, and answer in their own words. Do not use this for information you can find with the read tools.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "Questions to ask, in order. The UI pages through them and returns all answers together.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "description": "Stable id for this question; the answer repeats it." },
+                                "title": { "type": "string", "description": "The question itself, in one sentence." },
+                                "hint": { "type": "string", "description": "Optional context under the question." },
+                                "multi": { "type": "boolean", "description": "Allow more than one selected option.", "default": false },
+                                "other": { "type": "boolean", "description": "Offer a free-text answer in addition to the options.", "default": true },
+                                "options": {
+                                    "type": "array",
+                                    "minItems": 2,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": { "type": "string", "description": "Short answer label." },
+                                            "description": { "type": "string", "description": "One line explaining the trade-off." }
+                                        },
+                                        "required": ["label", "description"]
+                                    }
+                                }
+                            },
+                            "required": ["id", "title", "options"]
+                        }
+                    }
+                },
+                "required": ["questions"]
+            }),
+        },
     ]
 }
 
@@ -634,7 +672,7 @@ mod tests {
             );
         }
         let names: Vec<&str> = specs().iter().map(|spec| spec.name).collect();
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 7);
     }
 
     #[test]
