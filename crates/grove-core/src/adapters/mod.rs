@@ -6,9 +6,11 @@
 
 pub mod claude;
 pub mod mock;
+pub mod opencode;
 pub mod registry;
 
 pub use claude::ClaudeAdapter;
+pub use opencode::OpenCodeAdapter;
 
 use crate::paths::AppPaths;
 use crate::secrets::SecretStore;

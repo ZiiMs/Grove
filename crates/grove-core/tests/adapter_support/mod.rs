@@ -5,4 +5,5 @@
 
 pub mod claude_fixture;
 pub mod conformance;
+pub mod opencode_fixture;
 pub mod runtime;
