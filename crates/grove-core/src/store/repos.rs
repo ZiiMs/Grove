@@ -142,6 +142,23 @@ impl Store {
         })
     }
 
+    /// Point an existing session at another harness. The model and the resume token belong to the
+    /// harness that produced them, so a switch writes both through separate calls.
+    pub fn set_session_harness(
+        &self,
+        id: &str,
+        harness: &str,
+        model: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET harness = ?2, model = ?3, updated_at = ?4 WHERE id = ?1",
+                params![id, harness, model, now()],
+            )?;
+            Ok(())
+        })
+    }
+
     pub fn set_resume_token(&self, id: &str, token: Option<&str>) -> Result<(), StoreError> {
         self.with_conn(|conn| {
             conn.execute(

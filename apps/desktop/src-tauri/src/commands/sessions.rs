@@ -5,6 +5,7 @@ use crate::state::AppState;
 use grove_core::ipc::{
     CreateSessionRequest, HarnessInfo, IpcResult, Session, SessionDetail, SessionSummary,
 };
+use grove_core::sessions::context::SessionContext;
 
 /// Every registered harness, for the session picker.
 #[tauri::command]
@@ -52,4 +53,52 @@ pub async fn session_close(state: tauri::State<'_, AppState>, id: String) -> Ipc
 #[tauri::command]
 pub async fn session_resume(state: tauri::State<'_, AppState>, id: String) -> IpcResult<Session> {
     Ok(state.core.sessions.resume(&id).await?)
+}
+
+/// A session's knowledge: what is pinned and what a start would send now. Reads the spec graph and the
+/// plan, so the header can show the current context without a session running.
+#[tauri::command]
+pub fn session_context_get(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> IpcResult<SessionContext> {
+    Ok(state.core.context.snapshot(&id)?)
+}
+
+/// Pin or unpin a spec for one session. Returns the refreshed snapshot so the panel needs no second
+/// call; pins live in SQLite and survive a restart.
+#[tauri::command]
+pub fn session_pin(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    spec_id: String,
+    pinned: bool,
+) -> IpcResult<SessionContext> {
+    if pinned {
+        Ok(state.core.context.pin_spec(&id, &spec_id)?)
+    } else {
+        Ok(state.core.context.unpin_spec(&id, &spec_id)?)
+    }
+}
+
+/// Re-read the pins and the plan and push them into the running session: the harness receives the
+/// rendered documents as a turn, and the transcript gains a visible note. Returns the new snapshot.
+#[tauri::command]
+pub async fn session_refresh_context(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> IpcResult<SessionContext> {
+    state.core.sessions.refresh_context(&id).await?;
+    Ok(state.core.context.snapshot(&id)?)
+}
+
+/// Re-launch the same conversation on another registered harness, with the same context documents and
+/// a summary of the transcript. The transcript itself is never rewritten.
+#[tauri::command]
+pub async fn session_switch_harness(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    harness: String,
+) -> IpcResult<SessionDetail> {
+    Ok(state.core.sessions.switch_harness(&id, &harness).await?)
 }

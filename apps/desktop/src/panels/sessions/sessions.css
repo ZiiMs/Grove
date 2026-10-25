@@ -304,3 +304,93 @@
   color: var(--danger);
   font-size: var(--text-sm);
 }
+
+/* Tabs: several sessions stay open side by side; only the active one renders a transcript. */
+
+.session-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-2);
+}
+
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  padding: 0 var(--space-1) 0 0;
+}
+
+.session-tab.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.session-tab-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 220px;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.session-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.session-tab-close:hover {
+  color: var(--danger);
+}
+
+/* The knowledge header: what this session's harness was given, in the order it was given. */
+
+.session-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.session-context-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.session-context-pin {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  padding: 0 var(--space-2);
+  color: var(--accent);
+}
+
+.session-context-empty,
+.session-context-size {
+  color: var(--text-faint);
+}
+
+.session-switch {
+  min-width: 120px;
+}

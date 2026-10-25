@@ -50,7 +50,7 @@ pub struct Capabilities {
 }
 
 /// A document handed to the harness at start: a pinned spec or the current plan, already rendered to
-/// markdown. Ticket 14 fills it.
+/// markdown. Assembled by `sessions::context` under the session's character budgets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextDoc {

@@ -279,3 +279,22 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
 }
+
+/* Pinning a spec to the open session: the badge marks it in the tree, the toggle does the work. */
+
+.spec-pin-badge {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.spec-pin-note {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}

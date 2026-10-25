@@ -2,6 +2,7 @@
 //! §Persistence).
 
 pub mod db;
+pub mod pins;
 pub mod plans;
 pub mod repos;
 

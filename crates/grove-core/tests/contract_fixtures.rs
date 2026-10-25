@@ -6,8 +6,10 @@ use grove_core::ipc::{
     AppInfo, ErrorCode, EventEnvelope, IpcError, Session, SessionDetail, SessionSummary,
 };
 use grove_core::plan::{Plan, PlanUpdate};
+use grove_core::sessions::context::{ContextLimits, ContextPin, SessionContext};
 use grove_core::sessions::event::{
-    Block, Decision, EventKind, HarnessEvent, Role, SessionState, ToolStatus,
+    Block, ContextDocument, ContextReason, Decision, EventKind, HarnessEvent, Role, SessionState,
+    ToolStatus,
 };
 
 /// Each fixture is canonical JSON produced by the Rust side. A change to a DTO without a matching
@@ -431,6 +433,20 @@ fn sample_events() -> Vec<HarnessEvent> {
             },
             "2025-01-01T00:00:05.000Z",
         ),
+        event(
+            EventKind::ContextRefreshed {
+                reason: ContextReason::Refresh,
+                harness: "mock".into(),
+                documents: vec![ContextDocument {
+                    id: "grove-architecture".into(),
+                    title: "Grove — architecture".into(),
+                    chars: 1200,
+                    truncated: false,
+                }],
+                note: "Context refreshed for mock: 1 document (1200 chars)".into(),
+            },
+            "2025-01-01T00:00:06.000Z",
+        ),
     ]
 }
 
@@ -492,6 +508,7 @@ fn every_harness_event_variant_matches_the_fixture() {
         "usage",
         "status",
         "error",
+        "context_refreshed",
     ] {
         assert!(tags.contains(&required), "fixture misses {required}");
     }
@@ -523,6 +540,59 @@ fn plan_update_matches_fixture() {
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("plan-update.json")
+    );
+}
+
+// ---------- session knowledge (ticket 14) ----------
+
+fn sample_session_context() -> SessionContext {
+    SessionContext {
+        session_id: "session-1".into(),
+        harness: "claude".into(),
+        pins: vec![
+            ContextPin {
+                spec_id: "grove-architecture".into(),
+                title: "Grove — architecture".into(),
+            },
+            ContextPin {
+                spec_id: "grove-goal-and-requirements".into(),
+                title: "Grove — goal and requirements".into(),
+            },
+        ],
+        documents: vec![
+            ContextDocument {
+                id: "grove-architecture".into(),
+                title: "Grove — architecture".into(),
+                chars: 1200,
+                truncated: false,
+            },
+            ContextDocument {
+                id: "grove-goal-and-requirements".into(),
+                title: "Grove — goal and requirements".into(),
+                chars: 480,
+                truncated: true,
+            },
+            ContextDocument {
+                id: "plan".into(),
+                title: "Plan".into(),
+                chars: 96,
+                truncated: false,
+            },
+        ],
+        total_chars: 1776,
+        limits: ContextLimits {
+            per_doc_chars: 8000,
+            total_chars: 24000,
+        },
+        plan_version: 3,
+    }
+}
+
+#[test]
+fn session_context_matches_fixture() {
+    assert_eq!(
+        serde_json::to_value(sample_session_context()).unwrap(),
+        fixture("session-context.json")
     );
 }
 

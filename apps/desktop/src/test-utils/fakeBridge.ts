@@ -1,11 +1,13 @@
 import type {
   DoctorReport,
   EventEnvelope,
+  HarnessEvent,
   HarnessInfo,
   Plan,
   PlanUpdate,
   SecretStatus,
   Session,
+  SessionContext,
   SessionDetail,
   SessionSummary,
   Settings,
@@ -29,6 +31,10 @@ export interface FakeBridgeSeed {
   /** Secret key → status. A key that is absent from the map reports `absent`. */
   secretStatuses?: Record<string, SecretStatus>;
   doctor?: DoctorReport;
+  /** Session id → pinned spec ids, in pin order. */
+  pins?: Record<string, string[]>;
+  /** Spec id → title, so pinned specs read like the Specs panel shows them. */
+  specTitles?: Record<string, string>;
 }
 
 export interface FakeBridge extends GroveBridge {
@@ -47,6 +53,8 @@ export interface FakeBridge extends GroveBridge {
   calls: FakeBridgeCall[];
   /** Replace a session's plan as an agent edit would: the next `plan_get` sees the new version. */
   setPlan(plan: Plan): void;
+  /** The pins the fake core currently holds for one session. */
+  pinsOf(sessionId: string): string[];
 }
 
 const DEFAULT_APP_INFO = {
@@ -154,6 +162,10 @@ export function createFakeBridge(
   const sessions: SessionSummary[] = [...(seed.sessions ?? [])];
   const details: Record<string, SessionDetail> = { ...(seed.details ?? {}) };
   const plans: Record<string, Plan> = { ...(seed.plans ?? {}) };
+  const pins: Record<string, string[]> = Object.fromEntries(
+    Object.entries(seed.pins ?? {}).map(([sessionId, specIds]) => [sessionId, [...specIds]]),
+  );
+  const specTitles = seed.specTitles ?? {};
 
   const emptyPlan = (sessionId: string): Plan => ({
     sessionId,
@@ -172,6 +184,58 @@ export function createFakeBridge(
     if (row) row.status = status;
     const detail = details[id];
     if (detail) detail.status = status;
+  };
+
+  /** The snapshot the core would assemble: pinned specs in pin order, then the plan. */
+  const contextOf = (sessionId: string): SessionContext => {
+    const plan = plans[sessionId] ?? emptyPlan(sessionId);
+    const pinned = pins[sessionId] ?? [];
+    const documents = pinned.map((specId) => {
+      const title = specTitles[specId] ?? specId;
+      return { id: specId, title, chars: title.length, truncated: false };
+    });
+    if (plan.markdown.trim().length > 0) {
+      documents.push({
+        id: "plan",
+        title: "Plan",
+        chars: plan.markdown.length,
+        truncated: false,
+      });
+    }
+    return {
+      sessionId,
+      harness: details[sessionId]?.harness ?? sessions.find((row) => row.id === sessionId)?.harness ?? "mock",
+      pins: pinned.map((specId) => ({ specId, title: specTitles[specId] ?? specId })),
+      documents,
+      totalChars: documents.reduce((total, doc) => total + doc.chars, 0),
+      limits: { perDocChars: 8000, totalChars: 24000 },
+      planVersion: plan.version,
+    };
+  };
+
+  const documentsLabel = (count: number) => `${count} document${count === 1 ? "" : "s"}`;
+
+  /** Append a `context_refreshed` note to the transcript and stream it, exactly like the core. */
+  const appendContextNote = (
+    sessionId: string,
+    reason: "start" | "resume" | "refresh" | "harness_switch",
+    note: string,
+  ) => {
+    const detail = details[sessionId];
+    if (!detail) return;
+    const context = contextOf(sessionId);
+    const event: HarnessEvent = {
+      at: "2025-01-01T00:00:02.000Z",
+      kind: "context_refreshed",
+      reason,
+      harness: detail.harness,
+      documents: context.documents,
+      note,
+    };
+    detail.events = [...detail.events, event];
+    const row = sessions.find((session) => session.id === sessionId);
+    if (row) row.eventCount = detail.events.length;
+    bridge.emitSessionEvent({ sessionId, payload: event });
   };
 
   const bridge: FakeBridge = {
@@ -236,7 +300,68 @@ export function createFakeBridge(
         setStatus(id, "starting");
         const row = sessions.find((session) => session.id === id);
         if (!row) throw new Error(`FakeBridge has no session: ${id}`);
+        const context = contextOf(id);
+        if (context.documents.length > 0) {
+          appendContextNote(
+            id,
+            "resume",
+            `Context re-sent on resume to ${row.harness}: ${documentsLabel(context.documents.length)}`,
+          );
+        }
         return { ...row } as CommandMap[K]["result"];
+      }
+      if (command === "session_context_get") {
+        const { id } = args as { id: string };
+        if (!details[id]) throw new Error(`FakeBridge has no session: ${id}`);
+        return contextOf(id) as CommandMap[K]["result"];
+      }
+      if (command === "session_pin") {
+        const { id, specId, pinned } = args as { id: string; specId: string; pinned: boolean };
+        if (!details[id]) throw new Error(`FakeBridge has no session: ${id}`);
+        const current = pins[id] ?? [];
+        pins[id] = pinned
+          ? current.includes(specId)
+            ? current
+            : [...current, specId]
+          : current.filter((candidate) => candidate !== specId);
+        return contextOf(id) as CommandMap[K]["result"];
+      }
+      if (command === "session_refresh_context") {
+        const { id } = args as { id: string };
+        if (!details[id]) throw new Error(`FakeBridge has no session: ${id}`);
+        const context = contextOf(id);
+        appendContextNote(
+          id,
+          "refresh",
+          `Context refreshed for ${context.harness}: ${documentsLabel(context.documents.length)} (${context.totalChars} chars)`,
+        );
+        return contextOf(id) as CommandMap[K]["result"];
+      }
+      if (command === "session_switch_harness") {
+        const { id, harness } = args as { id: string; harness: string };
+        const detail = details[id];
+        const row = sessions.find((session) => session.id === id);
+        if (!detail || !row) throw new Error(`FakeBridge has no session: ${id}`);
+        const from = detail.harness;
+        detail.harness = harness;
+        row.harness = harness;
+        detail.status = "starting";
+        row.status = "starting";
+        const started: HarnessEvent = {
+          at: "2025-01-01T00:00:03.000Z",
+          kind: "session_started",
+          harness,
+          model: detail.model,
+          resumed: true,
+        };
+        detail.events = [...detail.events, started];
+        bridge.emitSessionEvent({ sessionId: id, payload: started });
+        appendContextNote(
+          id,
+          "harness_switch",
+          `Harness switched from ${from} to ${harness}; context re-sent: ${documentsLabel(contextOf(id).documents.length)}`,
+        );
+        return structuredClone(detail) as CommandMap[K]["result"];
       }
       if (command === "plan_get") {
         const { id } = args as { id: string };
@@ -317,6 +442,9 @@ export function createFakeBridge(
     },
     setPlan(plan) {
       plans[plan.sessionId] = { ...plan };
+    },
+    pinsOf(sessionId) {
+      return [...(pins[sessionId] ?? [])];
     },
     invocations,
     calls,

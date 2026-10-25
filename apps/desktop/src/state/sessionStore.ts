@@ -1,11 +1,20 @@
-import type { HarnessEvent, HarnessInfo, SessionDetail, SessionSummary } from "@grove/contract";
+import type {
+  HarnessEvent,
+  HarnessInfo,
+  SessionContext,
+  SessionDetail,
+  SessionSummary,
+} from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 
 /**
- * Session domain state: the list, the open transcript, and the commands that move it. Panels render
- * from here and pass the bridge in, so the store never imports Tauri and every UI test runs under
- * `FakeBridge`.
+ * Session domain state: the list, the open tabs, the active transcript, and the commands that move
+ * them. Panels render from here and pass the bridge in, so the store never imports Tauri and every UI
+ * test runs under `FakeBridge`.
+ *
+ * Tabs are ids, not components: `openIds` is what the user has open side by side, `activeId` is the one
+ * whose transcript renders, and `drafts` keeps each tab's compose text so switching never loses typing.
  */
 
 export interface CreateSessionInput {
@@ -21,6 +30,12 @@ interface SessionStoreData {
   activeId: string | null;
   detail: SessionDetail | null;
   events: HarnessEvent[];
+  /** Session ids open as tabs, in the order they were opened. */
+  openIds: string[];
+  /** Compose text per session: a draft belongs to its tab, not to the panel. */
+  drafts: Record<string, string>;
+  /** The active session's knowledge (pins, plan, the documents a start would send). */
+  context: SessionContext | null;
   loading: boolean;
   busy: boolean;
   error: string | null;
@@ -30,12 +45,22 @@ export interface SessionStore extends SessionStoreData {
   /** Harness picker contents and the session list. */
   load: (bridge: GroveBridge) => Promise<void>;
   create: (bridge: GroveBridge, input: CreateSessionInput) => Promise<void>;
+  /** Open (or focus) a session as a tab. */
   select: (bridge: GroveBridge, id: string) => Promise<void>;
+  /** Close a tab; the next open one becomes active. The session itself is untouched. */
+  closeTab: (bridge: GroveBridge, id: string) => Promise<void>;
+  setDraft: (id: string, text: string) => void;
   /** Returns whether the message was accepted, so the panel knows when to clear the compose box. */
   send: (bridge: GroveBridge, text: string) => Promise<boolean>;
   cancel: (bridge: GroveBridge) => Promise<void>;
   resume: (bridge: GroveBridge) => Promise<void>;
   close: (bridge: GroveBridge) => Promise<void>;
+  /** Adopt a snapshot another panel produced (the Specs panel pins and unpins). */
+  applyContext: (context: SessionContext) => void;
+  /** Re-send the current pins and plan to the running harness, then show the new snapshot. */
+  refreshContext: (bridge: GroveBridge) => Promise<void>;
+  /** Re-launch the active session on another registered harness, keeping its transcript. */
+  switchHarness: (bridge: GroveBridge, harness: string) => Promise<void>;
   /** Fold one live `grove://session-event` into the list and, when it belongs to the open session, the transcript. */
   applyEvent: (sessionId: string | null, event: HarnessEvent) => void;
   reset: () => void;
@@ -47,6 +72,9 @@ const initial: SessionStoreData = {
   activeId: null,
   detail: null,
   events: [],
+  openIds: [],
+  drafts: {},
+  context: null,
   loading: true,
   busy: false,
   error: null,
@@ -63,6 +91,20 @@ export function errorMessage(error: unknown): string {
 function summaryOf(detail: SessionDetail): SessionSummary {
   const { events, ...session } = detail;
   return { ...session, eventCount: events.length };
+}
+
+/** The knowledge snapshot is a bonus for the header: a failure must not block opening a session. */
+async function contextOf(bridge: GroveBridge, id: string): Promise<SessionContext | null> {
+  try {
+    return await bridge.invoke("session_context_get", { id });
+  } catch {
+    return null;
+  }
+}
+
+/** Add an id to the open tabs without duplicating it. */
+function opened(openIds: string[], id: string): string[] {
+  return openIds.includes(id) ? openIds : [...openIds, id];
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
@@ -85,11 +127,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ busy: true, error: null });
     try {
       const detail = await bridge.invoke("session_create", { req: input });
+      const context = await contextOf(bridge, detail.id);
       set((state) => ({
         busy: false,
         detail,
         events: detail.events,
         activeId: detail.id,
+        openIds: opened(state.openIds, detail.id),
+        context,
         sessions: [summaryOf(detail), ...state.sessions.filter((row) => row.id !== detail.id)],
       }));
     } catch (error) {
@@ -101,10 +146,43 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ busy: true, error: null });
     try {
       const detail = await bridge.invoke("session_get", { id });
-      set({ busy: false, activeId: id, detail, events: detail.events });
+      const context = await contextOf(bridge, id);
+      set((state) => ({
+        busy: false,
+        activeId: id,
+        detail,
+        events: detail.events,
+        openIds: opened(state.openIds, id),
+        context,
+      }));
     } catch (error) {
       set({ busy: false, error: errorMessage(error) });
     }
+  },
+
+  closeTab: async (bridge, id) => {
+    const state = get();
+    const index = state.openIds.indexOf(id);
+    const openIds = state.openIds.filter((openId) => openId !== id);
+    const { [id]: _closed, ...drafts } = state.drafts;
+    if (state.activeId !== id) {
+      set({ openIds, drafts });
+      return;
+    }
+    const next = openIds[Math.min(index, openIds.length - 1)] ?? null;
+    set({
+      openIds,
+      drafts,
+      activeId: null,
+      detail: null,
+      events: [],
+      context: null,
+    });
+    if (next) await get().select(bridge, next);
+  },
+
+  setDraft: (id, text) => {
+    set((state) => ({ drafts: { ...state.drafts, [id]: text } }));
   },
 
   send: async (bridge, text) => {
@@ -153,6 +231,43 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       await bridge.invoke("session_close", { id });
       set({ busy: false });
       await get().select(bridge, id);
+    } catch (error) {
+      set({ busy: false, error: errorMessage(error) });
+    }
+  },
+
+  applyContext: (context) => {
+    if (get().activeId === context.sessionId) set({ context });
+  },
+
+  refreshContext: async (bridge) => {
+    const id = get().activeId;
+    if (!id) return;
+    set({ busy: true, error: null });
+    try {
+      const context = await bridge.invoke("session_refresh_context", { id });
+      set({ busy: false, context });
+    } catch (error) {
+      set({ busy: false, error: errorMessage(error) });
+    }
+  },
+
+  switchHarness: async (bridge, harness) => {
+    const id = get().activeId;
+    if (!id) return;
+    set({ busy: true, error: null });
+    try {
+      const detail = await bridge.invoke("session_switch_harness", { id, harness });
+      const context = await contextOf(bridge, id);
+      set((state) => ({
+        busy: false,
+        detail,
+        events: detail.events,
+        context,
+        sessions: state.sessions.map((row) =>
+          row.id === id ? { ...row, harness: detail.harness, status: detail.status } : row,
+        ),
+      }));
     } catch (error) {
       set({ busy: false, error: errorMessage(error) });
     }

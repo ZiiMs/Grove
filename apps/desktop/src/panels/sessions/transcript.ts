@@ -128,6 +128,11 @@ export function foldEvents(events: HarnessEvent[]): TranscriptItem[] {
       case "status":
         // Status drives the session header and list, not the transcript.
         break;
+      case "context_refreshed":
+        // The session's knowledge was assembled and handed to the harness. The note is the visible
+        // half of a context refresh; the documents it lists are already in the header.
+        items.push({ id, kind: "notice", tone: "info", text: event.note });
+        break;
     }
   });
 

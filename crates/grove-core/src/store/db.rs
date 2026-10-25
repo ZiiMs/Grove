@@ -54,6 +54,17 @@ CREATE TABLE settings (
     value TEXT NOT NULL
 );
 "#,
+    // 4 — specs pinned to a session (ticket 14). The specs themselves stay files: the table holds
+    // the stable spec id, so a pin survives a restart and a deleted spec simply stops contributing a
+    // context document. Rows keep insertion order through `rowid`, which is the order the user pinned
+    // them in. See `architecture.md` §Persistence → pins.
+    r#"
+CREATE TABLE pins (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    spec_id    TEXT NOT NULL,
+    PRIMARY KEY (session_id, spec_id)
+);
+"#,
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -174,14 +185,14 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3]);
+            assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4]);
         }
         assert!(path.exists(), "the database file is created on open");
 
         let reopened = Store::open(&path).unwrap();
         assert_eq!(
             reopened.applied_migrations().unwrap(),
-            vec![1, 2, 3],
+            vec![1, 2, 3, 4],
             "reopening does not replay migrations"
         );
     }
@@ -189,6 +200,34 @@ mod tests {
     #[test]
     fn in_memory_store_migrates_too() {
         let store = Store::open_in_memory().unwrap();
-        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3]);
+        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn an_existing_install_gains_only_the_new_migrations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+
+        // Stand in for a database created by an older build: apply migrations 1..=3 by hand, so the
+        // reopen has to append version 4 without replaying (and failing on) the earlier ones.
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (index, sql) in MIGRATIONS[..3].iter().enumerate() {
+                conn.execute_batch(sql).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![index as i64 + 1, now()],
+                )
+                .unwrap();
+            }
+        }
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4]);
+        assert!(store.pins("session-1").unwrap().is_empty(), "pins exists");
     }
 }

@@ -78,4 +78,25 @@ describe("foldEvents", () => {
       { id: "0:error", kind: "notice", tone: "error", text: "harness exited" },
     ]);
   });
+
+  it("renders a context refresh as the visible system note it carries", () => {
+    const items = foldEvents([
+      {
+        at: AT,
+        kind: "context_refreshed",
+        reason: "harness_switch",
+        harness: "claude",
+        documents: [{ id: "plan", title: "Plan", chars: 96, truncated: false }],
+        note: "Harness switched from mock to claude; context re-sent: 1 document (96 chars)",
+      },
+    ]);
+    expect(items).toEqual([
+      {
+        id: "0:context_refreshed",
+        kind: "notice",
+        tone: "info",
+        text: "Harness switched from mock to claude; context re-sent: 1 document (96 chars)",
+      },
+    ]);
+  });
 });

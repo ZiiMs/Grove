@@ -17,8 +17,9 @@ use crate::ipc::{
 };
 use crate::paths::{display_path, AppPaths};
 use crate::secrets::MemorySecretStore;
+use crate::sessions::context::{render_documents, ContextAssembly, ContextSource};
 use crate::sessions::event::{
-    now, render_tail, Block, Decision, EventKind, HarnessEvent, Role, SessionState,
+    now, render_tail, Block, ContextReason, Decision, EventKind, HarnessEvent, Role, SessionState,
 };
 use crate::sessions::pump::{self, InjectedEvent, SessionBus};
 use crate::store::{Store, StoreError};
@@ -73,11 +74,17 @@ impl From<SessionError> for IpcError {
     }
 }
 
+/// How many transcript lines a harness switch replays as the new harness's opening prompt.
+pub const TRANSCRIPT_SUMMARY_LINES: usize = 24;
+
 /// Owns every live session and the store they persist into. One instance per application.
 pub struct SessionManager {
     store: Arc<Store>,
     deps: AdapterDeps,
     adapters: Vec<Arc<dyn HarnessAdapter>>,
+    /// Pinned specs and the plan. Absent in tests and previews that never assemble knowledge: a
+    /// session then starts with an empty context rather than failing.
+    context: std::sync::Mutex<Option<Arc<dyn ContextSource>>>,
     live: Mutex<HashMap<String, Arc<LiveSession>>>,
     bus: SessionBus,
 }
@@ -93,9 +100,20 @@ impl SessionManager {
             store,
             deps,
             adapters,
+            context: std::sync::Mutex::new(None),
             live: Mutex::new(HashMap::new()),
             bus,
         }
+    }
+
+    /// Attach the knowledge source. `GroveCore` wires the real one; tests attach a stub or a service
+    /// pointed at a tempdir project.
+    pub fn set_context_source(&self, source: Arc<dyn ContextSource>) {
+        let mut slot = self
+            .context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = Some(source);
     }
 
     /// Open the durable store at `paths.database` and wire the built-in adapters. Sessions left live
@@ -193,14 +211,18 @@ impl SessionManager {
         };
         self.store.insert_session(&session, &config)?;
 
+        // A session is created with no pins, so this is usually empty; going through the same assembly
+        // keeps "a start always carries the current knowledge" true for every caller.
+        let assembly = self.context_assembly(&id);
         let context = StartContext {
             cwd,
             model,
             prompt: None,
             resume_token: None,
             config,
-            context_files: Vec::new(),
+            context_files: assembly.docs.clone(),
         };
+        self.publish_context(&session, ContextReason::Start, &assembly, None);
         if let Err(error) = self.launch(&adapter, &session, context).await {
             let _ = self.store.update_session_status(&id, SessionState::Error);
             return Err(error);
@@ -280,13 +302,14 @@ impl SessionManager {
         let events = self.store.session_events(id)?;
         self.stop(id).await;
 
+        let assembly = self.context_assembly(id);
         let mut context = StartContext {
             cwd: PathBuf::from(&session.cwd),
             model: session.model.clone(),
             prompt: None,
             resume_token: None,
             config,
-            context_files: Vec::new(),
+            context_files: assembly.docs.clone(),
         };
         if adapter.capabilities().resume && token.is_some() {
             context.resume_token = token;
@@ -295,8 +318,120 @@ impl SessionManager {
         }
 
         self.mark(id, SessionState::Starting)?;
+        self.publish_context(&session, ContextReason::Resume, &assembly, None);
         self.launch(&adapter, &session, context).await?;
         Ok(self.store.session(id)?.unwrap_or(session))
+    }
+
+    /// Re-read the pins and the plan and push the current knowledge into the running session.
+    ///
+    /// The context is a snapshot taken at start: nothing re-reads a spec on its own. This is the
+    /// explicit way to move it, and it is visible twice — the harness receives the rendered documents
+    /// as a turn, and the transcript records what was sent.
+    pub async fn refresh_context(&self, id: &str) -> Result<ContextAssembly, SessionError> {
+        let live = self.live_session(id).await?;
+        let session = self
+            .store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        let assembly = self.context_assembly(id);
+
+        // Hold the command lock across both steps, exactly like `send`: the transcript note and the
+        // turn the harness sees must be in the same order for every caller.
+        let mut handle = live.commands.lock().await;
+        if let Some(event) = context_event(&session, ContextReason::Refresh, &assembly, None) {
+            inject(&live, event, id).await?;
+        }
+        if !assembly.docs.is_empty() {
+            handle
+                .send(UserInput::text(render_documents(&assembly.docs)))
+                .await?;
+        }
+        self.mirror_resume_token(id, &**handle)?;
+        Ok(assembly)
+    }
+
+    /// Re-launch the same conversation on a different registered harness.
+    ///
+    /// The transcript is the record and stays untouched: the new harness gets the same context
+    /// documents plus a summary of the conversation so far, and the switch itself is a visible system
+    /// note. The resume token belongs to the old harness, so it is dropped rather than handed over.
+    pub async fn switch_harness(
+        &self,
+        id: &str,
+        harness: &str,
+    ) -> Result<SessionDetail, SessionError> {
+        let session = self
+            .store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if session.harness == harness {
+            return Err(SessionError::Invalid(format!(
+                "session {id} already runs {harness}"
+            )));
+        }
+        let adapter = self.adapter(harness)?;
+        let previous = session.harness.clone();
+        let config = self.store.adapter_config(id)?;
+        let events = self.store.session_events(id)?;
+        let assembly = self.context_assembly(id);
+        let summary = render_tail(&events, TRANSCRIPT_SUMMARY_LINES);
+
+        self.stop(id).await;
+        // A model name belongs to the harness that understood it, and so does the resume token.
+        self.store.set_session_harness(id, harness, None)?;
+        self.store.set_resume_token(id, None)?;
+        let session = self.store.session(id)?.unwrap_or(session);
+        self.mark(id, SessionState::Starting)?;
+        self.publish_context(
+            &session,
+            ContextReason::HarnessSwitch,
+            &assembly,
+            Some((previous.as_str(), harness)),
+        );
+
+        let context = StartContext {
+            cwd: PathBuf::from(&session.cwd),
+            model: session.model.clone(),
+            prompt: (!summary.is_empty()).then_some(summary),
+            resume_token: None,
+            config,
+            context_files: assembly.docs,
+        };
+        // A harness that refuses to start leaves the row on the new harness and the session stopped:
+        // the conversation is intact and can be resumed (or switched again).
+        if let Err(error) = self.launch(&adapter, &session, context).await {
+            let _ = self.store.update_session_status(id, SessionState::Error);
+            return Err(error);
+        }
+        self.get(id)
+    }
+
+    /// The knowledge a fresh start of this session would receive right now.
+    fn context_assembly(&self, session_id: &str) -> ContextAssembly {
+        let source = self
+            .context
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        match source {
+            Some(source) => source.documents(session_id),
+            None => ContextAssembly::default(),
+        }
+    }
+
+    /// Record the context a session now carries. Called only when the session has no pump yet (start,
+    /// resume, switch: all after `stop`), so writing directly keeps the one-writer rule.
+    fn publish_context(
+        &self,
+        session: &Session,
+        reason: ContextReason,
+        assembly: &ContextAssembly,
+        switch: Option<(&str, &str)>,
+    ) {
+        if let Some(event) = context_event(session, reason, assembly, switch) {
+            pump::publish(&self.store, &self.bus, &session.id, &event);
+        }
     }
 
     async fn launch(
@@ -393,6 +528,85 @@ impl SessionManager {
             .cloned()
             .ok_or_else(|| SessionError::UnknownHarness(harness.to_string()))
     }
+}
+
+/// The visible system note for a context event, or `None` when there is nothing worth recording.
+///
+/// A start or resume with no pins and no plan stays silent (the header shows an empty context); an
+/// explicit refresh or a harness switch always says what happened, because the user asked for it.
+fn context_event(
+    session: &Session,
+    reason: ContextReason,
+    assembly: &ContextAssembly,
+    switch: Option<(&str, &str)>,
+) -> Option<HarnessEvent> {
+    let explicit = matches!(
+        reason,
+        ContextReason::Refresh | ContextReason::HarnessSwitch
+    );
+    if assembly.docs.is_empty() && !explicit {
+        return None;
+    }
+    Some(HarnessEvent::new(EventKind::ContextRefreshed {
+        reason,
+        harness: session.harness.clone(),
+        documents: assembly.documents.clone(),
+        note: context_note(reason, &session.harness, assembly, switch),
+    }))
+}
+
+fn context_note(
+    reason: ContextReason,
+    harness: &str,
+    assembly: &ContextAssembly,
+    switch: Option<(&str, &str)>,
+) -> String {
+    let summary = context_summary(assembly);
+    match reason {
+        ContextReason::Start => format!("Context sent to {harness}: {summary}"),
+        ContextReason::Resume => format!("Context re-sent on resume to {harness}: {summary}"),
+        ContextReason::Refresh => format!("Context refreshed for {harness}: {summary}"),
+        ContextReason::HarnessSwitch => {
+            let (from, to) = switch.unwrap_or(("?", harness));
+            format!("Harness switched from {from} to {to}; context re-sent: {summary}")
+        }
+    }
+}
+
+fn context_summary(assembly: &ContextAssembly) -> String {
+    if assembly.docs.is_empty() {
+        return "no documents".to_string();
+    }
+    let count = assembly.docs.len();
+    let plural = if count == 1 { "" } else { "s" };
+    let mut summary = format!("{count} document{plural} ({} chars)", assembly.total_chars);
+    let truncated = assembly
+        .documents
+        .iter()
+        .filter(|document| document.truncated)
+        .count();
+    if truncated > 0 {
+        summary.push_str(&format!("; {truncated} truncated to fit"));
+    }
+    if assembly.omitted > 0 {
+        summary.push_str(&format!("; {} omitted", assembly.omitted));
+    }
+    summary
+}
+
+/// Persist and broadcast one manager-authored event through the pump, waiting until it is durable.
+async fn inject(
+    live: &LiveSession,
+    event: HarnessEvent,
+    session_id: &str,
+) -> Result<(), SessionError> {
+    let (injected, persisted) = InjectedEvent::acknowledged(event);
+    live.inject
+        .send(injected)
+        .map_err(|_| SessionError::NotRunning(session_id.to_string()))?;
+    // A dropped ack means the pump is gone; the event is already on its way out either way.
+    let _ = persisted.await;
+    Ok(())
 }
 
 fn resolve_cwd(requested: Option<&str>, paths: &AppPaths) -> PathBuf {

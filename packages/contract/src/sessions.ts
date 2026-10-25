@@ -37,6 +37,28 @@ export const decisionSchema = z.enum(["approve", "deny"]);
 export type Decision = z.infer<typeof decisionSchema>;
 
 /**
+ * Why a session's context documents were assembled and handed to the harness: a new session, a
+ * resume, an explicit refresh, or a switch to another harness.
+ */
+export const contextReasonSchema = z.enum(["start", "resume", "refresh", "harness_switch"]);
+export type ContextReason = z.infer<typeof contextReasonSchema>;
+
+/**
+ * One document in a session's context, as the transcript records it. The body is deliberately absent:
+ * the log keeps what the harness was *given* (id, title, size, truncation), not a second copy of it.
+ */
+export const contextDocumentSchema = z.object({
+  /** The spec id, or `plan` for the session's TODO plan. */
+  id: z.string(),
+  title: z.string(),
+  /** Characters the document contributes, truncation marker included. */
+  chars: z.number().int().nonnegative(),
+  /** Whether the per-document budget cut it short. */
+  truncated: z.boolean(),
+});
+export type ContextDocument = z.infer<typeof contextDocumentSchema>;
+
+/**
  * Every normalized event kind and its payload, discriminated on `kind`, with the timestamp the core
  * recorded it at. Adding a kind is additive: the router drops kinds it does not know, so an older
  * webview never breaks on a newer core.
@@ -103,6 +125,16 @@ export const harnessEventSchema = z.discriminatedUnion("kind", [
     kind: z.literal("error"),
     message: z.string(),
     retryable: z.boolean(),
+  }),
+  z.object({
+    at: z.string(),
+    kind: z.literal("context_refreshed"),
+    reason: contextReasonSchema,
+    /** The harness that received the documents. */
+    harness: z.string(),
+    documents: z.array(contextDocumentSchema),
+    /** One human-readable line the transcript renders as a system note. */
+    note: z.string(),
   }),
 ]);
 export type HarnessEvent = z.infer<typeof harnessEventSchema>;
