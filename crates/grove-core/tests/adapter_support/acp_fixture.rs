@@ -43,4 +43,5 @@ pub fn target() -> Target {
         "permission" => context("permission", &[]),
         _ => context("happy", &[]),
     })
+    .with_permissions()
 }

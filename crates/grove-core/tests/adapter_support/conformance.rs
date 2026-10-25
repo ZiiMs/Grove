@@ -1,18 +1,19 @@
 //! The conformance suite every registered adapter must pass.
 //!
 //! It is adapter-agnostic: a [`Target`] pairs an adapter with a factory that starts a session against
-//! its fixture. Four scenarios are requested by name; a target maps them to whatever its fixture
+//! its fixture. Scenarios are requested by name; a target maps them to whatever its fixture
 //! understands (the in-process mock ignores them):
 //!
 //! - `turn`       — a normal turn, including a tool call when the adapter claims `tool_calls`
 //! - `slow`       — still streaming when the cancel lands
 //! - `unknown`    — the transport carries unknown and malformed frames, or the input is junk
-//! - `permission` — a turn that asks before acting, for adapters that claim `permissions`
+//! - `permission` — an approval request the adapter answers; only a target that opts in with
+//!   `Target::with_permissions()` and scripts the scenario may claim `capabilities.permissions`
 //!
 //! The checks are the contract in `architecture.md` §The adapter contract and §Normalized event
-//! model: capabilities honesty, ordering and termination, cancel, permission answers,
-//! resume-token roundtrip, and malformed-input tolerance. A sixth adapter adds a target here and
-//! keeps these green.
+//! model: capabilities honesty, ordering and termination, cancel, resume-token roundtrip,
+//! malformed-input tolerance, and a permission roundtrip when one is claimed. A sixth adapter adds a
+//! target here and keeps these green.
 
 #![allow(dead_code)]
 
@@ -26,10 +27,12 @@ pub struct Target {
     pub name: &'static str,
     pub adapter: Arc<dyn HarnessAdapter>,
     context: Box<dyn Fn(&str) -> StartContext + Send + Sync>,
+    /// Set by [`Target::with_permissions`]: the fixture scripts the `permission` scenario.
+    permissions: bool,
 }
 
 impl Target {
-    /// `context` maps a scenario name (`turn`, `slow`, `unknown`) to a start context.
+    /// `context` maps a scenario name (`turn`, `slow`, `unknown`, `permission`) to a start context.
     pub fn new(
         adapter: Arc<dyn HarnessAdapter>,
         context: impl Fn(&str) -> StartContext + Send + Sync + 'static,
@@ -38,7 +41,15 @@ impl Target {
             name: adapter.id().as_str(),
             adapter,
             context: Box::new(context),
+            permissions: false,
         }
+    }
+
+    /// Opt in to the permission roundtrip. An adapter may only claim `capabilities.permissions` when
+    /// its fixture scripts a `permission` scenario and this flag says so.
+    pub fn with_permissions(mut self) -> Self {
+        self.permissions = true;
+        self
     }
 
     fn start_context(&self, scenario: &str) -> StartContext {
@@ -68,11 +79,13 @@ macro_rules! check {
 /// Run every conformance check against one adapter.
 pub async fn run_all(target: &Target) {
     capabilities_are_honest(target).await;
-    permission_requests_are_answered(target).await;
     events_are_ordered_and_the_turn_terminates(target).await;
     cancel_stops_a_stream(target).await;
     resume_token_round_trips(target).await;
     malformed_input_is_tolerated(target).await;
+    if target.permissions {
+        permission_round_trips(target).await;
+    }
 }
 
 /// A capability is `true` only when the adapter really emits that event kind. An adapter that cannot
@@ -129,9 +142,15 @@ async fn capabilities_are_honest(target: &Target) {
             "resume is true but the session has no token after a turn"
         );
     }
-    if !capabilities.permissions {
-        // A claimed permission channel is verified by `permission_requests_are_answered` below;
-        // an adapter without one must say so instead of pretending.
+    if capabilities.permissions {
+        // A claim is only accepted when the fixture scripts a roundtrip for it.
+        check!(
+            target,
+            target.permissions,
+            "claims interactive permissions without a scripted roundtrip: add a `permission` scenario \
+             to this suite and opt in with Target::with_permissions() before claiming it"
+        );
+    } else {
         let error = session
             .respond_permission("perm-1", Decision::Approve)
             .await
@@ -142,78 +161,6 @@ async fn capabilities_are_honest(target: &Target) {
             "an adapter without permission support reports Unsupported, got {error:?}"
         );
     }
-
-    let _ = session.shutdown().await;
-}
-
-/// A permission-capable adapter asks before it acts, delivers the answer, and records the
-/// resolution. The request is never left hanging: the fixture blocks until it is answered.
-async fn permission_requests_are_answered(target: &Target) {
-    if !target.adapter.capabilities().permissions {
-        return;
-    }
-    let mut session = target.session("permission").await;
-    let mut events_rx = session.take_events();
-    session
-        .send(UserInput::text("conformance: ask before running a command"))
-        .await
-        .unwrap_or_else(|error| fail(target, format!("send failed: {error}")));
-    let before = drain_until(&mut events_rx, |event| {
-        matches!(event.kind, EventKind::PermissionRequest { .. })
-    })
-    .await;
-    let (request_id, title) = before
-        .iter()
-        .find_map(|event| match &event.kind {
-            EventKind::PermissionRequest {
-                request_id, title, ..
-            } => Some((request_id.clone(), title.clone())),
-            _ => None,
-        })
-        .unwrap_or_else(|| {
-            fail(
-                target,
-                format!(
-                    "permissions is true but the turn asked for none: {:?}",
-                    tags(&before)
-                ),
-            )
-        });
-    check!(
-        target,
-        !request_id.is_empty(),
-        "a permission request carries an id the answer can name"
-    );
-    check!(
-        target,
-        !title.is_empty(),
-        "a permission request carries a title a user can act on"
-    );
-
-    session
-        .respond_permission(&request_id, Decision::Approve)
-        .await
-        .unwrap_or_else(|error| fail(target, format!("an answer was refused: {error}")));
-    let after = drain_until_state(&mut events_rx, SessionState::Idle).await;
-    check!(
-        target,
-        after.iter().any(|event| matches!(
-            &event.kind,
-            EventKind::PermissionResolved { request_id: resolved, decision: Decision::Approve }
-                if *resolved == request_id
-        )),
-        "the answer is recorded as permission_resolved: {:?}",
-        tags(&after)
-    );
-    check!(
-        target,
-        after.iter().any(|event| matches!(
-            event.kind,
-            EventKind::Delta { .. } | EventKind::Message { .. } | EventKind::ToolCall { .. }
-        )),
-        "the turn continues after the answer: {:?}",
-        tags(&after)
-    );
 
     let _ = session.shutdown().await;
 }
@@ -525,6 +472,85 @@ async fn malformed_input_is_tolerated(target: &Target) {
         )),
         "the session still works after malformed input: {:?}",
         tags(&more)
+    );
+
+    let _ = session.shutdown().await;
+}
+
+/// An approval request reaches the transcript, the answer is delivered to the harness, and the same
+/// request resolves. The fixture refuses to finish the turn until it receives a valid decision, so a
+/// stubbed `respond_permission` cannot pass this check.
+async fn permission_round_trips(target: &Target) {
+    let mut session = target.session("permission").await;
+    let mut events_rx = session.take_events();
+    session
+        .send(UserInput::text("conformance: approve a command"))
+        .await
+        .unwrap_or_else(|error| fail(target, format!("send failed: {error}")));
+
+    let events = drain_until(&mut events_rx, |event| {
+        matches!(event.kind, EventKind::PermissionRequest { .. })
+    })
+    .await;
+    let (request_id, title, detail) = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            EventKind::PermissionRequest {
+                request_id,
+                title,
+                detail,
+            } => Some((request_id.clone(), title.clone(), detail.clone())),
+            _ => None,
+        })
+        .expect("the drain stopped on a permission request");
+    check!(
+        target,
+        !request_id.is_empty(),
+        "a permission request carries an id the UI can answer"
+    );
+    check!(
+        target,
+        !title.is_empty(),
+        "a permission request has a human-readable title: {request_id}"
+    );
+    check!(
+        target,
+        !detail.is_empty(),
+        "a permission request explains what is being asked: {request_id}"
+    );
+
+    session
+        .respond_permission(&request_id, Decision::Approve)
+        .await
+        .unwrap_or_else(|error| fail(target, format!("respond_permission failed: {error}")));
+
+    let after = drain_until_state(&mut events_rx, SessionState::Idle).await;
+    let kinds = tags(&after);
+    check!(
+        target,
+        after.iter().any(|event| matches!(
+            &event.kind,
+            EventKind::PermissionResolved {
+                request_id: resolved,
+                decision: Decision::Approve,
+            } if *resolved == request_id
+        )),
+        "the answer resolves the same request as approved: {kinds:?}"
+    );
+    check!(
+        target,
+        !after
+            .iter()
+            .any(|event| matches!(event.kind, EventKind::Error { .. })),
+        "an answered approval is not an error: {kinds:?}"
+    );
+    check!(
+        target,
+        after.iter().any(|event| matches!(
+            event.kind,
+            EventKind::Message { .. } | EventKind::Delta { .. }
+        )),
+        "the turn continues after the approval: {kinds:?}"
     );
 
     let _ = session.shutdown().await;

@@ -8,6 +8,7 @@ mod adapter_support;
 
 use adapter_support::acp_fixture;
 use adapter_support::claude_fixture;
+use adapter_support::codex_fixture;
 use adapter_support::conformance::{run_all, Target};
 use adapter_support::pi_fixture;
 use adapter_support::opencode_fixture;
@@ -56,6 +57,11 @@ async fn opencode_passes_conformance() {
     run_all(&opencode_fixture::target()).await;
 }
 
+#[tokio::test]
+async fn codex_passes_conformance() {
+    run_all(&codex_fixture::target()).await;
+}
+
 #[test]
 fn every_registered_adapter_has_a_conformance_target() {
     let targets = [
@@ -64,6 +70,7 @@ fn every_registered_adapter_has_a_conformance_target() {
         acp_fixture::target(),
         pi_fixture::target(),
         opencode_fixture::target(),
+        codex_fixture::target(),
     ];
     for adapter in builtin_registry() {
         let name = adapter.id().as_str();
