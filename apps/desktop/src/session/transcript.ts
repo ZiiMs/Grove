@@ -92,32 +92,41 @@ export function foldTranscript(events: SessionEvent[]): TranscriptItem[] {
         break;
       }
       case "message": {
-        const last = items[items.length - 1];
         const text = messageText(event.blocks);
-        if (
-          event.role === "assistant" &&
-          last &&
-          last.kind === "stream" &&
-          last.text.trimEnd() === text
-        ) {
-          items[items.length - 1] = {
-            id,
-            kind: "message",
-            role: event.role,
-            blocks: event.blocks,
-            at: last.at,
-            durationMs: sincePrevious,
-          };
-        } else {
-          items.push({
-            id,
-            kind: "message",
-            role: event.role,
-            blocks: event.blocks,
-            at: event.at,
-            durationMs: sincePrevious,
-          });
+        // A usage event lands between the last delta and the final assistant message, so the stream
+        // is not necessarily the last row. Skip those invisible rows when looking for the preview.
+        let streamIndex = -1;
+        if (event.role === "assistant") {
+          for (let i = items.length - 1; i >= 0; i -= 1) {
+            const item = items[i];
+            if (item.kind === "usage") continue;
+            if (item.kind === "stream" && item.text.trimEnd() === text) streamIndex = i;
+            break;
+          }
         }
+        if (streamIndex >= 0) {
+          const stream = items[streamIndex];
+          if (stream.kind === "stream") {
+            const previousAt = streamIndex > 0 ? items[streamIndex - 1].at : null;
+            items[streamIndex] = {
+              id,
+              kind: "message",
+              role: event.role,
+              blocks: event.blocks,
+              at: stream.at,
+              durationMs: previousAt ? elapsed(previousAt, event.at) : null,
+            };
+            break;
+          }
+        }
+        items.push({
+          id,
+          kind: "message",
+          role: event.role,
+          blocks: event.blocks,
+          at: event.at,
+          durationMs: sincePrevious,
+        });
         break;
       }
       case "tool_call":

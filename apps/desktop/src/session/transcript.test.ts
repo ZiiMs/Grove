@@ -28,6 +28,23 @@ describe("foldTranscript", () => {
     expect(items[0]).toMatchObject({ kind: "message", role: "assistant" });
   });
 
+  it("replaces a streamed preview when usage arrives before the message", () => {
+    const items = foldTranscript([
+      { at: AT, kind: "delta", text: "OK" },
+      { at: LATER, kind: "usage", input_tokens: 12, output_tokens: 2 },
+      {
+        at: LATER,
+        kind: "message",
+        role: "assistant",
+        blocks: [{ type: "text", text: "OK" }],
+      },
+    ]);
+    expect(items.filter((item) => item.kind === "message")).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "message", role: "assistant" });
+    expect(items.some((item) => item.kind === "stream")).toBe(false);
+    expect(items.filter((item) => item.kind === "usage")).toHaveLength(1);
+  });
+
   it("keeps a partial reply when the stream was cancelled", () => {
     const items = foldTranscript([
       { at: AT, kind: "delta", text: "Mock partial " },
