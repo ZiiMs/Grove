@@ -1,0 +1,251 @@
+/**
+ * PROTOTYPE — throwaway. Left navigation styles: a true tree with one tab of indent per level and
+ * drawn connectors, plus the header actions and the Settings footer.
+ */
+
+.pv-nav {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+  /* One indent step. Every tree level is exactly this wide. */
+  --tree-indent: 15px;
+}
+
+.pv-nav-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 42px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pv-nav-action {
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font: inherit;
+  font-size: 12px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0 3px;
+}
+
+.pv-nav-action:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.pv-nav-scroll {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 6px 6px 12px;
+}
+
+/* ---------- group headers ---------- */
+
+.pv-nav-cap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 4px;
+  margin-top: 6px;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.pv-nav-hint {
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  text-transform: none;
+  opacity: 0.75;
+}
+
+.pv-nav-count {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  background: var(--bg-sunken);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  line-height: 14px;
+  flex-shrink: 0;
+}
+
+/* ---------- tree rows ---------- */
+
+.pv-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--row-h);
+  padding: 0 4px 0 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-md);
+  color: var(--ink-muted);
+  cursor: pointer;
+  min-width: 0;
+  user-select: none;
+}
+
+.pv-tree-row:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.pv-tree-row.is-selected {
+  background: var(--accent-soft);
+  color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.pv-tree-row.is-project {
+  color: var(--ink);
+  font-weight: 570;
+  height: calc(var(--row-h) - 2px);
+}
+
+.pv-tree-row.is-worktree {
+  color: var(--ink-muted);
+  height: calc(var(--row-h) - 4px);
+  font-size: var(--font-sm);
+}
+
+.pv-tree-row.is-empty {
+  color: var(--ink-faint);
+  font-size: var(--font-sm);
+  height: calc(var(--row-h) - 8px);
+  font-style: italic;
+  cursor: default;
+}
+
+/* ---------- indent cells: the connectors ---------- */
+
+.pv-tree-indent {
+  position: relative;
+  width: var(--tree-indent);
+  align-self: stretch;
+  flex-shrink: 0;
+}
+
+/* Vertical run of each ancestor level. */
+.pv-tree-indent::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--tree-indent) / 2);
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border);
+}
+
+/* The last level elbows into the row instead of running past it. */
+.pv-tree-indent.is-last::before {
+  bottom: 50%;
+}
+
+.pv-tree-indent.is-last::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--tree-indent) / 2);
+  top: 50%;
+  width: calc(var(--tree-indent) / 2 + 1px);
+  border-top: 1px solid var(--border);
+}
+
+/* Leaf rows that take no caret keep the label aligned with its siblings. */
+.pv-tree-gutter {
+  width: 11px;
+  flex-shrink: 0;
+}
+
+.pv-tree-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 11px;
+  font-size: 8px;
+  color: var(--ink-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 100ms ease;
+}
+
+.pv-tree-caret:hover {
+  color: var(--ink);
+}
+
+.pv-tree-caret.is-open {
+  transform: rotate(90deg);
+}
+
+.pv-tree-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-tree-meta {
+  font-size: calc(var(--font-sm) - 1px);
+  color: var(--ink-faint);
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pv-tree-branch {
+  font-size: calc(var(--font-sm) - 1.5px);
+  color: var(--ink-faint);
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+/* ---------- footer ---------- */
+
+.pv-nav-foot {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pv-nav-settings {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-faint);
+  font: inherit;
+  font-size: 13px;
+  height: 26px;
+  width: 26px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.pv-nav-settings:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+  border-color: var(--border);
+}
+
+.pv-nav-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  flex-shrink: 0;
+}

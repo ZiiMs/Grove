@@ -1,0 +1,210 @@
+/**
+ * PROTOTYPE — throwaway. Three-column shell: left nav, centre content, collapsible right sidepanel.
+ */
+
+.pv-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 1px;
+  background: var(--border);
+  flex: 1;
+  min-height: 0;
+}
+
+.pv-workspace.is-collapsed {
+  grid-template-columns: minmax(0, 1fr) 40px;
+}
+
+.pv-workspace > .pv-content {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ---------- sidepanel frame ---------- */
+
+.pv-sidepanel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-raised);
+}
+
+.pv-sidepanel.is-collapsed {
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.pv-side-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 6px 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.pv-side-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font: inherit;
+  font-size: calc(var(--font-sm) - 1px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pv-side-tab:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+
+.pv-side-tab.is-active {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+.pv-side-glyph {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.pv-side-count {
+  font-size: 9.5px;
+  color: var(--ink-faint);
+  background: var(--bg-sunken);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  min-width: 14px;
+  text-align: center;
+}
+
+.pv-side-collapse {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--ink-faint);
+  font: inherit;
+  height: 22px;
+  width: 22px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.pv-side-collapse:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.pv-side-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---------- sidepanel contents ---------- */
+
+.pv-side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pv-side-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pv-side-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 26px;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+}
+
+.pv-side-row:hover {
+  background: var(--surface-hover);
+}
+
+.pv-side-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-side-text.is-done {
+  color: var(--ink-faint);
+  text-decoration: line-through;
+}
+
+.pv-pinned {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+}
+
+/* ---------- collapsed strip ---------- */
+
+.pv-side-expand {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--ink-muted);
+  border-radius: var(--radius-sm);
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.pv-side-expand:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+.pv-side-rail-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 28px;
+  padding: 5px 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pv-side-rail-btn:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.pv-side-rail-count {
+  font-size: 8.5px;
+  color: var(--ink-faint);
+}
