@@ -218,7 +218,7 @@ impl Store {
         self.with_conn(|conn| {
             Ok(conn.execute(
                 "UPDATE sessions SET status = 'exited', awaiting = 0
-                 WHERE status IN ('starting', 'ready', 'busy')",
+                 WHERE status IN ('starting', 'ready', 'busy', 'idle')",
                 [],
             )?)
         })
@@ -388,7 +388,7 @@ mod tests {
             store.insert_session(&row, &serde_json::json!({})).unwrap();
         }
 
-        assert_eq!(store.mark_orphaned_sessions_exited().unwrap(), 3);
+        assert_eq!(store.mark_orphaned_sessions_exited().unwrap(), 4);
         assert_eq!(
             store.session("a").unwrap().unwrap().status,
             SessionState::Exited
@@ -399,7 +399,7 @@ mod tests {
         );
         assert_eq!(
             store.session("d").unwrap().unwrap().status,
-            SessionState::Idle
+            SessionState::Exited
         );
         assert_eq!(
             store.session("e").unwrap().unwrap().status,
