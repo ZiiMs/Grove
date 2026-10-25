@@ -282,20 +282,29 @@ function Transcript({
   );
 }
 
-function AssistantHead({
+function AssistantFoot({
   provider,
   at,
   durationMs,
+  streaming = false,
 }: {
   provider: string;
   at: string;
   durationMs?: number | null;
+  streaming?: boolean;
 }) {
+  const timing = durationLabel(durationMs ?? null) || (streaming ? "" : clockLabel(at));
   return (
-    <div className="turn-head">
-      <Mark provider={provider} small />
-      <strong>{providerMeta(provider).name}</strong>
-      <span className="meta">{durationLabel(durationMs ?? null) || clockLabel(at)}</span>
+    <div className="turn-foot">
+      <span>{providerMeta(provider).name}</span>
+      {timing ? (
+        <>
+          <span className="sep" aria-hidden="true">
+            ·
+          </span>
+          <span>{timing}</span>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -334,7 +343,6 @@ function TranscriptRow({
       }
       return (
         <div className="turn">
-          <AssistantHead provider={provider} at={item.at} durationMs={item.durationMs} />
           {item.blocks.map((block, index) => {
             if (block.type === "code") {
               return (
@@ -352,17 +360,18 @@ function TranscriptRow({
             }
             return <p key={index}>{block.text}</p>;
           })}
+          <AssistantFoot provider={provider} at={item.at} durationMs={item.durationMs} />
         </div>
       );
     }
     case "stream":
       return (
         <div className="turn">
-          <AssistantHead provider={provider} at={item.at} />
           <p>
             {item.text}
             <span className="stream-caret" aria-hidden="true" />
           </p>
+          <AssistantFoot provider={provider} at={item.at} streaming />
         </div>
       );
     case "tool": {

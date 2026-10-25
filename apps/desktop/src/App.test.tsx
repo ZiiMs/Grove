@@ -187,6 +187,13 @@ describe("redesigned shell", () => {
     expect(screen.getByText("Read")).toBeInTheDocument();
   });
 
+  it("puts assistant metadata in a ghost footer and keeps only user turns bubbled", async () => {
+    await ready();
+    expect(document.querySelector(".turn-head")).toBeNull();
+    expect(document.querySelector(".turn-foot")).not.toBeNull();
+    expect(document.querySelector(".turn-user .bubble")).not.toBeNull();
+  });
+
   it("opens settings on the requested tab and applies a theme", async () => {
     await ready();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
