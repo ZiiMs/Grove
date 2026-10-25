@@ -9,6 +9,7 @@
     "build": "npm run build --workspaces --if-present && node scripts/check-bundle.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "check:rust": "node scripts/check-rust.mjs",
     "test": "npm run test --workspaces --if-present",
     "tauri": "npm run tauri -w @grove/desktop"
   },

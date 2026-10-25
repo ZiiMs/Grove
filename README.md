@@ -111,6 +111,10 @@ the profiles keep incremental off while the wrapper is configured. To go back to
 local loop, remove `rustc-wrapper` and the `CARGO_INCREMENTAL` pin from `.cargo/config.toml` and set
 `incremental = true` in the dev and test profiles.
 
+For the edit loop without changing that setup, run `npm run check:rust` (or
+`npm run check:rust -- -p grove-desktop`). It typechecks incrementally with the wrapper disabled;
+the full gates above still use sccache.
+
 `npm run build` ends with `scripts/check-bundle.mjs`: it fails if Monaco reappears in the entry
 chunk or the entry chunk exceeds its size budget.
 There is no CI. Run these gates yourself before landing a change, in this order: install,

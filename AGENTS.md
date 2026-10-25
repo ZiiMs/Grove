@@ -36,6 +36,7 @@ Single-context: one root `GLOSSARY.md` and ADRs under `docs/adr/`. See `docs/age
 ```
 npm ci                 # workspace install (apps/desktop, packages/contract)
 npm run typecheck      # tsc --noEmit across workspaces
+npm run check:rust     # fast incremental core check for the edit loop (bypasses sccache)
 npm test               # vitest (UI, contract)
 npm run build          # vite production build + the entry-size bundle guard
 cargo nextest run -p grove-core
