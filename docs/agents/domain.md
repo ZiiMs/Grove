@@ -8,8 +8,9 @@ Single-context repository.
 - `docs/adr/` — one file per architecture decision record, `NNNN-<slug>.md`.
 - `architecture.md` — the current architecture design; the ADRs record *why* it changed over time.
 
-These do not exist yet. Create `GLOSSARY.md` with the first term that is ambiguous, and an ADR only
-when a decision is expensive to reverse or contradicts a previous one. Do not create empty ones.
+`GLOSSARY.md` and `docs/adr/` are populated. Add a term the first time a concept needs a definition,
+and an ADR only when a decision is expensive to reverse or contradicts a previous one. Do not create
+empty ones.
 
 ## Consumer rules
 
