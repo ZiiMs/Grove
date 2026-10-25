@@ -125,9 +125,9 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
 };
 
-/** What the Providers pane renders: one row per shipped vendor, none configured by default. */
-export const DEFAULT_PROVIDER_STATUSES: ProviderStatus[] = [
-  {
+/** A provider row for a UI test: Anthropic with a keychain credential unless overridden. */
+export function fakeProviderStatus(overrides: Partial<ProviderStatus> = {}): ProviderStatus {
+  return {
     id: "anthropic",
     name: "Anthropic",
     short: "AN",
@@ -137,10 +137,63 @@ export const DEFAULT_PROVIDER_STATUSES: ProviderStatus[] = [
     envVar: "ANTHROPIC_API_KEY",
     defaultModel: "claude-sonnet-4-5",
     models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"],
+    configured: true,
+    source: "keychain",
+    detail: null,
+    ...overrides,
+  };
+}
+
+/** The four shipped providers as the settings pane sees them, for tests and snapshots. */
+export const FAKE_PROVIDER_ROSTER: ProviderStatus[] = [
+  fakeProviderStatus(),
+  fakeProviderStatus({
+    id: "openai",
+    name: "OpenAI",
+    short: "OA",
+    tint: "#6f9ad1",
+    keyUrl: "https://platform.openai.com/api-keys",
+    envVar: "OPENAI_API_KEY",
+    defaultModel: "gpt-5",
+    models: ["gpt-5", "gpt-5-mini"],
+    source: "environment",
+  }),
+  fakeProviderStatus({
+    id: "google",
+    name: "Google",
+    short: "GO",
+    tint: "#6fbf9a",
+    keyUrl: "https://aistudio.google.com/apikey",
+    envVar: "GEMINI_API_KEY",
+    defaultModel: "gemini-2.5-pro",
+    models: ["gemini-2.5-pro", "gemini-2.5-flash"],
     configured: false,
     source: null,
-    detail: "Add an API key from https://console.anthropic.com/settings/keys, or set ANTHROPIC_API_KEY.",
-  },
+    detail: "Add an API key from https://aistudio.google.com/apikey, or set GEMINI_API_KEY.",
+  }),
+  fakeProviderStatus({
+    id: "openrouter",
+    name: "OpenRouter",
+    short: "OR",
+    tint: "#9d86c9",
+    keyUrl: "https://openrouter.ai/keys",
+    envVar: "OPENROUTER_API_KEY",
+    defaultModel: "anthropic/claude-sonnet-4.5",
+    models: ["anthropic/claude-sonnet-4.5", "openai/gpt-5"],
+    configured: false,
+    source: null,
+    detail: "Add an API key from https://openrouter.ai/keys, or set OPENROUTER_API_KEY.",
+  }),
+];
+
+/** What the Providers pane renders: one row per shipped vendor, none configured by default. */
+export const DEFAULT_PROVIDER_STATUSES: ProviderStatus[] = [
+  fakeProviderStatus({
+    configured: false,
+    source: null,
+    detail:
+      "Add an API key from https://console.anthropic.com/settings/keys, or set ANTHROPIC_API_KEY.",
+  }),
 ];
 
 export function fakeSession(overrides: Partial<Session> = {}): Session {
