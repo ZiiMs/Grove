@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { modelGroupsFor, providerForModel, providerMeta } from "./models";
+import { fakeProviderStatus } from "../test-utils/fakeBridge";
+import {
+  availableProviderIds,
+  isRunning,
+  modelGroupsFor,
+  providerForModel,
+  providerMeta,
+  sessionVisual,
+  turnInFlight,
+} from "./models";
 
 describe("model to provider", () => {
   it("resolves a model the presentation map knows", () => {
@@ -40,5 +49,45 @@ describe("model to provider", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].provider.name).toBe("OpenCode Go");
     expect(groups[0].models).toContain("glm-5.3");
+  });
+
+  it("keeps configured providers and status-less preview providers", () => {
+    const providers = [
+      { id: "anthropic" },
+      { id: "openai" },
+      { id: "opencode-go" },
+      { id: "mock" },
+    ];
+    const statuses = [
+      fakeProviderStatus({ id: "anthropic", configured: false, source: null }),
+      fakeProviderStatus({ id: "openai", configured: false, source: null }),
+      fakeProviderStatus({ id: "opencode-go", configured: true }),
+    ];
+
+    const available = availableProviderIds(providers, statuses);
+    expect(available).toEqual(["opencode-go", "mock"]);
+
+    const groups = modelGroupsFor({}, available, {
+      "opencode-go": ["kimi-k3"],
+      mock: ["mock-1"],
+    });
+    expect(groups.map((group) => group.provider.id)).toEqual(["opencode-go", "mock"]);
+  });
+
+  it("treats ready as sendable and only starting, busy or awaiting as in flight", () => {
+    const state = (status: "starting" | "ready" | "busy" | "idle", awaiting = false) => ({
+      status,
+      awaiting,
+    });
+    expect(turnInFlight(state("ready"))).toBe(false);
+    expect(turnInFlight(state("idle"))).toBe(false);
+    expect(turnInFlight(state("starting"))).toBe(true);
+    expect(turnInFlight(state("busy"))).toBe(true);
+    expect(turnInFlight(state("ready", true))).toBe(true);
+    expect(turnInFlight(null)).toBe(false);
+
+    expect(sessionVisual(state("ready"))).toBe("idle");
+    expect(isRunning(state("ready"))).toBe(true);
+    expect(isRunning(state("idle"))).toBe(false);
   });
 });

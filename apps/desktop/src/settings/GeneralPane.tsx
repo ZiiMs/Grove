@@ -4,7 +4,13 @@ import { useSessionStore } from "../state/sessionStore";
 import { errorText } from "../ipc/errors";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore, type PermissionMode } from "../state/workspaceStore";
-import { firstAvailableProvider, providerMeta, modelGroupsFor, providerForModel } from "../workspace/models";
+import {
+  availableProviderIds,
+  firstAvailableProvider,
+  providerMeta,
+  modelGroupsFor,
+  providerForModel,
+} from "../workspace/models";
 
 const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
   { value: "ask", label: "Ask before running" },
@@ -16,6 +22,7 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
   const bridge = useBridge();
   const prefs = useWorkspaceStore((state) => state.prefs);
   const registered = useSessionStore((state) => state.providers);
+  const providerStatuses = useSessionStore((state) => state.providerStatuses);
   const saveSettings = useWorkspaceStore((state) => state.saveSettings);
   const notify = useUiStore((state) => state.notify);
 
@@ -33,7 +40,7 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
     setRestore(prefs.restoreSessions);
   }, [prefs]);
 
-  const available = registered.length ? registered.map((info) => info.id) : undefined;
+  const available = availableProviderIds(registered, providerStatuses);
   const modelsByProvider = Object.fromEntries(registered.map((spec) => [spec.id, spec.models]));
   const groups = useMemo(
     () => modelGroupsFor(prefs.enabledProviders, available, modelsByProvider),

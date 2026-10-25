@@ -45,7 +45,7 @@ async fn a_mock_session_streams_deltas_a_message_and_a_tool_call() {
     let detail = manager.create(mock_session(1)).await.unwrap();
     let id = detail.session.id.clone();
     assert_eq!(detail.session.provider, "mock");
-    assert_eq!(detail.session.status, SessionState::Starting);
+    assert_eq!(detail.session.status, SessionState::Ready);
 
     manager.send(&id, "hello grove").await.unwrap();
 

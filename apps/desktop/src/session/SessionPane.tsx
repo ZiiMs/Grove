@@ -9,10 +9,11 @@ import { useSessionStore } from "../state/sessionStore";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import {
+  availableProviderIds,
   defaultModelFor,
   firstAvailableProvider,
   providerMeta,
-  isRunning,
+  turnInFlight,
   modelGroupsFor,
   sessionVisual,
   SESSION_UI_STATE,
@@ -61,7 +62,7 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
 
   const items = useMemo(() => foldTranscript(events), [events]);
   const live = detail ? detail.status !== "exited" && detail.status !== "error" : false;
-  const working = isRunning(summary ?? detail);
+  const working = turnInFlight(summary ?? detail);
   const visual = sessionVisual(summary ?? detail);
   const provider = detail ? providerMeta(detail.provider) : null;
 
@@ -510,17 +511,23 @@ function Composer({
   const dequeue = useSessionStore((state) => state.dequeue);
   const cancel = useSessionStore((state) => state.cancel);
   const switchProvider = useSessionStore((state) => state.switchProvider);
+  const resume = useSessionStore((state) => state.resume);
   const busy = useSessionStore((state) => state.busy);
   const prefs = useWorkspaceStore((state) => state.prefs);
   const registered = useSessionStore((state) => state.providers);
+  const providerStatuses = useSessionStore((state) => state.providerStatuses);
   const notify = useUiStore((state) => state.notify);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const live = detail ? detail.status !== "exited" && detail.status !== "error" : false;
-  const working = isRunning(detail);
+  const working = turnInFlight(detail);
   const typed = draft.trim().length > 0;
-  const available = registered.length ? registered.map((info) => info.id) : undefined;
-  const modelGroups = modelGroupsFor(prefs.enabledProviders, available);
+  const available = availableProviderIds(registered, providerStatuses);
+  const modelsByProvider = useMemo(
+    () => Object.fromEntries(registered.map((spec) => [spec.id, spec.models])),
+    [registered],
+  );
+  const modelGroups = modelGroupsFor(prefs.enabledProviders, available, modelsByProvider);
   const fallbackProvider = firstAvailableProvider(prefs.enabledProviders, available, prefs.defaultProvider);
   const currentModel = model ?? defaultModelFor(detail?.provider ?? fallbackProvider);
   const known = modelGroups.some((group) => group.models.includes(currentModel));
@@ -602,9 +609,13 @@ function Composer({
             id="composer-input"
             ref={inputRef}
             rows={1}
-            placeholder={isStopped ? "Resume this session to continue…" : "Ask for the next change…"}
+            placeholder={
+              isStopped
+                ? "Type a message, then resume this session to send…"
+                : "Ask for the next change…"
+            }
             value={draft}
-            disabled={isStopped}
+            disabled={!detail}
             onChange={(event) => setDraft(sessionId, event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -621,7 +632,8 @@ function Composer({
               className="model-select"
               id="model-select"
               value={currentModel}
-              disabled={busy || isStopped}
+              disabled={busy}
+              title={isStopped ? "Pick an available model to resume this session" : undefined}
               onChange={(event) => void changeModel(event.target.value)}
             >
               {!known ? <option value={currentModel}>{currentModel}</option> : null}
@@ -640,6 +652,17 @@ function Composer({
                 <button className="btn-stop" type="button" onClick={() => void cancel(bridge)}>
                   <Icon name="stop" size="sm" />
                   Stop
+                </button>
+              ) : null}
+              {isStopped ? (
+                <button
+                  className="btn-ghost sm"
+                  type="button"
+                  disabled={busy}
+                  aria-label="Resume session"
+                  onClick={() => void resume(bridge)}
+                >
+                  Resume
                 </button>
               ) : null}
               <button

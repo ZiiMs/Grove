@@ -152,8 +152,8 @@ function seed() {
   };
 }
 
-function renderApp() {
-  const bridge = createFakeBridge({}, seed());
+function renderApp(overrides: Partial<ReturnType<typeof seed>> = {}) {
+  const bridge = createFakeBridge({}, { ...seed(), ...overrides });
   render(
     <BridgeProvider bridge={bridge}>
       <App />
@@ -204,6 +204,37 @@ describe("redesigned shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Start session" }));
     await screen.findByRole("heading", { name: "Add the session tabs" });
     expect(bridge.invocations).toContain("session_create");
+  });
+
+  it("lets you draft while a stopped session waits for resume", async () => {
+    const stopped = { ...session, status: "exited" as const };
+    const bridge = renderApp({
+      sessions: [fakeSummary(stopped, events.length)],
+      details: { [session.id]: { ...detail, status: "exited" } },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    const composer = screen.getByLabelText("Message the active session");
+    expect(composer).toBeEnabled();
+    await userEvent.type(composer, "Try the OpenCode models");
+    expect(composer).toHaveValue("Try the OpenCode models");
+
+    await userEvent.click(screen.getByRole("button", { name: "Resume session" }));
+    await waitFor(() => expect(bridge.invocations).toContain("session_resume"));
+  });
+
+  it("sends immediately from a ready session instead of queueing", async () => {
+    const ready = { ...session, status: "ready" as const, awaiting: false };
+    const bridge = renderApp({
+      sessions: [fakeSummary(ready, events.length)],
+      details: { [session.id]: { ...detail, status: "ready", awaiting: false } },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    const composer = screen.getByLabelText("Message the active session");
+    await userEvent.type(composer, "Use the OpenCode models");
+    await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(bridge.invocations).toContain("session_send"));
   });
 
   it("answers a permission request from the transcript", async () => {

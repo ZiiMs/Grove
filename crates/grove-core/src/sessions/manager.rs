@@ -609,6 +609,9 @@ impl SessionManager {
         if let Some(previous) = self.live.lock().await.insert(session.id.clone(), live) {
             previous.pump.abort();
         }
+        // A launched agent is ready for its first message. Without this transition the row stays
+        // `starting`, and a composer that queues while a turn is in flight never sends anything.
+        self.mark(&session.id, SessionState::Ready)?;
         Ok(())
     }
 
@@ -1002,6 +1005,11 @@ mod tests {
                 "the launch carries the session id"
             );
         }
+        assert_eq!(
+            manager.get(&session).unwrap().session.status,
+            SessionState::Ready,
+            "a launched session accepts its first message"
+        );
 
         manager.close(&session).await.unwrap();
         manager.resume(&session).await.unwrap();
@@ -1013,6 +1021,11 @@ mod tests {
                 "the resume keeps the session id"
             );
         }
+        assert_eq!(
+            manager.get(&session).unwrap().session.status,
+            SessionState::Ready,
+            "a resumed session accepts its next message"
+        );
     }
 
     #[tokio::test]

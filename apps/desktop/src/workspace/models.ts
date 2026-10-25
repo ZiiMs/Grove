@@ -1,4 +1,4 @@
-import type { Session, SessionState } from "@grove/contract";
+import type { ProviderSpec, ProviderStatus, Session, SessionState } from "@grove/contract";
 
 /** Presentation for a provider. The backend owns the facts; this is only how a row looks. */
 export interface ProviderMeta {
@@ -130,6 +130,22 @@ export function modelGroupsFor(
     }));
 }
 
+/**
+ * The providers a session may actually use: registered providers with a credential, plus any
+ * registered provider that has no status row (a preview catalog such as the offline mock). A row
+ * with `configured: false` is deliberately absent, so an unconfigured vendor never appears in the
+ * model picker.
+ */
+export function availableProviderIds(
+  providers: Array<Pick<ProviderSpec, "id">>,
+  statuses: ProviderStatus[],
+): string[] {
+  const known = new Set(statuses.map((status) => status.id));
+  const configured = statuses.filter((status) => status.configured).map((status) => status.id);
+  const unstatused = providers.map((provider) => provider.id).filter((id) => !known.has(id));
+  return [...new Set([...configured, ...unstatused])];
+}
+
 /** The provider a new session should start on: the preferred one when it is usable, else the first. */
 export function firstAvailableProvider(
   enabled: Record<string, boolean> = {},
@@ -166,20 +182,39 @@ export function sessionVisual(session: Pick<Session, "status" | "awaiting"> | nu
 function visualForStatus(status: SessionState): SessionVisual {
   switch (status) {
     case "starting":
-    case "ready":
     case "busy":
       return "running";
     case "error":
       return "failed";
     case "exited":
       return "done";
+    case "ready":
     case "idle":
     default:
       return "idle";
   }
 }
 
+/**
+ * A session with a live agent: starting, ready, busy, or waiting for a permission answer. `ready`
+ * counts because the agent is launched and can accept context refreshes; it is not a turn in flight.
+ */
 export function isRunning(session: Pick<Session, "status" | "awaiting"> | null): boolean {
-  const visual = sessionVisual(session);
-  return visual === "running" || visual === "waiting";
+  if (!session) return false;
+  return (
+    session.awaiting ||
+    session.status === "starting" ||
+    session.status === "ready" ||
+    session.status === "busy"
+  );
+}
+
+/**
+ * Whether a turn is actually in flight. `ready` means the session is launched and waiting for the
+ * next message, so the composer must send rather than queue; only starting, busy, or a pending
+ * permission request hold a message back.
+ */
+export function turnInFlight(session: Pick<Session, "status" | "awaiting"> | null): boolean {
+  if (!session) return false;
+  return session.awaiting || session.status === "starting" || session.status === "busy";
 }

@@ -2,6 +2,7 @@ import type {
   Decision,
   SessionEvent,
   ProviderSpec,
+  ProviderStatus,
   SessionContext,
   SessionDetail,
   SessionSummary,
@@ -38,6 +39,8 @@ export interface CreateSessionInput {
 
 interface SessionStoreData {
   providers: ProviderSpec[];
+  /** Credential readiness for the registered providers; drives which models a session may use. */
+  providerStatuses: ProviderStatus[];
   sessions: SessionSummary[];
   activeId: string | null;
   detail: SessionDetail | null;
@@ -93,6 +96,7 @@ export interface SessionStore extends SessionStoreData {
 
 const initial: SessionStoreData = {
   providers: [],
+  providerStatuses: [],
   sessions: [],
   activeId: null,
   detail: null,
@@ -147,11 +151,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   load: async (bridge) => {
     set({ loading: true, error: null });
     try {
-      const [providers, sessions] = await Promise.all([
+      const [providers, providerStatuses, sessions] = await Promise.all([
         bridge.invoke("provider_list"),
+        bridge.invoke("provider_statuses"),
         bridge.invoke("session_list"),
       ]);
-      set({ providers, sessions, loading: false });
+      set({ providers, providerStatuses, sessions, loading: false });
     } catch (error) {
       set({ loading: false, error: errorText(error) });
     }
@@ -260,10 +265,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (queue.length === 0) return;
     if (
       detail &&
-      (detail.awaiting ||
-        detail.status === "starting" ||
-        detail.status === "ready" ||
-        detail.status === "busy")
+      (detail.awaiting || detail.status === "starting" || detail.status === "busy")
     ) {
       return;
     }

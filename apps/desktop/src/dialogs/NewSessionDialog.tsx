@@ -6,6 +6,7 @@ import { useSessionStore } from "../state/sessionStore";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import {
+  availableProviderIds,
   defaultModelFor,
   firstAvailableProvider,
   providerMeta,
@@ -37,6 +38,7 @@ export function NewSessionDialog() {
   const busy = useSessionStore((state) => state.busy);
   const storeError = useSessionStore((state) => state.error);
   const registered = useSessionStore((state) => state.providers);
+  const providerStatuses = useSessionStore((state) => state.providerStatuses);
 
   const [title, setTitle] = useState("");
   const [projectId, setProjectId] = useState<string>("chat");
@@ -60,8 +62,8 @@ export function NewSessionDialog() {
     (originWorktree ? basename(originWorktree) : null);
 
   const available = useMemo(
-    () => (registered.length ? registered.map((info) => info.id) : undefined),
-    [registered],
+    () => availableProviderIds(registered, providerStatuses),
+    [providerStatuses, registered],
   );
   // The catalogue's own model lists, so a model the presentation map does not know is still
   // attributed to the provider that offers it.
