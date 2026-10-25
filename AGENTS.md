@@ -27,10 +27,10 @@ Single-context: one root `GLOSSARY.md` and ADRs under `docs/adr/`. See `docs/age
 npm ci                 # workspace install (apps/desktop, packages/contract, sidecar)
 npm run typecheck      # tsc --noEmit across workspaces
 npm test               # vitest (UI, contract, sidecar)
-npm run build          # vite production build
+npm run build          # vite production build + sidecar dist + the Monaco bundle guard
 cargo test -p grove-core
 cargo check -p grove-desktop
-cargo fmt --check && cargo clippy --workspace -- -D warnings
+cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 Never add a network call to a session path: only the skill catalog fetches, and it falls back to its

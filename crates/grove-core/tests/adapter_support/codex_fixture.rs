@@ -1,7 +1,5 @@
 //! Start contexts for the scripted Codex app-server stand-in (`fixtures/harnesses/codex_fake.mjs`).
 
-#![allow(dead_code)]
-
 use super::conformance::Target;
 use super::runtime::fixture;
 use grove_core::adapters::{CodexAdapter, StartContext};

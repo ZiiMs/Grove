@@ -4,8 +4,6 @@
 //! that serves REST plus an SSE bus, so the tests exercise the adapter's readiness probe, its HTTP
 //! commands and its event-stream reader against a process rather than a mock.
 
-#![allow(dead_code)]
-
 use super::conformance::Target;
 use super::runtime::fixture;
 use grove_core::adapters::{OpenCodeAdapter, StartContext};

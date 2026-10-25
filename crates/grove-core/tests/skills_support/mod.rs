@@ -1,8 +1,6 @@
 //! Shared fixtures for the skill-catalog tests. Not a test target: it lives in a subdirectory so
 //! Cargo only compiles it into the tests that declare `mod skills_support;`.
 
-#![allow(dead_code)]
-
 use grove_core::paths::AppPaths;
 use grove_core::secrets::MemorySecretStore;
 use grove_core::skills::{SkillCatalogConfig, SkillService, SkillSource};

@@ -2,7 +2,7 @@
 //! test per fixture mode plus the answers, the resume roundtrip, detection and the config override.
 //! The shared conformance suite is in `tests/adapters_conformance.rs`.
 
-mod adapter_support;
+pub mod adapter_support;
 
 use adapter_support::acp_fixture::{config, context};
 use adapter_support::runtime::{deps, drain_until, drain_until_state, next_event, tags};

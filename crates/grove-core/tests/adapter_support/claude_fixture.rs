@@ -1,7 +1,5 @@
 //! Start contexts for the scripted Claude Code stand-in (`fixtures/harnesses/claude_fake.mjs`).
 
-#![allow(dead_code)]
-
 use super::conformance::Target;
 use super::runtime::fixture;
 use grove_core::adapters::{ClaudeAdapter, StartContext};

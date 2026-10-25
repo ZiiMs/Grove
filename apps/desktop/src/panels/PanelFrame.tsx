@@ -26,17 +26,3 @@ export function PanelFrame({
     </section>
   );
 }
-
-export function Placeholder({ title, hint }: { title: string; hint: string }) {
-  return (
-    <PanelFrame title={title} subtitle="Foundation shell">
-      <div className="placeholder" data-testid={`placeholder-${title.toLowerCase()}`}>
-        <p>{hint}</p>
-        <p className="placeholder-note">
-          Wired into the shell and the typed IPC contract. The feature ticket replaces this body; the
-          navigation entry and test id stay.
-        </p>
-      </div>
-    </PanelFrame>
-  );
-}

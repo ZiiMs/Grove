@@ -62,7 +62,7 @@ pub fn session_context_get(
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> IpcResult<SessionContext> {
-    Ok(state.core.context.snapshot(&id)?)
+    state.core.context.snapshot(&id)
 }
 
 /// Pin or unpin a spec for one session. Returns the refreshed snapshot so the panel needs no second
@@ -89,7 +89,7 @@ pub async fn session_refresh_context(
     id: String,
 ) -> IpcResult<SessionContext> {
     state.core.sessions.refresh_context(&id).await?;
-    Ok(state.core.context.snapshot(&id)?)
+    state.core.context.snapshot(&id)
 }
 
 /// Re-launch the same conversation on another registered harness, with the same context documents and

@@ -4,7 +4,7 @@
 //!
 //! The shared conformance suite is in `tests/adapters_conformance.rs`.
 
-mod adapter_support;
+pub mod adapter_support;
 
 use adapter_support::opencode_fixture::{config, context, FIXTURE};
 use adapter_support::runtime::{

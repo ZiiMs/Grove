@@ -146,30 +146,6 @@ body {
   overflow: auto;
 }
 
-.placeholder {
-  max-width: 640px;
-}
-
-.placeholder h1 {
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-xl);
-}
-
-.placeholder p {
-  margin: 0 0 var(--space-2);
-  color: var(--text-muted);
-  line-height: 1.6;
-}
-
-.placeholder-note {
-  margin-top: var(--space-4);
-  padding: var(--space-3);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-md);
-  color: var(--text-faint);
-  font-size: var(--text-sm);
-}
-
 button.input,
 input.input,
 textarea.input {

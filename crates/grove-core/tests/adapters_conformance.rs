@@ -4,7 +4,7 @@
 //! guard that keeps the list honest. Adding a harness means adding one target here — an adapter that
 //! is registered without one fails `every_registered_adapter_has_a_conformance_target`.
 
-mod adapter_support;
+pub mod adapter_support;
 
 use adapter_support::acp_fixture;
 use adapter_support::claude_fixture;

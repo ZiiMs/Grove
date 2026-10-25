@@ -1,7 +1,7 @@
 //! Skill targets and installation: atomic copy, new-vs-overwritten, traversal and symlink refusal,
 //! install records, and the offline path served from the blob cache.
 
-mod skills_support;
+pub mod skills_support;
 
 use grove_core::paths::display_path;
 use grove_core::skills::{InstallRequest, SkillError};

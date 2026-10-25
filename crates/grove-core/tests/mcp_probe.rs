@@ -4,7 +4,7 @@
 //! The stdio server is `fixtures/mcp/fake_stdio_server.mjs` (Node is already a build dependency); HTTP
 //! goes through `wiremock`. No test talks to the network.
 
-mod mcp_support;
+pub mod mcp_support;
 
 use grove_core::mcp::{McpError, ProbeState};
 use mcp_support::{wait_for_file, write_fake_server, Sandbox};

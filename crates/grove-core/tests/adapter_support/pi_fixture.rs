@@ -5,8 +5,6 @@
 //! install, or the network: the adapter is pointed at the fixture through `config.command` /
 //! `config.args`, exactly like a user points it at a wrapper.
 
-#![allow(dead_code)]
-
 use super::conformance::Target;
 use super::runtime::fixture;
 use grove_core::adapters::{PiAdapter, StartContext};
