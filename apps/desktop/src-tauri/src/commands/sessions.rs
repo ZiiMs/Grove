@@ -5,6 +5,7 @@ use crate::commands::app::adopt;
 use crate::state::AppState;
 use grove_core::ipc::{CreateSessionRequest, IpcResult, Session, SessionDetail, SessionSummary};
 use grove_core::providers::ProviderSpec;
+use grove_core::providers::ThinkingLevel;
 use grove_core::sessions::context::SessionContext;
 use grove_core::sessions::event::{Decision, QuestionAnswer};
 
@@ -83,6 +84,17 @@ pub async fn session_respond_question(
         .sessions
         .respond_question(&id, &request_id, answers)
         .await?)
+}
+
+/// Change the reasoning level for a session. The runtime applies it to the next turn; the stored
+/// config keeps it across resumes.
+#[tauri::command]
+pub async fn session_set_thinking(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    level: ThinkingLevel,
+) -> IpcResult<SessionDetail> {
+    Ok(state.core.sessions.set_thinking(&id, level).await?)
 }
 
 #[tauri::command]

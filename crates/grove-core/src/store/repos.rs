@@ -87,8 +87,15 @@ impl Store {
         let Some(session) = self.session(id)? else {
             return Ok(None);
         };
+        let thinking_level = self
+            .adapter_config(id)?
+            .get("thinkingLevel")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::providers::ThinkingLevel::parse)
+            .unwrap_or_default();
         Ok(Some(SessionDetail {
             session,
+            thinking_level,
             events: self.session_events(id)?,
         }))
     }
@@ -210,6 +217,22 @@ impl Store {
         Ok(raw
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_else(|| serde_json::json!({})))
+    }
+
+    /// Replace the provider config stored with a session. Used when a preference that lives in the
+    /// config (today, the thinking level) changes without changing the provider or model.
+    pub fn set_adapter_config(
+        &self,
+        id: &str,
+        config: &serde_json::Value,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET adapter_config = ?1, updated_at = ?2 WHERE id = ?3",
+                params![config.to_string(), now(), id],
+            )?;
+            Ok(())
+        })
     }
 
     /// After a restart nothing is running: sessions are rows, not processes. Turn every live-looking

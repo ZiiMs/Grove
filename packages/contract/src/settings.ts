@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { thinkingLevelSchema } from "./sessions";
 
 /**
  * Settings and secret status.
@@ -16,6 +17,8 @@ export const settingsSchema = z
     /** `owner/name` GitHub repositories, in display order. */
     catalogSources: z.array(z.string()),
     theme: themeSchema,
+    /** Default reasoning level for a new session. */
+    thinkingLevel: thinkingLevelSchema.optional(),
   })
   .catchall(z.unknown());
 export type Settings = z.infer<typeof settingsSchema>;
@@ -28,6 +31,7 @@ export const settingsPatchSchema = z
   .object({
     catalogSources: z.array(z.string()).optional(),
     theme: themeSchema.optional(),
+    thinkingLevel: thinkingLevelSchema.optional(),
   })
   .catchall(z.unknown());
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>;

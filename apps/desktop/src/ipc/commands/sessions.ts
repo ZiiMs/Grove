@@ -6,6 +6,7 @@ import type {
   Session,
   SessionDetail,
   SessionSummary,
+  ThinkingLevel,
 } from "@grove/contract";
 
 /**
@@ -35,6 +36,8 @@ export interface SessionsCommands {
     args: { id: string; requestId: string; answers: QuestionAnswer[] };
     result: null;
   };
+  /** Change the reasoning level for the next turn; returns the refreshed session detail. */
+  session_set_thinking: { args: { id: string; level: ThinkingLevel }; result: SessionDetail };
   session_close: { args: { id: string }; result: null };
   session_resume: { args: { id: string }; result: Session };
 }

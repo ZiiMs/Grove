@@ -18,13 +18,15 @@ pub async fn list_models(
         // A gateway can list every model on one path even when inference is split by wire format.
         Some(url) => url.to_string(),
         None => match spec.wire {
+            // Ask each vendor for its largest page: the picker needs the whole catalogue, not the
+            // default first page.
             Wire::Anthropic => format!(
-                "{}/v1/models?limit=100",
+                "{}/v1/models?limit=1000",
                 spec.base_url.trim_end_matches('/')
             ),
             Wire::OpenAi => format!("{}/models", spec.base_url.trim_end_matches('/')),
             Wire::Google => format!(
-                "{}/v1beta/models?pageSize=200",
+                "{}/v1beta/models?pageSize=1000",
                 spec.base_url.trim_end_matches('/')
             ),
         },

@@ -4,6 +4,7 @@ import type {
   ProviderSpec,
   ProviderStatus,
   QuestionAnswer,
+  ThinkingLevel,
   SessionContext,
   SessionDetail,
   SessionSummary,
@@ -62,6 +63,8 @@ interface SessionStoreData {
 export interface SessionStore extends SessionStoreData {
   /** Provider catalogue and the session list. */
   load: (bridge: GroveBridge) => Promise<void>;
+  /** Fetch the models each configured provider actually exposes and update the pickers. */
+  refreshModels: (bridge: GroveBridge) => Promise<void>;
   create: (bridge: GroveBridge, input: CreateSessionInput) => Promise<boolean>;
   /** Open (or focus) a session as a tab. */
   select: (bridge: GroveBridge, id: string) => Promise<void>;
@@ -82,6 +85,7 @@ export interface SessionStore extends SessionStoreData {
    */
   respondPermission: (bridge: GroveBridge, requestId: string, decision: Decision) => Promise<void>;
   respondQuestion: (bridge: GroveBridge, requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
+  setThinking: (bridge: GroveBridge, level: ThinkingLevel) => Promise<boolean>;
   resume: (bridge: GroveBridge) => Promise<void>;
   close: (bridge: GroveBridge) => Promise<void>;
   /** Adopt a snapshot another panel produced (the Specs panel pins and unpins). */
@@ -114,7 +118,7 @@ const initial: SessionStoreData = {
 
 
 function summaryOf(detail: SessionDetail): SessionSummary {
-  const { events, ...session } = detail;
+  const { events, thinkingLevel: _thinkingLevel, ...session } = detail;
   return { ...session, eventCount: events.length };
 }
 
@@ -159,9 +163,49 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         bridge.invoke("session_list"),
       ]);
       set({ providers, providerStatuses, sessions, loading: false });
+      void get().refreshModels(bridge);
     } catch (error) {
       set({ loading: false, error: errorText(error) });
     }
+  },
+
+  refreshModels: async (bridge) => {
+    const { providerStatuses } = get();
+    const configured = providerStatuses.filter((status) => status.configured).map((status) => status.id);
+    if (configured.length === 0) return;
+    const results = await Promise.allSettled(
+      configured.map(async (provider) => {
+        const models = await bridge.invoke("provider_models", { provider });
+        return [provider, models] as const;
+      }),
+    );
+    const discovered = new Map<string, string[]>();
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value[1].length > 0) {
+        discovered.set(result.value[0], result.value[1]);
+      }
+    }
+    if (discovered.size === 0) return;
+    set((state) => ({
+      providers: state.providers.map((provider) => {
+        const models = discovered.get(provider.id);
+        if (!models) return provider;
+        return {
+          ...provider,
+          models,
+          defaultModel: models.includes(provider.defaultModel) ? provider.defaultModel : models[0],
+        };
+      }),
+      providerStatuses: state.providerStatuses.map((status) => {
+        const models = discovered.get(status.id);
+        if (!models) return status;
+        return {
+          ...status,
+          models,
+          defaultModel: models.includes(status.defaultModel) ? status.defaultModel : models[0],
+        };
+      }),
+    }));
   },
 
   create: async (bridge, input) => {
@@ -323,6 +367,20 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ error: null });
     try {
       await bridge.invoke("session_respond_question", { id, requestId, answers });
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
+  setThinking: async (bridge, level) => {
+    const id = get().activeId;
+    if (!id) return false;
+    set({ error: null });
+    try {
+      const detail = await bridge.invoke("session_set_thinking", { id, level });
+      set({ detail, events: detail.events });
       return true;
     } catch (error) {
       set({ error: errorText(error) });

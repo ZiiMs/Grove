@@ -1,3 +1,4 @@
+use crate::providers::ThinkingLevel;
 use crate::sessions::event::{SessionEvent, SessionState};
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +76,8 @@ pub struct SessionSummary {
 pub struct SessionDetail {
     #[serde(flatten)]
     pub session: Session,
+    /// The reasoning level the runtime will use on the next turn.
+    pub thinking_level: ThinkingLevel,
     pub events: Vec<SessionEvent>,
 }
 

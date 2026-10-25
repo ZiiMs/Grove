@@ -117,7 +117,11 @@ export function NewSessionDialog() {
       Boolean(id) &&
       (available === undefined || available.includes(id as string)) &&
       prefs.enabledProviders[id as string] !== false;
-    setModel(usable(preferredProvider) ? preferred : defaultModelFor(fallbackProvider));
+    setModel(
+      usable(preferredProvider)
+        ? preferred
+        : defaultModelFor(fallbackProvider, modelsByProvider[fallbackProvider]),
+    );
     useSessionStore.setState({ error: null });
     setError(null);
     setWorking(false);
@@ -215,6 +219,7 @@ export function NewSessionDialog() {
         title: title.trim(),
         projectId: project?.id ?? null,
         worktreePath,
+        config: { thinkingLevel: prefs.thinkingLevel },
       });
       if (!created) {
         setError(useSessionStore.getState().error ?? "The session could not be created.");

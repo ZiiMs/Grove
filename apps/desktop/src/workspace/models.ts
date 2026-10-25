@@ -158,8 +158,12 @@ export function firstAvailableProvider(
   return ids.find(usable) ?? ids[0] ?? "anthropic";
 }
 
-export function defaultModelFor(providerId: string): string {
-  return providerMeta(providerId).models[0] ?? `${providerId}-default`;
+export function defaultModelFor(providerId: string, models?: readonly string[]): string {
+  return (
+    models?.find((model) => model.trim().length > 0) ??
+    providerMeta(providerId).models[0] ??
+    `${providerId}-default`
+  );
 }
 
 /** What the tree dot and header say. `awaiting` is the agent asking a question, not a status. */

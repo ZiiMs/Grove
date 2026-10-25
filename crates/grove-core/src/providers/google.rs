@@ -8,7 +8,7 @@
 
 use super::tools::ToolSpec;
 use super::wire::{Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent};
-use super::{ProviderError, ProviderSpec};
+use super::{ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
 
 /// One turn's output ceiling.
@@ -25,7 +25,21 @@ pub fn endpoint(spec: &ProviderSpec, model: &str) -> String {
     )
 }
 
-pub fn body(system: &str, messages: &[Message], tools: &[ToolSpec]) -> serde_json::Value {
+pub fn body(
+    system: &str,
+    messages: &[Message],
+    tools: &[ToolSpec],
+    thinking: ThinkingLevel,
+) -> serde_json::Value {
+    let mut generation = json!({ "maxOutputTokens": MAX_OUTPUT_TOKENS });
+    if let Some(budget) = match thinking {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Low => Some(1_024),
+        ThinkingLevel::Medium => Some(2_048),
+        ThinkingLevel::High => Some(4_096),
+    } {
+        generation["thinkingConfig"] = json!({ "thinkingBudget": budget });
+    }
     json!({
         "systemInstruction": { "parts": [{ "text": system }] },
         "contents": encode_contents(messages),
@@ -39,7 +53,7 @@ pub fn body(system: &str, messages: &[Message], tools: &[ToolSpec]) -> serde_jso
                 }))
                 .collect::<Vec<_>>(),
         }],
-        "generationConfig": { "maxOutputTokens": MAX_OUTPUT_TOKENS },
+        "generationConfig": generation,
     })
 }
 
@@ -312,5 +326,16 @@ mod tests {
             endpoint(&spec, "gemini-2.5-pro"),
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
         );
+    }
+
+    #[test]
+    fn thinking_budget_is_only_sent_when_requested() {
+        let high = body("system", &[], &[], ThinkingLevel::High);
+        assert_eq!(
+            high["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            4_096
+        );
+        let off = body("system", &[], &[], ThinkingLevel::Off);
+        assert!(off["generationConfig"].get("thinkingConfig").is_none());
     }
 }

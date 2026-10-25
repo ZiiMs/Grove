@@ -26,6 +26,14 @@ provider owns its HTTP wire format and nothing else; the three wire clients live
 reuses the client its API speaks. The catalog that names the five lives in `providers/catalog.rs`.
 There is no agent CLI to install and no harness to detect - only a credential to configure.
 
+## Model list
+
+The model ids a configured credential can actually reach, fetched by `provider_models`
+(`providers/probe.rs`). The webview refreshes every configured provider after boot and after a key
+change, replacing the catalog's fallback `models` and moving `defaultModel` when its preset is absent.
+A failed probe keeps the catalog list, so an offline start still offers the known models. The live
+list is the vendor's, not a list baked into this build.
+
 ## Credential
 
 An API key for one provider, stored in the OS keychain through `SecretStore` under
@@ -38,6 +46,14 @@ never written to `settings`, the database or the logs, and there is no command t
 The loop that runs a turn: ask the provider, stream the text out, run whatever tools the model asked
 for, and repeat until it stops (`providers/agent.rs`). It owns the conversation in memory, emits the
 normalized events the transcript records, and asks the user before a tool changes the machine.
+
+## Thinking level
+
+A session preference (`off`, `low`, `medium`, `high`) stored as `thinkingLevel` in the session's
+`adapter_config` and surfaced as `SessionDetail.thinkingLevel`. `session_set_thinking` updates a live
+agent's next turn and persists the config for a stopped session. Each wire client maps it to the
+vendor's native control: Anthropic thinking budget, OpenAI-compatible `reasoning_effort`, or Google
+thinking budget; `off` omits it.
 
 ## Tool
 

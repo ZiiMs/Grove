@@ -22,8 +22,8 @@ use super::wire::{
 };
 use super::{
     anthropic, catalog, google, openai, tools, AgentProvider, AgentSession, Capabilities,
-    ContextDoc, Detection, ProviderDeps, ProviderError, ProviderSpec, StartContext, UserInput,
-    Wire,
+    ContextDoc, Detection, ProviderDeps, ProviderError, ProviderSpec, StartContext, ThinkingLevel,
+    UserInput, Wire,
 };
 use crate::sessions::event::{
     Block, Decision, EventKind, Question, QuestionAnswer, Role, SessionEvent, SessionState,
@@ -98,6 +98,12 @@ impl AgentProvider for WireProvider {
             .and_then(Value::as_u64)
             .map(|steps| steps.clamp(1, u64::from(MAX_STEPS)) as u32)
             .unwrap_or(MAX_STEPS);
+        let thinking = ctx
+            .config
+            .get("thinkingLevel")
+            .and_then(Value::as_str)
+            .map(ThinkingLevel::parse)
+            .unwrap_or_default();
         let system = system_prompt(&ctx);
         let mut history: Vec<Message> = Vec::new();
         if let Some(prompt) = ctx
@@ -121,6 +127,7 @@ impl AgentProvider for WireProvider {
             max_steps,
             ctx.session_id,
         );
+        *session.thinking.lock().await = thinking;
         Ok(Box::new(session))
     }
 }
@@ -167,6 +174,8 @@ pub struct AgentSessionImpl {
     permits: Arc<Mutex<HashMap<String, oneshot::Sender<Decision>>>>,
     /// Structured questions waiting for an answer, keyed by request id.
     questions: Arc<Mutex<HashMap<String, oneshot::Sender<Vec<QuestionAnswer>>>>>,
+    /// Reasoning level applied to the next provider request.
+    thinking: Arc<Mutex<ThinkingLevel>>,
     /// Serializes turns. `send` returns as soon as the turn is queued.
     gate: Arc<Mutex<()>>,
     turn: Option<JoinHandle<()>>,
@@ -200,6 +209,7 @@ impl AgentSessionImpl {
             tx,
             permits: Arc::new(Mutex::new(HashMap::new())),
             questions: Arc::new(Mutex::new(HashMap::new())),
+            thinking: Arc::new(Mutex::new(ThinkingLevel::Off)),
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps,
@@ -214,6 +224,7 @@ impl AgentSessionImpl {
     /// Ask the provider for one turn and stream it into the transcript.
     async fn request_turn(&self) -> Result<TurnOutput, ProviderError> {
         let history = self.history.lock().await.clone();
+        let thinking = *self.thinking.lock().await;
         let specs = tools::specs();
         let request =
             with_session_header(
@@ -221,18 +232,19 @@ impl AgentSessionImpl {
                     Wire::Anthropic => {
                         let url = anthropic::endpoint(&self.spec);
                         authorize(self.http.post(url), self.spec.wire, &self.key).json(
-                            &anthropic::body(&self.model, &self.system, &history, &specs),
+                            &anthropic::body(&self.model, &self.system, &history, &specs, thinking),
                         )
                     }
                     Wire::OpenAi => {
                         let url = openai::endpoint(&self.spec);
-                        authorize(self.http.post(url), self.spec.wire, &self.key)
-                            .json(&openai::body(&self.model, &self.system, &history, &specs))
+                        authorize(self.http.post(url), self.spec.wire, &self.key).json(
+                            &openai::body(&self.model, &self.system, &history, &specs, thinking),
+                        )
                     }
                     Wire::Google => {
                         let url = google::endpoint(&self.spec, &self.model);
                         authorize(self.http.post(url), self.spec.wire, &self.key)
-                            .json(&google::body(&self.system, &history, &specs))
+                            .json(&google::body(&self.system, &history, &specs, thinking))
                     }
                 },
                 catalog::transport(&self.spec.id).session_header,
@@ -511,6 +523,7 @@ impl AgentSession for AgentSessionImpl {
         let tx = self.tx.clone();
         let permits = Arc::clone(&self.permits);
         let questions = Arc::clone(&self.questions);
+        let thinking = Arc::clone(&self.thinking);
         let gate = Arc::clone(&self.gate);
         let max_steps = self.max_steps;
         let turn = tokio::spawn(async move {
@@ -527,6 +540,7 @@ impl AgentSession for AgentSessionImpl {
                 tx,
                 permits,
                 questions,
+                thinking,
                 gate,
                 turn: None,
                 max_steps,
@@ -571,6 +585,11 @@ impl AgentSession for AgentSessionImpl {
                 "no question is waiting under {request_id}"
             ))),
         }
+    }
+
+    async fn set_thinking(&mut self, level: ThinkingLevel) -> Result<(), ProviderError> {
+        *self.thinking.lock().await = level;
+        Ok(())
     }
 
     async fn cancel(&mut self) -> Result<(), ProviderError> {
@@ -930,6 +949,45 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("session-42")
         );
+    }
+
+    #[tokio::test]
+    async fn changing_thinking_level_reaches_the_next_request() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "gpt-5".into(),
+            "system".into(),
+            vec![Message::user("hi")],
+            MAX_STEPS,
+            "session-42".into(),
+        );
+        session.set_thinking(ThinkingLevel::High).await.unwrap();
+        session.request_turn().await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(body["reasoning_effort"], "high");
     }
 
     #[tokio::test]

@@ -218,6 +218,13 @@ impl AgentSession for OfflineSession {
         Ok(())
     }
 
+    async fn set_thinking(
+        &mut self,
+        _level: crate::providers::ThinkingLevel,
+    ) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
     async fn cancel(&mut self) -> Result<(), ProviderError> {
         if let Some(turn) = self.turn.lock().await.take() {
             turn.abort();

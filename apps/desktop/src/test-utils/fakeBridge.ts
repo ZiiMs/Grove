@@ -445,6 +445,13 @@ export function createFakeBridge(
         bridge.emitSessionEvent({ sessionId: id, payload: event });
         return null as CommandMap[K]["result"];
       }
+      if (command === "session_set_thinking") {
+        const { id, level } = args as { id: string; level: SessionDetail["thinkingLevel"] };
+        const detail = details[id];
+        if (!detail) throw new Error(`FakeBridge has no session: ${id}`);
+        detail.thinkingLevel = level;
+        return detail as CommandMap[K]["result"];
+      }
       if (command === "session_close") {
         setStatus((args as { id: string }).id, "exited");
         return null as CommandMap[K]["result"];

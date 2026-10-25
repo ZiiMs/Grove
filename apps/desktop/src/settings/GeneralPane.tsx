@@ -4,6 +4,7 @@ import { useSessionStore } from "../state/sessionStore";
 import { errorText } from "../ipc/errors";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore, type PermissionMode } from "../state/workspaceStore";
+import type { ThinkingLevel } from "@grove/contract";
 import {
   availableProviderIds,
   firstAvailableProvider,
@@ -18,6 +19,13 @@ const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
   { value: "bypass", label: "Bypass approvals" },
 ];
 
+const THINKING_OPTIONS: { value: ThinkingLevel; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+];
+
 export function GeneralPane({ onSaved }: { onSaved: () => void }) {
   const bridge = useBridge();
   const prefs = useWorkspaceStore((state) => state.prefs);
@@ -27,6 +35,7 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
   const notify = useUiStore((state) => state.notify);
 
   const [model, setModel] = useState(prefs.defaultModel);
+  const [thinking, setThinking] = useState<ThinkingLevel>(prefs.thinkingLevel);
   const [permission, setPermission] = useState<PermissionMode>(prefs.permissionMode);
   const [root, setRoot] = useState(prefs.worktreeRoot);
   const [restore, setRestore] = useState(prefs.restoreSessions);
@@ -35,6 +44,7 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
 
   useEffect(() => {
     setModel(prefs.defaultModel);
+    setThinking(prefs.thinkingLevel);
     setPermission(prefs.permissionMode);
     setRoot(prefs.worktreeRoot);
     setRestore(prefs.restoreSessions);
@@ -62,6 +72,7 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
     try {
       await saveSettings(bridge, {
         defaultModel: model,
+        thinkingLevel: thinking,
         permissionMode: permission,
         worktreeRoot: trimmed,
         restoreSessions: restore,
@@ -102,6 +113,23 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
             </select>
             <p className="field-hint">
               Runs on {providerMeta(providerForModel(model, groups) ?? fallbackProvider).name}.
+            </p>
+          </div>
+          <div className="field">
+            <label htmlFor="set-thinking">Thinking level</label>
+            <select
+              id="set-thinking"
+              value={thinking}
+              onChange={(event) => setThinking(event.target.value as ThinkingLevel)}
+            >
+              {THINKING_OPTIONS.map((option) => (
+                <option value={option.value} key={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">
+              How much hidden reasoning to ask for on models that support it.
             </p>
           </div>
           <div className="field">

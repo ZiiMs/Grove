@@ -100,7 +100,7 @@ pub struct ProviderSpec {                 // what the picker and settings pane r
 pub struct StartContext {
     pub cwd: PathBuf, pub model: Option<String>, pub session_id: String,
     pub prompt: Option<String>, pub resume_token: Option<String>,
-    pub config: serde_json::Value, // `maxSteps`
+    pub config: serde_json::Value, // `maxSteps`, `thinkingLevel`
     pub context_files: Vec<ContextDoc>, // pinned specs + plan, as markdown
 }
 
@@ -123,6 +123,7 @@ pub trait AgentSession: Send {
     async fn send(&mut self, input: UserInput) -> Result<(), ProviderError>;
     async fn respond_permission(&mut self, request_id: &str, decision: Decision)
         -> Result<(), ProviderError>;
+    async fn set_thinking(&mut self, level: ThinkingLevel) -> Result<(), ProviderError>;
     async fn cancel(&mut self) -> Result<(), ProviderError>;
     async fn shutdown(&mut self) -> Result<(), ProviderError>;
     fn resume_token(&self) -> Option<String>;
@@ -140,6 +141,18 @@ Provider rules that keep them isolated:
 - **Gateway extras live with the catalog.** A provider that needs a non-default model-list URL or a
   conversation header declares it in `catalog::transport(id)`; the runtime applies it generically, so
   `ProviderSpec` keeps the shape the picker reads and no contract field is added for one vendor.
+- **Model lists are live, the catalog is the floor.** `provider_models` asks the vendor which models
+  the configured key can reach. After boot loads provider statuses, the webview refreshes each
+  configured provider and replaces that provider's `models` (and moves `defaultModel` if its preset is
+  gone); a failed probe leaves the catalog list in place. The whole currency is the API's own list, so
+  a newly released model appears without a Grove release and an unavailable preset does not trap a new
+  session. The request is only made after boot or a key change, never on a session turn.
+- **Thinking is a session preference, not a prompt trick.** `ThinkingLevel` (`off`, `low`, `medium`,
+  `high`) lives in `sessions.adapter_config` as `thinkingLevel` and is surfaced as
+  `SessionDetail.thinkingLevel`. `session_set_thinking` updates the live agent's next turn and persists
+  the config for a stopped session. Each wire module maps it to the vendor's native knob: Anthropic
+  `thinking.budget_tokens`, OpenAI/OpenRouter/OpenCode Go `reasoning_effort`, and Google
+  `generationConfig.thinkingConfig.thinkingBudget`; `off` omits the field.
 - **Forward compatible by default.** Unknown stream frames are dropped, not fatal: a vendor adding an
   event must degrade to a missing detail, never a dead session.
 - **No panics on the wire.** Every parse error becomes `ProviderError`, which the runtime turns into a
@@ -247,6 +260,10 @@ Two runtime operations move it, and both are visible in the transcript as a `Con
   provider with the same context documents plus a transcript summary (`render_tail`) as its prompt,
   keeping the transcript and dropping the old resume token and model.
 
+`session_set_thinking(id, level)` is not a context operation: it persists `thinkingLevel` in the
+session config and updates a live agent in place; a stopped session picks it up on resume. It does not
+relaunch or touch the transcript.
+
 The manager talks to knowledge through the `ContextSource` port, so it never imports the spec graph or
 the plan service; `GroveCore::assemble` wires the real `SessionContextService` onto `GroveCore::context`.
 Pins live in the `pins` table, are toggled from the Specs panel for the session the Sessions panel has
@@ -324,7 +341,9 @@ Two channels, both typed in `packages/contract`:
 
 **Provider commands.** `provider_list` (catalogue), `provider_statuses` (credential readiness),
 `provider_key_set` / `provider_key_delete` (keychain writes; neither returns a value) and
-`provider_models` (asks the vendor which models the key can reach — the settings pane's "test" button).
+`provider_models` (asks the vendor which models the key can reach). `provider_models` powers both the
+settings pane's "test" button and the picker refresh that runs after boot; `provider_list` remains the
+offline fallback. `session_set_thinking` changes the persisted reasoning level for one session.
 
 **Drift control without codegen.** `contract/fixtures/<domain>.<case>.json` holds canonical payloads.
 A Rust test serialises a representative sample per DTO and asserts equality with the file; a TS test in
@@ -400,9 +419,10 @@ seven-panel shell and the spec/plan editors were retired.
 ## Extension seams (single-line conflicts, resolved at merge)
 
 Adding a feature touches one shared list each. Keep edits to one line per file. A provider needs one
-more: `crates/grove-core/src/providers/catalog.rs` is authoritative for models, auth and default model,
-while `apps/desktop/src/workspace/models.ts` holds only a presentation fallback (mark, tint, known
-models) so a row renders before the catalogue has loaded; an unknown id degrades to its initials.
+more: `crates/grove-core/src/providers/catalog.rs` is authoritative for the fallback models, auth and
+default model, while `apps/desktop/src/workspace/models.ts` holds only a presentation fallback (mark,
+tint, known models) so a row renders before the catalogue has loaded; an unknown id degrades to its
+initials. The live list from `provider_models` overrides the fallback once a probe succeeds.
 
 | Seam | File |
 |---|---|

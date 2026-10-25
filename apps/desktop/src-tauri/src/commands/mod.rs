@@ -43,6 +43,7 @@ pub fn handlers<R: tauri::Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync
         sessions::session_cancel,
         sessions::session_respond_permission,
         sessions::session_respond_question,
+        sessions::session_set_thinking,
         sessions::session_close,
         sessions::session_resume,
         sessions::session_context_get,

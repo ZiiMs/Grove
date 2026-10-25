@@ -67,6 +67,39 @@ impl AuthMethod {
     }
 }
 
+/// How much hidden reasoning to ask a model for. `off` omits the vendor field entirely; the other
+/// levels map to the closest native knob (Anthropic thinking budget, OpenAI reasoning effort, or
+/// Google thinking budget).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingLevel {
+    #[default]
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl ThinkingLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThinkingLevel::Off => "off",
+            ThinkingLevel::Low => "low",
+            ThinkingLevel::Medium => "medium",
+            ThinkingLevel::High => "high",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "low" => ThinkingLevel::Low,
+            "medium" => ThinkingLevel::Medium,
+            "high" => ThinkingLevel::High,
+            _ => ThinkingLevel::Off,
+        }
+    }
+}
+
 /// What a provider's models can actually do. Capability honesty: a flag is `true` only when the
 /// agent runtime really emits that event kind for this provider, and the UI degrades from here
 /// rather than from a model name.
@@ -295,6 +328,11 @@ pub trait AgentSession: Send {
         &mut self,
         request_id: &str,
         answers: Vec<crate::sessions::event::QuestionAnswer>,
+    ) -> Result<(), ProviderError>;
+    /// Change the reasoning level used by the next turn.
+    async fn set_thinking(
+        &mut self,
+        level: crate::providers::ThinkingLevel,
     ) -> Result<(), ProviderError>;
     /// Stop the current turn. The conversation survives and stays resumable.
     async fn cancel(&mut self) -> Result<(), ProviderError>;

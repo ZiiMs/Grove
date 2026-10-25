@@ -6,7 +6,7 @@
 
 use super::tools::ToolSpec;
 use super::wire::{Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent};
-use super::{ProviderError, ProviderSpec};
+use super::{ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
 
 /// `POST {base}/chat/completions`. The catalog's base already carries `/v1` where the vendor wants it.
@@ -19,8 +19,9 @@ pub fn body(
     system: &str,
     messages: &[Message],
     tools: &[ToolSpec],
+    thinking: ThinkingLevel,
 ) -> serde_json::Value {
-    json!({
+    let mut body = json!({
         "model": model,
         "messages": encode_messages(system, messages),
         "tools": tools
@@ -37,7 +38,11 @@ pub fn body(
         "stream": true,
         // Without this the final chunk carries no usage and a session's token count is always zero.
         "stream_options": { "include_usage": true },
-    })
+    });
+    if thinking != ThinkingLevel::Off {
+        body["reasoning_effort"] = json!(thinking.as_str());
+    }
+    body
 }
 
 fn encode_messages(system: &str, messages: &[Message]) -> Vec<serde_json::Value> {
@@ -352,5 +357,13 @@ mod tests {
             endpoint(&openrouter),
             "https://openrouter.ai/api/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn reasoning_effort_is_sent_only_for_a_thinking_level() {
+        let medium = body("gpt-5", "system", &[], &[], ThinkingLevel::Medium);
+        assert_eq!(medium["reasoning_effort"], "medium");
+        let off = body("gpt-5", "system", &[], &[], ThinkingLevel::Off);
+        assert!(off.get("reasoning_effort").is_none());
     }
 }

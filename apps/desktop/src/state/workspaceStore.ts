@@ -5,6 +5,7 @@ import type {
   GitWorktree,
   Project,
   SettingsPatch,
+  ThinkingLevel,
 } from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
@@ -17,6 +18,8 @@ export interface Preferences {
   /** Which provider a new session starts on. */
   defaultProvider: string;
   defaultModel: string;
+  /** Default reasoning level for a new session. */
+  thinkingLevel: ThinkingLevel;
   permissionMode: PermissionMode;
   /** Absolute folder new worktrees are created under; empty means "next to the project". */
   worktreeRoot: string;
@@ -48,6 +51,7 @@ interface WorkspaceState {
 const DEFAULT_PREFS: Preferences = {
   defaultProvider: "anthropic",
   defaultModel: "claude-sonnet-4-5",
+  thinkingLevel: "off",
   permissionMode: "ask",
   worktreeRoot: "~/code",
   restoreSessions: true,
@@ -62,11 +66,18 @@ function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function thinkingLevelValue(value: unknown, fallback: ThinkingLevel): ThinkingLevel {
+  return value === "off" || value === "low" || value === "medium" || value === "high"
+    ? value
+    : fallback;
+}
+
 function prefsFromSettings(settings: Record<string, unknown>): Preferences {
   const mode = settings.permissionMode;
   return {
     defaultProvider: stringValue(settings.defaultProvider, DEFAULT_PREFS.defaultProvider),
     defaultModel: stringValue(settings.defaultModel, DEFAULT_PREFS.defaultModel),
+    thinkingLevel: thinkingLevelValue(settings.thinkingLevel, DEFAULT_PREFS.thinkingLevel),
     permissionMode:
       mode === "accept-edits" || mode === "bypass" || mode === "ask"
         ? mode

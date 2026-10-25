@@ -6,7 +6,7 @@
 
 use super::tools::ToolSpec;
 use super::wire::{Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent};
-use super::{ProviderError, ProviderSpec};
+use super::{ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
 
 pub const API_VERSION: &str = "2023-06-01";
@@ -24,8 +24,9 @@ pub fn body(
     system: &str,
     messages: &[Message],
     tools: &[ToolSpec],
+    thinking: ThinkingLevel,
 ) -> serde_json::Value {
-    json!({
+    let mut body = json!({
         "model": model,
         "max_tokens": MAX_TOKENS,
         "system": system,
@@ -39,7 +40,16 @@ pub fn body(
             }))
             .collect::<Vec<_>>(),
         "stream": true,
-    })
+    });
+    if let Some(budget) = match thinking {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Low => Some(1_024),
+        ThinkingLevel::Medium => Some(2_048),
+        ThinkingLevel::High => Some(4_096),
+    } {
+        body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+    }
+    body
 }
 
 /// Anthropic wants alternating roles, and every `tool_result` inside a `user` turn. Consecutive
@@ -371,5 +381,13 @@ mod tests {
     fn the_endpoint_joins_the_base_url_without_a_double_slash() {
         let spec = crate::providers::catalog::find("anthropic").unwrap();
         assert_eq!(endpoint(&spec), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn thinking_budget_is_only_sent_when_requested() {
+        let high = body("claude", "system", &[], &[], ThinkingLevel::High);
+        assert_eq!(high["thinking"]["budget_tokens"], 4_096);
+        let off = body("claude", "system", &[], &[], ThinkingLevel::Off);
+        assert!(off.get("thinking").is_none());
     }
 }

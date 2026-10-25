@@ -16,7 +16,7 @@ use crate::providers::agent::registry as provider_registry;
 use crate::providers::credentials::Credentials;
 use crate::providers::{
     AgentProvider, AgentSession, Detection, ProviderDeps, ProviderError, ProviderSpec,
-    StartContext, UserInput,
+    StartContext, ThinkingLevel, UserInput,
 };
 use crate::secrets::MemorySecretStore;
 use crate::sessions::context::{render_documents, ContextAssembly, ContextSource};
@@ -414,6 +414,30 @@ impl SessionManager {
         let mut handle = live.commands.lock().await;
         handle.respond_question(request_id, answers).await?;
         Ok(())
+    }
+
+    /// Change the reasoning level for the next turn. The setting is persisted in the session config,
+    /// so a stopped session picks it up when it is resumed; a live session gets it immediately.
+    pub async fn set_thinking(
+        &self,
+        id: &str,
+        level: ThinkingLevel,
+    ) -> Result<SessionDetail, SessionError> {
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        let mut config = self.store.adapter_config(id)?;
+        if !config.is_object() {
+            config = serde_json::json!({});
+        }
+        config["thinkingLevel"] = serde_json::json!(level.as_str());
+        self.store.set_adapter_config(id, &config)?;
+
+        if let Ok(live) = self.live_session(id).await {
+            let mut handle = live.commands.lock().await;
+            handle.set_thinking(level).await?;
+        }
+        self.get(id)
     }
 
     /// Stop the process but keep the row and the transcript. The session can be resumed later.
@@ -908,6 +932,13 @@ mod tests {
             Ok(())
         }
 
+        async fn set_thinking(
+            &mut self,
+            _level: crate::providers::ThinkingLevel,
+        ) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
         async fn cancel(&mut self) -> Result<(), ProviderError> {
             Ok(())
         }
@@ -1046,6 +1077,29 @@ mod tests {
             manager.get(&session).unwrap().session.status,
             SessionState::Ready,
             "a resumed session accepts its next message"
+        );
+    }
+
+    #[tokio::test]
+    async fn thinking_level_persists_and_updates_a_stopped_session() {
+        let manager = manager();
+        let session = create(&manager).await;
+
+        let live = manager
+            .set_thinking(&session, ThinkingLevel::High)
+            .await
+            .unwrap();
+        assert_eq!(live.thinking_level, ThinkingLevel::High);
+
+        manager.close(&session).await.unwrap();
+        let stopped = manager
+            .set_thinking(&session, ThinkingLevel::Low)
+            .await
+            .unwrap();
+        assert_eq!(stopped.thinking_level, ThinkingLevel::Low);
+        assert_eq!(
+            manager.get(&session).unwrap().thinking_level,
+            ThinkingLevel::Low
         );
     }
 

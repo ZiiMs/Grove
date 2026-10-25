@@ -6,7 +6,7 @@ use grove_core::ipc::{
     Project, ProjectDetection, Session, SessionDetail, SessionSummary,
 };
 use grove_core::plan::{Plan, PlanUpdate};
-use grove_core::providers::{Capabilities, Detection};
+use grove_core::providers::{Capabilities, Detection, ThinkingLevel};
 use grove_core::sessions::context::{ContextLimits, ContextPin, SessionContext};
 use grove_core::sessions::event::{
     Block, ContextDocument, ContextReason, Decision, EventKind, Question, QuestionAnswer,
@@ -541,6 +541,7 @@ fn session_detail_matches_fixture() {
     let events = sample_events();
     let sample = SessionDetail {
         session: sample_session(),
+        thinking_level: ThinkingLevel::High,
         events: vec![events[0].clone(), events[3].clone()],
     };
     assert_eq!(

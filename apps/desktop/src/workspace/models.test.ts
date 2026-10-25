@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fakeProviderStatus } from "../test-utils/fakeBridge";
 import {
   availableProviderIds,
+  defaultModelFor,
   isRunning,
   modelGroupsFor,
   providerForModel,
@@ -40,6 +41,11 @@ describe("model to provider", () => {
     expect(meta.name).toBe("OpenCode Go");
     expect(meta.models[0]).toBe("kimi-k3");
     expect(meta.models).toContain("glm-5.3");
+  });
+
+  it("starts a new session on a model the vendor actually listed", () => {
+    expect(defaultModelFor("mock", ["vendor-model"])).toBe("vendor-model");
+    expect(defaultModelFor("mock")).toBe("mock-1");
   });
 
   it("groups the OpenCode Go models the core registers", () => {

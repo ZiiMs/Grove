@@ -194,6 +194,14 @@ describe("redesigned shell", () => {
     expect(document.querySelector(".turn-user .bubble")).not.toBeNull();
   });
 
+  it("changes the thinking level for the active session", async () => {
+    const bridge = await ready();
+    const select = screen.getByLabelText("Thinking level for this session");
+    await userEvent.selectOptions(select, "high");
+    await waitFor(() => expect(bridge.invocations).toContain("session_set_thinking"));
+    await waitFor(() => expect(select).toHaveValue("high"));
+  });
+
   it("opens settings on the requested tab and applies a theme", async () => {
     await ready();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -211,6 +219,9 @@ describe("redesigned shell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Start session" }));
     await screen.findByRole("heading", { name: "Add the session tabs" });
     expect(bridge.invocations).toContain("session_create");
+    expect(bridge.calls.find((call) => call.command === "session_create")?.args).toMatchObject({
+      req: { config: { thinkingLevel: "off" } },
+    });
   });
 
   it("lets you draft while a stopped session waits for resume", async () => {

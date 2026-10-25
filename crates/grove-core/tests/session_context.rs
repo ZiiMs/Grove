@@ -136,6 +136,13 @@ impl AgentSession for RecordingSession {
         Ok(())
     }
 
+    async fn set_thinking(
+        &mut self,
+        _level: grove_core::providers::ThinkingLevel,
+    ) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
     async fn cancel(&mut self) -> Result<(), ProviderError> {
         Ok(())
     }

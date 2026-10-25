@@ -36,6 +36,10 @@ export type ToolStatus = z.infer<typeof toolStatusSchema>;
 export const decisionSchema = z.enum(["approve", "deny"]);
 export type Decision = z.infer<typeof decisionSchema>;
 
+/** How much hidden reasoning to ask a provider for. `off` omits the vendor field. */
+export const thinkingLevelSchema = z.enum(["off", "low", "medium", "high"]);
+export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
+
 /** One option in a structured question. */
 export const questionOptionSchema = z.object({
   label: z.string(),
@@ -209,6 +213,8 @@ export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 
 /** A session and its full transcript, in sequence order. */
 export const sessionDetailSchema = sessionSchema.extend({
+  /** Reasoning level the runtime will use on the next turn; absent means `off`. */
+  thinkingLevel: thinkingLevelSchema.optional(),
   events: z.array(sessionEventSchema),
 });
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;

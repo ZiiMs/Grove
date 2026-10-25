@@ -4,10 +4,18 @@ import type {
   QuestionAnswer,
   QuestionChoice,
   SessionSummary,
+  ThinkingLevel,
 } from "@grove/contract";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 const EMPTY_QUEUE: string[] = [];
+
+const THINKING_LEVELS: { value: ThinkingLevel; label: string }[] = [
+  { value: "off", label: "Think off" },
+  { value: "low", label: "Think low" },
+  { value: "medium", label: "Think medium" },
+  { value: "high", label: "Think high" },
+];
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBridge } from "../ipc/context";
 import { errorText } from "../ipc/errors";
@@ -856,6 +864,7 @@ function Composer({
   const cancel = useSessionStore((state) => state.cancel);
   const switchProvider = useSessionStore((state) => state.switchProvider);
   const resume = useSessionStore((state) => state.resume);
+  const setThinking = useSessionStore((state) => state.setThinking);
   const busy = useSessionStore((state) => state.busy);
   const prefs = useWorkspaceStore((state) => state.prefs);
   const registered = useSessionStore((state) => state.providers);
@@ -873,7 +882,9 @@ function Composer({
   );
   const modelGroups = modelGroupsFor(prefs.enabledProviders, available, modelsByProvider);
   const fallbackProvider = firstAvailableProvider(prefs.enabledProviders, available, prefs.defaultProvider);
-  const currentModel = model ?? defaultModelFor(detail?.provider ?? fallbackProvider);
+  const currentProvider = detail?.provider ?? fallbackProvider;
+  const currentModel = model ?? defaultModelFor(currentProvider, modelsByProvider[currentProvider]);
+  const currentThinking = detail?.thinkingLevel ?? "off";
   const known = modelGroups.some((group) => group.models.includes(currentModel));
 
   useEffect(() => {
@@ -991,6 +1002,23 @@ function Composer({
                     </option>
                   ))}
                 </optgroup>
+              ))}
+            </select>
+            <label className="sr-only" htmlFor="thinking-select">
+              Thinking level for this session
+            </label>
+            <select
+              className="model-select"
+              id="thinking-select"
+              value={currentThinking}
+              disabled={busy}
+              title="Thinking level for the next turn"
+              onChange={(event) => void setThinking(bridge, event.target.value as typeof currentThinking)}
+            >
+              {THINKING_LEVELS.map((level) => (
+                <option value={level.value} key={level.value}>
+                  {level.label}
+                </option>
               ))}
             </select>
             <div className="foot-actions">
