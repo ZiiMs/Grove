@@ -530,12 +530,12 @@ describe("visual snapshots", () => {
     writeSnapshot("visual-skills");
   });
 
-  it("settings harnesses", async () => {
+  it("settings providers", async () => {
     await renderReady();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    await userEvent.click(screen.getByRole("tab", { name: /Harnesses/ }));
+    await userEvent.click(screen.getByRole("tab", { name: /Providers/ }));
     await act(async () => {});
-    writeSnapshot("visual-harnesses");
+    writeSnapshot("visual-providers");
   });
 
   it("settings mcp", async () => {
