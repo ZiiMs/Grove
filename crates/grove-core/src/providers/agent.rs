@@ -37,6 +37,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -193,6 +194,9 @@ pub struct AgentSessionImpl {
     gate: Arc<Mutex<()>>,
     turn: Option<JoinHandle<()>>,
     max_steps: u32,
+    /// Session-unique suffix for provider tool-call ids. Google numbers calls per response, so the
+    /// same `call_0` returns every turn; the transcript and a worker key need one namespace.
+    tool_seq: Arc<AtomicU64>,
     /// The tools this conversation offers. The top-level agent gets everything; a worker gets the
     /// same list minus `subagent`, so delegation cannot recurse.
     tools: Vec<tools::ToolSpec>,
@@ -229,6 +233,7 @@ impl AgentSessionImpl {
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps,
+            tool_seq: Arc::new(AtomicU64::new(0)),
             tools: tools::specs(),
         }
     }
@@ -307,7 +312,16 @@ impl AgentSessionImpl {
                             self.emit(EventKind::Delta { text: delta });
                         }
                         StreamEvent::ToolUse { id, name, input } => {
-                            uses.push(MsgBlock::ToolUse { id, name, input });
+                            // Google's decoder numbers calls per response (`call_0`, `call_1`), and a
+                            // session spans many responses. Qualify every id before it reaches the
+                            // history, the event log, or a worker's forwarding prefix so a repeated
+                            // response-local id cannot collide across turns.
+                            let seq = self.tool_seq.fetch_add(1, Ordering::Relaxed) + 1;
+                            uses.push(MsgBlock::ToolUse {
+                                id: format!("{id}-{seq}"),
+                                name,
+                                input,
+                            });
                         }
                         StreamEvent::Usage {
                             input_tokens,
@@ -595,6 +609,7 @@ impl AgentSessionImpl {
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps: self.max_steps,
+            tool_seq: Arc::new(AtomicU64::new(0)),
             tools: tools::worker_specs(),
         };
         (session, rx)
@@ -838,6 +853,7 @@ impl AgentSession for AgentSessionImpl {
         let thinking = Arc::clone(&self.thinking);
         let gate = Arc::clone(&self.gate);
         let max_steps = self.max_steps;
+        let tool_seq = Arc::clone(&self.tool_seq);
         let tools = self.tools.clone();
         let turn = tokio::spawn(async move {
             let session = AgentSessionImpl {
@@ -857,6 +873,7 @@ impl AgentSession for AgentSessionImpl {
                 gate,
                 turn: None,
                 max_steps,
+                tool_seq,
                 tools,
             };
             session.run_turn().await;
@@ -1347,6 +1364,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_repeated_provider_call_id_gets_a_session_suffix() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn streamed_call(id: &str, target: &str) -> ResponseTemplate {
+            let body = serde_json::json!({
+                "choices": [{
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": id,
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": serde_json::json!({ "path": target }).to_string(),
+                            },
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+            });
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!("data: {body}\n\ndata: [DONE]\n\n"))
+        }
+
+        let server = MockServer::start().await;
+        // Google numbers tool calls per response, so both turns arrive as `call_0`.
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(streamed_call("call_0", "a"))
+            .mount(&server)
+            .await;
+
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+        let session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "gpt-5".into(),
+            "system".into(),
+            vec![Message::user("hi")],
+            MAX_STEPS,
+            "session-ids".into(),
+        );
+        session.request_turn().await.unwrap();
+        session.request_turn().await.unwrap();
+
+        let history = session.history.lock().await;
+        let ids: Vec<String> = history
+            .iter()
+            .flat_map(|message| message.blocks.iter())
+            .filter_map(|block| match block {
+                MsgBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["call_0-1", "call_0-2"]);
+    }
+
+    #[tokio::test]
     async fn a_provider_without_a_session_header_sends_none() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1467,9 +1548,13 @@ data: [DONE]
 
         let mut approvals = 0;
         let mut worker_row = false;
+        let mut worker_id = None;
         loop {
             let event = events.recv().await.expect("an event");
             match event.kind {
+                EventKind::ToolCall { call_id, name, .. } if name == "subagent" => {
+                    worker_id = Some(call_id);
+                }
                 EventKind::ToolCall { title, .. } if title.starts_with("subagent · write_file") => {
                     worker_row = true;
                 }
@@ -1492,6 +1577,12 @@ data: [DONE]
         }
         assert_eq!(approvals, 1, "the worker's write asked exactly once");
         assert!(worker_row, "the worker's tool call is forwarded");
+        let worker_id = worker_id.expect("a subagent tool call");
+        assert_ne!(
+            worker_id, "call-sub",
+            "the provider's response-local id is not the worker key"
+        );
+        assert!(worker_id.starts_with("call-sub-"), "{worker_id}");
         assert_eq!(
             std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
             "hi"
