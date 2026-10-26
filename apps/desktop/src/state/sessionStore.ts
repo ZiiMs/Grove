@@ -8,6 +8,7 @@ import type {
   SessionContext,
   SessionDetail,
   SessionSummary,
+  SubagentSummary,
 } from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
@@ -124,7 +125,62 @@ const initial: SessionStoreData = {
 
 function summaryOf(detail: SessionDetail): SessionSummary {
   const { events, thinkingLevel: _thinkingLevel, ...session } = detail;
-  return { ...session, eventCount: events.length };
+  return { ...session, eventCount: events.length, subagents: [] };
+}
+
+/**
+ * Fold a subagent tool call/result into the tree rows. A worker's forwarded rows use a prefixed
+ * call id, so only the parent's own `subagent` call opens a row and only its result closes one.
+ */
+function subagentsAfter(
+  subagents: SubagentSummary[],
+  event: SessionEvent,
+): SubagentSummary[] | null {
+  if (event.kind === "tool_call" && event.name === "subagent") {
+    if (subagents.some((row) => row.callId === event.call_id)) return null;
+    return [
+      ...subagents,
+      {
+        callId: event.call_id,
+        description: event.title.replace(/^subagent · /, ""),
+        status: "running",
+        summary: null,
+        startedAt: event.at,
+        finishedAt: null,
+      },
+    ];
+  }
+  if (event.kind === "tool_result") {
+    const index = subagents.findIndex((row) => row.callId === event.call_id);
+    if (index === -1) return null;
+    const next = subagents.slice();
+    next[index] = {
+      ...next[index],
+      status: event.status,
+      summary: event.summary,
+      finishedAt: event.at,
+    };
+    return next;
+  }
+  // A cancelled turn never produces the subagent's tool result; close the row when the parent stops.
+  if (
+    event.kind === "status" &&
+    (event.state === "idle" || event.state === "exited" || event.state === "error")
+  ) {
+    if (!subagents.some((row) => row.status === "running")) return null;
+    const status = event.state === "idle" ? "cancelled" : "error";
+    return subagents.map((row) =>
+      row.status === "running"
+        ? {
+            ...row,
+            status,
+            summary: row.summary ?? "the turn ended before this worker finished",
+            finishedAt: event.at,
+          }
+        : row,
+    );
+  }
+  return null;
 }
 
 /**
@@ -493,17 +549,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             ? false
             : null;
       return {
-        sessions: state.sessions.map((row) =>
-          row.id === sessionId
-            ? {
-                ...row,
-                status: status ?? row.status,
-                awaiting: awaiting ?? row.awaiting,
-                eventCount: row.eventCount + 1,
-                updatedAt: event.at,
-              }
-            : row,
-        ),
+        sessions: state.sessions.map((row) => {
+          if (row.id !== sessionId) return row;
+          const subagents = subagentsAfter(row.subagents ?? [], event);
+          return {
+            ...row,
+            status: status ?? row.status,
+            awaiting: awaiting ?? row.awaiting,
+            eventCount: row.eventCount + 1,
+            updatedAt: event.at,
+            ...(subagents ? { subagents } : {}),
+          };
+        }),
         detail:
           isActive && state.detail
             ? {

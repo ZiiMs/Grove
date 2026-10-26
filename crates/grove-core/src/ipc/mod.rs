@@ -8,5 +8,5 @@ pub use crate::providers::credentials::ProviderStatus;
 pub use error::{ErrorCode, IpcError, IpcResult};
 pub use types::{
     AppInfo, CreateSessionRequest, DirEntry, DirListing, EventEnvelope, Project, ProjectDetection,
-    Session, SessionDetail, SessionSummary,
+    Session, SessionDetail, SessionSummary, SubagentSummary,
 };

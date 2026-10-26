@@ -273,6 +273,38 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .session-row[data-state="waiting"]{color:var(--fg-2)}
 .session-row .s-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .session-row .mark{margin-left:auto;opacity:.9}
+.session-block{display:flex;flex-direction:column}
+.subagent-count{flex:none;font-family:var(--mono);font-size:10px;color:var(--fg-3);padding-left:1px}
+.subagent-list{margin:0 0 3px 20px;padding-left:7px;border-left:1px solid var(--line)}
+.subagent-row{
+  display:flex;align-items:center;gap:6px;width:100%;padding:3px 6px;border-radius:4px;
+  text-align:left;font-size:11.5px;color:var(--fg-3);
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
+}
+.subagent-row:hover{background:var(--elev);color:var(--fg-2)}
+.subagent-row[data-state="running"]{color:var(--fg-2)}
+.subagent-row .s-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.subagent-row .od-icon{flex:none;opacity:.8}
+.subagent-title{display:flex;flex-direction:column;min-width:0;flex:1}
+.subagent-title .sh-title{font-size:13.2px}
+.sh-sub{font-size:10.5px;color:var(--fg-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subagent-report{
+  border:1px solid var(--line);background:var(--elev);border-radius:var(--r);
+  padding:10px 12px;margin-bottom:14px;
+}
+.subagent-report-label{
+  display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--fg-3);margin-bottom:6px;
+}
+.subagent-report pre{
+  margin:0;white-space:pre-wrap;overflow-wrap:anywhere;
+  font-family:var(--mono);font-size:11.5px;color:var(--fg-2);
+}
+.subagent-rows{display:flex;flex-direction:column;gap:12px}
+.subagent-item{min-width:0}
+.subagent-foot{padding:10px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--fg-3)}
+.subagent-foot p{margin:0}
+.subagent-empty-note{margin:6px 0 12px;font-size:11.5px;color:var(--fg-3)}
 
 /* ---------- session header (compact) ---------- */
 .session-head{display:flex;align-items:center;gap:9px;height:44px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--bg);flex:none;min-width:0}

@@ -304,7 +304,7 @@ function AssistantFoot({
   );
 }
 
-function TranscriptRow({
+export function TranscriptRow({
   item,
   open,
   onToggle,

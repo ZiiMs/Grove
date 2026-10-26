@@ -91,6 +91,60 @@ CREATE INDEX sessions_by_project ON sessions(project_id);
     r#"
 ALTER TABLE sessions RENAME COLUMN harness TO provider;
 "#,
+    // 7 — the durable trace of a delegated worker. The worker's conversation is ephemeral; this row
+    // is what the session tree shows under the parent, so a restart keeps the list instead of
+    // rebuilding it from the transcript. `summary` is the tool-result summary (the full report only
+    // ever goes to the parent model), and `call_id` is the parent's tool call, which prefixes every
+    // forwarded worker row in the transcript.
+    r#"
+CREATE TABLE subagents (
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    call_id     TEXT NOT NULL,
+    description TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    summary     TEXT,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT,
+    PRIMARY KEY (session_id, call_id)
+);
+
+CREATE INDEX subagents_by_session ON subagents(session_id, started_at);
+
+-- Backfill workers from transcripts written before this table existed. The parent's tool call opens
+-- the row; its matching tool result closes it. A call with no result was interrupted by a restart,
+-- so it is closed as an error rather than left spinning.
+INSERT OR IGNORE INTO subagents
+    (session_id, call_id, description, status, summary, started_at, finished_at)
+SELECT
+    call.session_id,
+    json_extract(call.payload, '$.call_id'),
+    COALESCE(
+        NULLIF(REPLACE(json_extract(call.payload, '$.title'), 'subagent · ', ''), ''),
+        'subagent'
+    ),
+    CASE
+        WHEN result.seq IS NULL THEN 'error'
+        WHEN json_extract(result.payload, '$.status') IN ('ok', 'error', 'cancelled')
+            THEN json_extract(result.payload, '$.status')
+        ELSE 'error'
+    END,
+    COALESCE(
+        json_extract(result.payload, '$.summary'),
+        CASE WHEN result.seq IS NULL
+             THEN 'the app closed before this worker finished'
+             ELSE NULL END
+    ),
+    call.at,
+    result.at
+FROM events call
+LEFT JOIN events result
+    ON result.session_id = call.session_id
+   AND result.kind = 'tool_result'
+   AND json_extract(result.payload, '$.call_id') = json_extract(call.payload, '$.call_id')
+   AND result.seq > call.seq
+WHERE call.kind = 'tool_call'
+  AND json_extract(call.payload, '$.name') = 'subagent';
+"#,
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -211,14 +265,17 @@ mod tests {
 
         {
             let store = Store::open(&path).unwrap();
-            assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4, 5, 6]);
+            assert_eq!(
+                store.applied_migrations().unwrap(),
+                vec![1, 2, 3, 4, 5, 6, 7]
+            );
         }
         assert!(path.exists(), "the database file is created on open");
 
         let reopened = Store::open(&path).unwrap();
         assert_eq!(
             reopened.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6],
+            vec![1, 2, 3, 4, 5, 6, 7],
             "reopening does not replay migrations"
         );
     }
@@ -226,7 +283,10 @@ mod tests {
     #[test]
     fn in_memory_store_migrates_too() {
         let store = Store::open_in_memory().unwrap();
-        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            store.applied_migrations().unwrap(),
+            vec![1, 2, 3, 4, 5, 6, 7]
+        );
     }
 
     #[test]
@@ -276,7 +336,10 @@ mod tests {
         }
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            store.applied_migrations().unwrap(),
+            vec![1, 2, 3, 4, 5, 6, 7]
+        );
         let session = store.session("legacy").unwrap().expect("the row survives");
         assert_eq!(
             session.provider, "claude",
@@ -308,7 +371,71 @@ mod tests {
         }
 
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.applied_migrations().unwrap(), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(
+            store.applied_migrations().unwrap(),
+            vec![1, 2, 3, 4, 5, 6, 7]
+        );
         assert!(store.pins("session-1").unwrap().is_empty(), "pins exists");
+    }
+
+    #[test]
+    fn migration_seven_backfills_subagents_from_the_event_log() {
+        use crate::sessions::event::{EventKind, ToolStatus};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (index, sql) in MIGRATIONS[..6].iter().enumerate() {
+                conn.execute_batch(sql).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![index as i64 + 1, now()],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO sessions (id, provider, cwd, title, status, created_at, updated_at)
+                 VALUES ('s1', 'mock', 'C:/work', 'Audit', 'idle', ?1, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            let call = EventKind::ToolCall {
+                call_id: "call-1".into(),
+                name: "subagent".into(),
+                title: "subagent · read the store".into(),
+            };
+            let result = EventKind::ToolResult {
+                call_id: "call-1".into(),
+                status: ToolStatus::Ok,
+                summary: "the report".into(),
+            };
+            for (at, kind) in [
+                ("2026-10-26T00:00:00.000Z", call),
+                ("2026-10-26T00:00:05.000Z", result),
+            ] {
+                conn.execute(
+                    "INSERT INTO events (session_id, at, kind, payload) VALUES (?1, ?2, ?3, ?4)",
+                    params!["s1", at, kind.tag(), serde_json::to_string(&kind).unwrap()],
+                )
+                .unwrap();
+            }
+        }
+
+        let store = Store::open(&path).unwrap();
+        let rows = store.list_sessions().unwrap();
+        let subagent = &rows[0].subagents[0];
+        assert_eq!(subagent.call_id, "call-1");
+        assert_eq!(subagent.description, "read the store");
+        assert_eq!(subagent.status, "ok");
+        assert_eq!(subagent.summary.as_deref(), Some("the report"));
+        assert_eq!(
+            subagent.finished_at.as_deref(),
+            Some("2026-10-26T00:00:05.000Z")
+        );
     }
 }

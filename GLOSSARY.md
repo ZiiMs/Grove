@@ -61,9 +61,18 @@ explicit `reasoning_effort: "none"` value some models require.
 ## Tool
 
 One capability the model may call: `read_file`, `list_dir`, `grep`, `write_file`, `edit_file`,
-`run_command` and `ask_user` (`providers/tools.rs`). Tools run locally in the session's working
-directory, resolve paths against it, and refuse anything that escapes it. The three mutating tools need
-approval; `ask_user` parks on the user's answer instead.
+`run_command`, `ask_user` and `subagent` (`providers/tools.rs`). Tools run locally in the session's
+working directory, resolve paths against it, and refuse anything that escapes it. The three mutating
+tools need approval; `ask_user` parks on the user's answer instead.
+
+## Subagent
+
+A worker session started by the `subagent` tool (`providers/agent.rs`). It shares the provider, model,
+key, project directory and pinned context with the parent, but starts a fresh conversation and gets
+every tool except `subagent`, so delegation cannot recurse. Its mutating calls still surface as the
+parent session's permission cards, and its tool rows and diffs are forwarded; the parent model
+receives the worker's final report as the tool result. The pump keeps a `subagents` row (description,
+status, summary) so the session tree shows the worker under its parent without reading the transcript.
 
 ## Permission request
 

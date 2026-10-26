@@ -217,9 +217,25 @@ export const sessionSchema = z.object({
 });
 export type Session = z.infer<typeof sessionSchema>;
 
-/** A session list row: the session plus its transcript size. */
+/** How a delegated worker ended: `running` until the parent's tool result arrives. */
+export const subagentStatusSchema = z.enum(["running", "ok", "error", "cancelled"]);
+export const subagentSummarySchema = z.object({
+  /** The parent's tool-call id; also the prefix on the worker's forwarded transcript rows. */
+  callId: z.string(),
+  description: z.string(),
+  status: subagentStatusSchema,
+  /** The stored tool-result summary; the full report only goes to the parent model. */
+  summary: z.string().nullable().default(null),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable().default(null),
+});
+export type SubagentSummary = z.infer<typeof subagentSummarySchema>;
+
+/** A session list row: the session plus its transcript size and delegations. */
 export const sessionSummarySchema = sessionSchema.extend({
   eventCount: z.number().int().nonnegative(),
+  /** Workers this session delegated to, oldest first. */
+  subagents: z.array(subagentSummarySchema).default([]),
 });
 export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 

@@ -71,6 +71,27 @@ pub(crate) fn publish(store: &Store, bus: &SessionBus, session_id: &str, event: 
                 );
             }
         }
+        // A turn that ends while a worker is still running was cancelled or failed; the parent can
+        // never finish normally without collecting the worker's result first.
+        if matches!(
+            state,
+            SessionState::Idle | SessionState::Exited | SessionState::Error
+        ) {
+            let (status, summary) = if *state == SessionState::Idle {
+                ("cancelled", "the turn ended before this worker finished")
+            } else {
+                ("error", "the session ended before this worker finished")
+            };
+            if let Err(error) =
+                store.finish_running_subagents(session_id, status, summary, &event.at)
+            {
+                tracing::warn!(
+                    target: "grove::sessions",
+                    session = session_id,
+                    "failed to close a running subagent: {error}"
+                );
+            }
+        }
     }
     match &event.kind {
         EventKind::PermissionRequest { .. } => {
@@ -106,6 +127,38 @@ pub(crate) fn publish(store: &Store, bus: &SessionBus, session_id: &str, event: 
                     target: "grove::sessions",
                     session = session_id,
                     "failed to clear awaiting: {error}"
+                );
+            }
+        }
+        _ => {}
+    }
+    match &event.kind {
+        EventKind::ToolCall {
+            call_id,
+            name,
+            title,
+        } if name == "subagent" => {
+            let description = title.strip_prefix("subagent · ").unwrap_or(title);
+            if let Err(error) = store.start_subagent(session_id, call_id, description, &event.at) {
+                tracing::warn!(
+                    target: "grove::sessions",
+                    session = session_id,
+                    "failed to record a subagent start: {error}"
+                );
+            }
+        }
+        EventKind::ToolResult {
+            call_id,
+            status,
+            summary,
+        } => {
+            if let Err(error) =
+                store.finish_subagent(session_id, call_id, status.as_str(), summary, &event.at)
+            {
+                tracing::warn!(
+                    target: "grove::sessions",
+                    session = session_id,
+                    "failed to record a subagent finish: {error}"
                 );
             }
         }
@@ -312,5 +365,100 @@ mod tests {
             !awaiting(&store),
             "a stopped session cannot still be waiting"
         );
+    }
+
+    #[test]
+    fn a_subagent_call_is_recorded_until_its_result_arrives() {
+        use crate::sessions::event::ToolStatus;
+
+        let store = store_with_session();
+        let (bus, _) = broadcast::channel(8);
+        publish_kind(
+            &store,
+            &bus,
+            EventKind::ToolCall {
+                call_id: "call-1".into(),
+                name: "subagent".into(),
+                title: "subagent · read the store".into(),
+            },
+        );
+
+        let rows = store.list_sessions().unwrap();
+        let subagent = &rows[0].subagents[0];
+        assert_eq!(subagent.call_id, "call-1");
+        assert_eq!(subagent.description, "read the store");
+        assert_eq!(subagent.status, "running");
+        assert!(subagent.finished_at.is_none());
+
+        publish_kind(
+            &store,
+            &bus,
+            EventKind::ToolResult {
+                call_id: "call-1".into(),
+                status: ToolStatus::Ok,
+                summary: "the report".into(),
+            },
+        );
+        let rows = store.list_sessions().unwrap();
+        let subagent = &rows[0].subagents[0];
+        assert_eq!(subagent.status, "ok");
+        assert_eq!(subagent.summary.as_deref(), Some("the report"));
+        assert!(subagent.finished_at.is_some());
+    }
+
+    #[test]
+    fn an_orphaned_subagent_is_closed_as_an_error() {
+        let store = store_with_session();
+        let (bus, _) = broadcast::channel(8);
+        publish_kind(
+            &store,
+            &bus,
+            EventKind::ToolCall {
+                call_id: "call-1".into(),
+                name: "subagent".into(),
+                title: "subagent · read the store".into(),
+            },
+        );
+
+        store.mark_orphaned_sessions_exited().unwrap();
+        let rows = store.list_sessions().unwrap();
+        let subagent = &rows[0].subagents[0];
+        assert_eq!(subagent.status, "error");
+        assert_eq!(
+            subagent.summary.as_deref(),
+            Some("the app closed before this worker finished")
+        );
+        assert!(subagent.finished_at.is_some());
+    }
+
+    #[test]
+    fn an_idle_turn_closes_a_running_subagent() {
+        let store = store_with_session();
+        let (bus, _) = broadcast::channel(8);
+        publish_kind(
+            &store,
+            &bus,
+            EventKind::ToolCall {
+                call_id: "call-1".into(),
+                name: "subagent".into(),
+                title: "subagent · read the store".into(),
+            },
+        );
+
+        publish_kind(
+            &store,
+            &bus,
+            EventKind::Status {
+                state: SessionState::Idle,
+            },
+        );
+        let rows = store.list_sessions().unwrap();
+        let subagent = &rows[0].subagents[0];
+        assert_eq!(subagent.status, "cancelled");
+        assert_eq!(
+            subagent.summary.as_deref(),
+            Some("the turn ended before this worker finished")
+        );
+        assert!(subagent.finished_at.is_some());
     }
 }

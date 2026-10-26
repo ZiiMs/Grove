@@ -2,7 +2,7 @@
 //! store and the IPC contract can never drift apart silently.
 
 use super::{Store, StoreError};
-use crate::ipc::{Session, SessionDetail, SessionSummary};
+use crate::ipc::{Session, SessionDetail, SessionSummary, SubagentSummary};
 use crate::sessions::event::{now, EventKind, SessionEvent, SessionState};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::BTreeMap;
@@ -65,6 +65,32 @@ impl Store {
 
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, StoreError> {
         self.with_conn(|conn| {
+            // One query for every subagent, grouped in memory: the list is small, and this keeps the
+            // session query from growing a join for a field most rows leave empty.
+            let mut by_session: BTreeMap<String, Vec<SubagentSummary>> = BTreeMap::new();
+            {
+                let mut stmt = conn.prepare(
+                    "SELECT session_id, call_id, description, status, summary, started_at, finished_at
+                     FROM subagents ORDER BY started_at, rowid",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        SubagentSummary {
+                            call_id: row.get(1)?,
+                            description: row.get(2)?,
+                            status: row.get(3)?,
+                            summary: row.get(4)?,
+                            started_at: row.get(5)?,
+                            finished_at: row.get(6)?,
+                        },
+                    ))
+                })?;
+                for row in rows {
+                    let (session_id, subagent) = row?;
+                    by_session.entry(session_id).or_default().push(subagent);
+                }
+            }
             let sql = format!(
                 "SELECT {SESSION_COLUMNS},
                         (SELECT COUNT(*) FROM events e WHERE e.session_id = s.id) AS event_count
@@ -74,12 +100,61 @@ impl Store {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], |row| {
                 let event_count: i64 = row.get(10)?;
+                let session = row_to_session(row)?;
+                let subagents = by_session.remove(&session.id).unwrap_or_default();
                 Ok(SessionSummary {
-                    session: row_to_session(row)?,
+                    session,
                     event_count: event_count.max(0) as u64,
+                    subagents,
                 })
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    }
+
+    /// Record a delegated worker as it starts. A repeated call id (the same parent tool call replayed
+    /// after a resume) resets the row instead of duplicating it.
+    pub fn start_subagent(
+        &self,
+        session_id: &str,
+        call_id: &str,
+        description: &str,
+        started_at: &str,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO subagents
+                     (session_id, call_id, description, status, summary, started_at, finished_at)
+                 VALUES (?1, ?2, ?3, 'running', NULL, ?4, NULL)
+                 ON CONFLICT(session_id, call_id) DO UPDATE SET
+                     description = excluded.description,
+                     status = 'running',
+                     summary = NULL,
+                     started_at = excluded.started_at,
+                     finished_at = NULL",
+                params![session_id, call_id, description, started_at],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Close the subagent row when the parent's tool result arrives. The status is the tool result's
+    /// (`ok`, `error` or `cancelled`); a result for any other tool matches no row.
+    pub fn finish_subagent(
+        &self,
+        session_id: &str,
+        call_id: &str,
+        status: &str,
+        summary: &str,
+        finished_at: &str,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE subagents SET status = ?3, summary = ?4, finished_at = ?5
+                 WHERE session_id = ?1 AND call_id = ?2",
+                params![session_id, call_id, status, summary, finished_at],
+            )?;
+            Ok(())
         })
     }
 
@@ -235,10 +310,38 @@ impl Store {
         })
     }
 
+    /// Close any worker still marked running when its parent turn stops. A normal turn cannot leave
+    /// one running (the parent waits for the worker), so this is a cancel or a failed turn.
+    pub fn finish_running_subagents(
+        &self,
+        session_id: &str,
+        status: &str,
+        summary: &str,
+        finished_at: &str,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE subagents SET status = ?2, summary = COALESCE(summary, ?3), finished_at = ?4
+                 WHERE session_id = ?1 AND status = 'running'",
+                params![session_id, status, summary, finished_at],
+            )?;
+            Ok(())
+        })
+    }
+
     /// After a restart nothing is running: sessions are rows, not processes. Turn every live-looking
-    /// status into `exited` so the UI offers Resume instead of pretending a process exists.
+    /// status into `exited` so the UI offers Resume instead of pretending a process exists. A worker
+    /// that was mid-flight has no process either; close it as an error so the tree stops spinning.
     pub fn mark_orphaned_sessions_exited(&self) -> Result<usize, StoreError> {
         self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE subagents
+                 SET status = 'error',
+                     summary = COALESCE(summary, 'the app closed before this worker finished'),
+                     finished_at = ?1
+                 WHERE status = 'running'",
+                params![now()],
+            )?;
             Ok(conn.execute(
                 "UPDATE sessions SET status = 'exited', awaiting = 0
                  WHERE status IN ('starting', 'ready', 'busy', 'idle')",

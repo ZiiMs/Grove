@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEvent } from "@grove/contract";
 import {
   DEFAULT_PROVIDERS,
   createFakeBridge,
   fakeProviderStatus,
+  fakeSession,
+  fakeSummary,
 } from "../test-utils/fakeBridge";
 import { useSessionStore } from "./sessionStore";
 
@@ -65,5 +68,58 @@ describe("session store model refresh", () => {
       expect(useSessionStore.getState().providers[0].defaultModel).toBe("mock-2");
     });
     expect(useSessionStore.getState().providerStatuses[0].defaultModel).toBe("mock-2");
+  });
+});
+
+describe("session store subagents", () => {
+  const start: SessionEvent = {
+    at: "2025-01-01T00:00:00.000Z",
+    kind: "tool_call",
+    call_id: "call-1",
+    name: "subagent",
+    title: "subagent · read the store",
+  };
+
+  beforeEach(() => {
+    useSessionStore.getState().reset();
+    useSessionStore.setState({
+      sessions: [fakeSummary(fakeSession({ id: "s1", title: "Store audit" }))],
+      activeId: "s1",
+    });
+  });
+
+  it("tracks a worker from its tool call to its result", () => {
+    useSessionStore.getState().applyEvent("s1", start);
+    expect(useSessionStore.getState().sessions[0].subagents[0]).toMatchObject({
+      callId: "call-1",
+      description: "read the store",
+      status: "running",
+    });
+
+    useSessionStore.getState().applyEvent("s1", {
+      at: "2025-01-01T00:00:05.000Z",
+      kind: "tool_result",
+      call_id: "call-1",
+      status: "ok",
+      summary: "the report",
+    });
+    expect(useSessionStore.getState().sessions[0].subagents[0]).toMatchObject({
+      status: "ok",
+      summary: "the report",
+      finishedAt: "2025-01-01T00:00:05.000Z",
+    });
+  });
+
+  it("closes a running worker when the turn ends without a result", () => {
+    useSessionStore.getState().applyEvent("s1", start);
+    useSessionStore.getState().applyEvent("s1", {
+      at: "2025-01-01T00:00:05.000Z",
+      kind: "status",
+      state: "idle",
+    });
+    expect(useSessionStore.getState().sessions[0].subagents[0]).toMatchObject({
+      status: "cancelled",
+      summary: "the turn ended before this worker finished",
+    });
   });
 });

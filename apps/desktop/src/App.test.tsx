@@ -465,4 +465,66 @@ describe("redesigned shell", () => {
     );
     expect(await screen.findByText("demo")).toBeInTheDocument();
   });
+
+  it("opens a subagent's forwarded transcript from the tree", async () => {
+    const subagentEvents: SessionEvent[] = [
+      {
+        at: "2025-01-01T00:00:05.000Z",
+        kind: "tool_call",
+        call_id: "call-sub",
+        name: "subagent",
+        title: "subagent · audit the store",
+      },
+      {
+        at: "2025-01-01T00:00:06.000Z",
+        kind: "tool_call",
+        call_id: "sub-call-sub-read",
+        name: "read_file",
+        title: "subagent · read_file crates/store.rs",
+      },
+      {
+        at: "2025-01-01T00:00:06.500Z",
+        kind: "tool_result",
+        call_id: "sub-call-sub-read",
+        status: "ok",
+        summary: "the store",
+      },
+      {
+        at: "2025-01-01T00:00:07.000Z",
+        kind: "tool_result",
+        call_id: "call-sub",
+        status: "ok",
+        summary: "worker done",
+      },
+    ];
+    renderApp({
+      sessions: [
+        {
+          ...fakeSummary({ ...session, awaiting: true }, events.length + subagentEvents.length),
+          subagents: [
+            {
+              callId: "call-sub",
+              description: "audit the store",
+              status: "ok",
+              summary: "worker done",
+              startedAt: "2025-01-01T00:00:05.000Z",
+              finishedAt: "2025-01-01T00:00:07.000Z",
+            },
+          ],
+        },
+      ],
+      details: {
+        [session.id]: { ...detail, events: [...events, ...subagentEvents] },
+      },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+    await userEvent.click(within(nav).getByRole("button", { name: /audit the store/ }));
+    expect(await screen.findByRole("heading", { name: "audit the store" })).toBeInTheDocument();
+    expect(screen.getByText("read_file crates/store.rs")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Session" }));
+    expect(await screen.findByRole("heading", { name: "OAuth device flow" })).toBeInTheDocument();
+  });
 });
