@@ -1,9 +1,12 @@
-import type { CatalogEntry } from "@grove/contract";
+import type { CatalogEntry, SkillTarget } from "@grove/contract";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useBridge } from "../ipc/context";
 import { useSkillsStore } from "../state/skillsStore";
 import { useUiStore } from "../state/uiStore";
 import { Icon } from "../workspace/Icon";
+import { SkillInstallDialog } from "./SkillInstallDialog";
+import { SkillSourceDialog } from "./SkillSourceDialog";
+import { SkillUninstallDialog } from "./SkillUninstallDialog";
 
 function initials(source: string): string {
   const letters = source.replace(/[^a-z0-9]/gi, " ").trim().split(/\s+/);
@@ -31,10 +34,21 @@ function bodyBullets(body: string): string[] {
     .slice(0, 4);
 }
 
+function skillKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+const FALLBACK_TARGETS: SkillTarget[] = [
+  { id: "user", label: "User .agents/skills", path: "~/.agents/skills", exists: false },
+  { id: "agents", label: "Project .agents/skills", path: ".agents/skills", exists: false },
+];
+
 export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
   const bridge = useBridge();
   const catalog = useSkillsStore((state) => state.catalog);
   const installs = useSkillsStore((state) => state.installs);
+  const inventory = useSkillsStore((state) => state.inventory);
+  const catalogSources = useSkillsStore((state) => state.sources);
   const targets = useSkillsStore((state) => state.targets);
   const preview = useSkillsStore((state) => state.preview);
   const selectedId = useSkillsStore((state) => state.selectedId);
@@ -42,16 +56,27 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
   const loading = useSkillsStore((state) => state.loading);
   const previewLoading = useSkillsStore((state) => state.previewLoading);
   const installing = useSkillsStore((state) => state.installing);
+  const refreshing = useSkillsStore((state) => state.refreshing);
   const error = useSkillsStore((state) => state.error);
   const load = useSkillsStore((state) => state.load);
   const select = useSkillsStore((state) => state.select);
   const setQuery = useSkillsStore((state) => state.setQuery);
   const install = useSkillsStore((state) => state.install);
   const remove = useSkillsStore((state) => state.remove);
+  const addSource = useSkillsStore((state) => state.addSource);
+  const removeAll = useSkillsStore((state) => state.removeAll);
   const notify = useUiStore((state) => state.notify);
 
   const loadedRoot = useRef<string | undefined>(undefined);
+  const selectAllRef = useRef<HTMLInputElement>(null);
   const [catalogId, setCatalogId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [pendingInstall, setPendingInstall] = useState<CatalogEntry[] | null>(null);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const [uninstallOpen, setUninstallOpen] = useState(false);
+  const [removingAll, setRemovingAll] = useState(false);
 
   useEffect(() => {
     if (!catalog || loadedRoot.current !== projectRoot) {
@@ -68,13 +93,27 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
       list.push(entry);
       map.set(entry.source, list);
     }
-    return [...map.entries()].sort(([left], [right]) => left.localeCompare(right));
-  }, [allEntries]);
+    const names = [...catalogSources];
+    for (const source of map.keys()) {
+      if (!names.includes(source)) names.push(source);
+    }
+    return names.map((source) => [source, map.get(source) ?? []] as [string, CatalogEntry[]]);
+  }, [allEntries, catalogSources]);
 
   useEffect(() => {
     if (catalogId && sources.some(([source]) => source === catalogId)) return;
     setCatalogId(sources[0]?.[0] ?? null);
   }, [catalogId, sources]);
+
+  // Drop selected skills that left the catalog, without widening the selection when the cache
+  // reloads and `allEntries` is rebuilt.
+  useEffect(() => {
+    const known = new Set((catalog?.entries ?? []).map((entry) => entry.id));
+    setSelectedIds((previous) => {
+      const next = previous.filter((id) => known.has(id));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [catalog]);
 
   const searching = query.trim().length > 0;
   const visible = useMemo(() => {
@@ -94,18 +133,67 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
     }
   }, [bridge, loading, select, selectedId, visible]);
 
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedEntries = useMemo(
+    () => allEntries.filter((entry) => selectedSet.has(entry.id)),
+    [allEntries, selectedSet],
+  );
+  const selectedVisible = visible.filter((entry) => selectedSet.has(entry.id)).length;
+  const allVisibleSelected = visible.length > 0 && selectedVisible === visible.length;
+
+  useEffect(() => {
+    const node = selectAllRef.current;
+    if (node) node.indeterminate = selectedVisible > 0 && !allVisibleSelected;
+  }, [allVisibleSelected, selectedVisible]);
+
   const selected =
     visible.find((entry) => entry.id === selectedId) ??
     allEntries.find((entry) => entry.id === selectedId) ??
     null;
   const frontmatter = preview?.frontmatter ?? {};
-  const installed = selected
-    ? (installs.find(
-        (record) => record.skill === selected.name && record.source === selected.source,
-      ) ?? installs.find((record) => record.skill === selected.name))
-    : undefined;
-  const installedCount = new Set(installs.map((record) => `${record.source}::${record.skill}`)).size;
+  // Names that are present in either target, whether Grove installed them or not.
+  const installedNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const record of installs) names.add(skillKey(record.skill));
+    for (const item of inventory) {
+      if (!projectRoot && item.target === "agents") continue;
+      names.add(skillKey(item.name));
+    }
+    return names;
+  }, [installs, inventory, projectRoot]);
+  const allPaths = useMemo(() => {
+    const paths = new Set<string>();
+    for (const item of inventory) {
+      if (!projectRoot && item.target === "agents") continue;
+      paths.add(item.path);
+    }
+    for (const record of installs) {
+      if (!projectRoot && record.target === "agents") continue;
+      paths.add(record.path);
+    }
+    return [...paths];
+  }, [installs, inventory, projectRoot]);
+  const installedRecords = selected
+    ? installs.filter((record) => skillKey(record.skill) === skillKey(selected.name))
+    : [];
+  const detectedCopies = selected
+    ? inventory.filter(
+        (item) =>
+          skillKey(item.name) === skillKey(selected.name) &&
+          (projectRoot || item.target !== "agents"),
+      )
+    : [];
+  const installedRecord = installedRecords[0];
+  const detectedCopy = detectedCopies[0];
+  const removable = installedRecord ?? detectedCopy ?? null;
+  const isInstalled = Boolean(removable);
+  const installedCount = installedNames.size;
   const agentsTarget = targets.find((target) => target.id === "agents");
+  const installedTarget = installedRecord
+    ? targets.find((target) => target.id === installedRecord.target)
+    : detectedCopy
+      ? targets.find((target) => target.id === detectedCopy.target)
+      : undefined;
   const description =
     frontmatter.description ?? (preview ? firstParagraph(preview.body) : selected?.path ?? "");
   const adds = preview ? bodyBullets(preview.body) : [];
@@ -113,21 +201,116 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
-  const currentName = sources.find(([source]) => source === catalogId)?.[0] ?? "All skills";
 
-  const doInstall = async () => {
-    if (!selected) return;
-    const ok = await install(bridge, selected, projectRoot);
-    if (ok) notify(`${selected.name} installed`);
-    else notify(useSkillsStore.getState().error ?? "Install failed", "error");
+  // A chat has no project of its own, so only the user-wide location is offered there.
+  const installTargets = useMemo(() => {
+    const available = targets.filter((target) => projectRoot || target.id !== "agents");
+    if (available.length > 0) return available;
+    return FALLBACK_TARGETS.filter((target) => projectRoot || target.id !== "agents");
+  }, [projectRoot, targets]);
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds((previous) =>
+      previous.includes(id)
+        ? previous.filter((entry) => entry !== id)
+        : [...previous, id],
+    );
+  };
+
+  const toggleAllVisible = () => {
+    const visibleIds = new Set(visible.map((entry) => entry.id));
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (allVisibleSelected) {
+        for (const id of visibleIds) next.delete(id);
+      } else {
+        for (const id of visibleIds) next.add(id);
+      }
+      return [...next];
+    });
+  };
+
+  const openInstall = (entries: CatalogEntry[]) => {
+    if (entries.length === 0 || installing !== null) return;
+    setPendingInstall(entries);
+  };
+
+  const runInstall = async (targetId: string) => {
+    const entries = pendingInstall;
+    if (!entries || entries.length === 0) return;
+    const target = installTargets.find((option) => option.id === targetId);
+    if (!target) return;
+    const result = await install(bridge, entries, target.id, projectRoot);
+    setPendingInstall(null);
+    if (result.error && result.installed === 0) {
+      notify(result.error, "error");
+      return;
+    }
+    const done = new Set(entries.slice(0, result.installed).map((entry) => entry.id));
+    setSelectedIds((previous) => previous.filter((id) => !done.has(id)));
+    if (result.error) {
+      notify(`${result.installed} installed · ${result.error}`, "error");
+    } else {
+      notify(
+        `${result.installed} skill${result.installed === 1 ? "" : "s"} installed to ${target.label}`,
+      );
+    }
+  };
+
+  const doRefresh = async () => {
+    await load(bridge, projectRoot, true);
+    const message = useSkillsStore.getState().error;
+    if (message) notify(message, "error");
+    else notify("Catalog refreshed");
+  };
+
+  const doAddSource = async (input: string) => {
+    setSourceBusy(true);
+    setSourceError(null);
+    const result = await addSource(bridge, input);
+    setSourceBusy(false);
+    if (!result.ok) {
+      setSourceError(result.error ?? "Could not add that catalog.");
+      return;
+    }
+    setSourceOpen(false);
+    setSelectedIds([]);
+    setQuery("");
+    setCatalogId(result.source);
+    notify(`Catalog ${result.source} added`);
+    if (result.error) notify(result.error, "error");
+  };
+
+  const doRemoveAll = async () => {
+    setRemovingAll(true);
+    const result = await removeAll(bridge, allPaths, projectRoot);
+    setRemovingAll(false);
+    setUninstallOpen(false);
+    setSelectedIds([]);
+    if (result.error) {
+      notify(`${result.removed} removed · ${result.error}`, "error");
+    } else {
+      notify(
+        `${result.removed} skill cop${result.removed === 1 ? "y" : "ies"} removed`,
+      );
+    }
   };
 
   const doRemove = async () => {
-    if (!installed) return;
-    const ok = await remove(bridge, installed);
-    if (ok) notify(`${installed.skill} removed`);
+    if (!removable) return;
+    const ok = await remove(bridge, removable.path, projectRoot);
+    if (ok) notify(`${selected?.name ?? removable.path} removed`);
     else notify(useSkillsStore.getState().error ?? "Remove failed", "error");
   };
+
+  const fallbackPath =
+    (projectRoot ? agentsTarget : targets.find((target) => target.id === "user"))?.path ??
+    ".agents/skills";
+  const detailPath = installedRecord?.path
+    ? `${installedRecord.path}/SKILL.md`
+    : detectedCopy?.path
+      ? `${detectedCopy.path}/SKILL.md`
+      : `${fallbackPath}/${selected?.name ?? ""}/SKILL.md`;
 
   return (
     <>
@@ -135,28 +318,47 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
         <div className="sk-head-text">
           <h3>Skills</h3>
           <p>
-            Pick a catalog, read what a skill changes, then install it. Installed skills are available
-            to the agent through the project's <span className="mono">.agents/skills</span> folder.
+            Pick a skill, read what it changes, then install it to your user or this project.
           </p>
         </div>
         <div className="sk-head-tools">
-          <div className="search">
-            <span className="search-ico">
-              <Icon name="search" size="sm" />
-            </span>
-            <label className="sr-only" htmlFor="sm-skill-search">
-              Search all skills
-            </label>
-            <input
-              id="sm-skill-search"
-              type="search"
-              placeholder="Search all skills"
-              autoComplete="off"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
+          <button
+            className="icon-btn sm"
+            type="button"
+            aria-label="Refresh catalog"
+            title="Refresh catalog"
+            disabled={loading || refreshing}
+            onClick={() => void doRefresh()}
+          >
+            <Icon
+              name="refresh"
+              size="sm"
+              className={loading || refreshing ? "spin" : undefined}
             />
-          </div>
+          </button>
           <span className="count-pill">{installedCount} installed</span>
+          <button
+            className="btn-ghost sm danger"
+            type="button"
+            disabled={allPaths.length === 0 || removingAll || installing !== null}
+            title="Remove every installed skill"
+            onClick={() => setUninstallOpen(true)}
+          >
+            <Icon name="trash" size="sm" />
+            Uninstall all
+          </button>
+          <button
+            className="btn-primary sm"
+            type="button"
+            disabled={selectedEntries.length === 0 || installing !== null}
+            title="Install the selected skills"
+            onClick={() => openInstall(selectedEntries)}
+          >
+            <Icon name="download" size="sm" />
+            {installing !== null
+              ? "Installing…"
+              : `Install${selectedEntries.length > 0 ? ` ${selectedEntries.length}` : ""}`}
+          </button>
         </div>
       </div>
 
@@ -170,6 +372,7 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
               aria-current={!searching && source === catalogId}
               onClick={() => {
                 setQuery("");
+                setSelectedIds([]);
                 setCatalogId(source);
               }}
             >
@@ -183,11 +386,54 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
               <span className="sk-cat-count">{entries.length}</span>
             </button>
           ))}
+          <button
+            className="sk-cat sk-cat-add"
+            type="button"
+            onClick={() => {
+              setSourceError(null);
+              setSourceOpen(true);
+            }}
+          >
+            <span className="sk-cat-mark" aria-hidden="true">
+              <Icon name="plus" size="xs" />
+            </span>
+            <span className="sk-cat-body">
+              <span className="sk-cat-name">Add catalog</span>
+              <span className="sk-cat-blurb">From GitHub</span>
+            </span>
+          </button>
         </div>
 
         <div className="sk-list-col">
           <div className="sk-list-head">
-            <span className="sk-list-title">{searching ? "Search results" : currentName}</span>
+            <div className="search sk-list-search">
+              <span className="search-ico">
+                <Icon name="search" size="sm" />
+              </span>
+              <label className="sr-only" htmlFor="sm-skill-search">
+                Search all skills
+              </label>
+              <input
+                id="sm-skill-search"
+                type="search"
+                placeholder="Search all skills"
+                autoComplete="off"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+            <label className="sk-select-all">
+              <input
+                ref={selectAllRef}
+                className="sk-check"
+                type="checkbox"
+                checked={allVisibleSelected}
+                disabled={visible.length === 0}
+                onChange={toggleAllVisible}
+                aria-label="Select all visible skills"
+              />
+              <span>Select all</span>
+            </label>
             <span className="sk-list-count">
               {visible.length} skill{visible.length === 1 ? "" : "s"}
             </span>
@@ -203,34 +449,41 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
               </p>
             ) : (
               visible.map((entry) => {
-                const record =
-                  installs.find(
-                    (item) => item.skill === entry.name && item.source === entry.source,
-                  ) ?? installs.find((item) => item.skill === entry.name);
+                const present = installedNames.has(skillKey(entry.name));
                 return (
-                  <button
+                  <div
                     className="sk-row"
-                    type="button"
                     key={entry.id}
                     aria-current={entry.id === selectedId}
-                    onClick={() => select(bridge, entry)}
                   >
-                    <span className="sk-row-main">
+                    <input
+                      className="sk-check"
+                      type="checkbox"
+                      checked={selectedSet.has(entry.id)}
+                      onChange={() => toggleSelected(entry.id)}
+                      aria-label={`Select ${entry.name}`}
+                    />
+                    <button
+                      className="sk-row-main"
+                      type="button"
+                      aria-current={entry.id === selectedId}
+                      onClick={() => select(bridge, entry)}
+                    >
                       <span className="sk-row-name">
                         <span className="n">{entry.name}</span>
                         {searching ? <span className="v">· {entry.source}</span> : null}
                       </span>
                       <span className="sk-row-desc">{entry.source}</span>
-                    </span>
+                    </button>
                     {installing === entry.id ? (
                       <span className="sk-state wait">installing…</span>
-                    ) : record ? (
+                    ) : present ? (
                       <span className="sk-state ok">
                         <Icon name="checkCircle" size="xs" />
                         installed
                       </span>
                     ) : null}
-                  </button>
+                  </div>
                 );
               })
             )}
@@ -278,40 +531,45 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
                 <p className="sk-hint">{preview ? firstParagraph(preview.body) : "Open the preview to read the skill."}</p>
               )}
               <p className="sk-sub">Files</p>
-              <code className="sk-path">
-                {agentsTarget?.path ?? ".agents/skills"}/{selected.name}/SKILL.md
-              </code>
+              <code className="sk-path">{detailPath}</code>
               <div className="sk-actions">
-                {installed ? (
-                  <>
-                    <button
-                      className="act-btn danger"
-                      type="button"
-                      aria-label={`Remove ${selected.name}`}
-                      title="Remove skill"
-                      onClick={() => void doRemove()}
-                    >
-                      <Icon name="trash" size="sm" />
-                    </button>
-                    <span className="sk-hint">Installed in {installed.target}</span>
-                  </>
-                ) : (
+                <button
+                  className="act-btn primary"
+                  type="button"
+                  aria-label={`Install ${selected.name}`}
+                  title={isInstalled ? "Install to another location" : "Install skill"}
+                  disabled={installing !== null}
+                  onClick={() => openInstall([selected])}
+                >
+                  <Icon name="download" size="sm" />
+                </button>
+                {isInstalled ? (
                   <button
-                    className="act-btn primary"
+                    className="act-btn danger"
                     type="button"
-                    aria-label={`Install ${selected.name}`}
-                    title="Install skill"
-                    disabled={installing === selected.id}
-                    onClick={() => void doInstall()}
+                    aria-label={`Remove ${selected.name}`}
+                    title="Remove skill"
+                    onClick={() => void doRemove()}
                   >
-                    <Icon name="download" size="sm" />
+                    <Icon name="trash" size="sm" />
                   </button>
-                )}
+                ) : null}
+                {installedRecord ? (
+                  <span className="sk-hint">
+                    Installed in {installedTarget?.label ?? installedRecord.target}
+                  </span>
+                ) : detectedCopy ? (
+                  <span className="sk-hint">
+                    Found in {installedTarget?.label ?? detectedCopy.target}
+                  </span>
+                ) : null}
               </div>
               <p className="sk-hint">
-                {installed
-                  ? "Installed for this project. Remove deletes the copied folder."
-                  : "Installing copies the skill into .agents/skills and makes it available to the agent."}
+                {installedRecord
+                  ? "Installed. Remove deletes this copy."
+                  : detectedCopy
+                    ? "Found on disk. Remove deletes this folder."
+                    : "Choose user or project when you install."}
               </p>
             </>
           )}
@@ -321,6 +579,35 @@ export function SkillsPane({ projectRoot }: { projectRoot?: string }) {
           ) : null}
         </div>
       </div>
+
+      <SkillInstallDialog
+        entries={pendingInstall}
+        targets={installTargets}
+        preferredTarget={projectRoot ? "agents" : "user"}
+        busy={installing !== null}
+        onClose={() => setPendingInstall(null)}
+        onInstall={(targetId) => void runInstall(targetId)}
+      />
+
+      <SkillSourceDialog
+        open={sourceOpen}
+        busy={sourceBusy}
+        error={sourceError}
+        onClose={() => {
+          setSourceOpen(false);
+          setSourceError(null);
+        }}
+        onDirty={() => setSourceError(null)}
+        onAdd={(input) => void doAddSource(input)}
+      />
+
+      <SkillUninstallDialog
+        open={uninstallOpen}
+        count={allPaths.length}
+        busy={removingAll}
+        onClose={() => setUninstallOpen(false)}
+        onConfirm={() => void doRemoveAll()}
+      />
     </>
   );
 }

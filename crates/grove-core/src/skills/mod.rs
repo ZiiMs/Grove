@@ -17,7 +17,7 @@ pub use install::{
     InstallRecord, InstallRequest, InstallResult, InstallStore, JsonInstallStore,
     MemoryInstallStore,
 };
-pub use targets::SkillTarget;
+pub use targets::{DetectedSkill, SkillTarget};
 
 use crate::ipc::{ErrorCode, IpcError};
 use crate::paths::AppPaths;
@@ -113,10 +113,16 @@ impl SkillService {
         catalog::preview(self, source, path).await
     }
 
-    /// The install destinations: each provider's skills directory plus project-local `.agents/skills`.
+    /// The install destinations: the user's global and the project-local `.agents/skills`.
     pub fn targets(&self, project_root: Option<&Path>) -> Vec<SkillTarget> {
         let config = self.config_snapshot();
         targets::project_targets(&targets::home_dir(config.home.as_deref()), project_root)
+    }
+
+    /// Skill folders already present under either target, including ones Grove did not install.
+    pub fn detected(&self, project_root: Option<&Path>) -> Vec<DetectedSkill> {
+        let config = self.config_snapshot();
+        targets::detect_installed(&targets::home_dir(config.home.as_deref()), project_root)
     }
 
     /// Copy a skill folder into the chosen target, atomically. Reports new vs overwritten.
@@ -129,44 +135,87 @@ impl SkillService {
         self.installs.list()
     }
 
-    /// Delete one installed skill folder and forget its record.
+    /// Delete one skill folder, whether Grove installed it or it was already on disk.
     ///
-    /// The path comes from the install log, not from the caller's imagination, and must still look
-    /// like `<target>/skills/<name>`: a record that was edited by hand cannot turn this into an
+    /// The folder must be a direct child of a known `.agents/skills` target and must contain a
+    /// `SKILL.md`; symlinked folders are refused. A recorded path from an older target keeps the
+    /// narrower `<...>/skills/<name>` rule, so legacy installs remain removable without allowing an
     /// arbitrary recursive delete.
-    pub fn remove_install(&self, path: &str) -> Result<(), SkillError> {
-        let records = self.installs.list()?;
-        let record = records
-            .into_iter()
-            .find(|record| record.path == path)
-            .ok_or_else(|| SkillError::NotFound(format!("installed skill at {path}")))?;
-        let folder = PathBuf::from(&record.path);
-        let safe = folder
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "skills")
-            && folder.file_name().is_some();
-        if !safe {
+    pub fn remove_skill(&self, path: &str, project_root: Option<&Path>) -> Result<(), SkillError> {
+        let folder = PathBuf::from(path);
+        let parent = folder.parent().ok_or_else(|| {
+            SkillError::Invalid(format!("refusing to remove a non-skill path: {path}"))
+        })?;
+        if folder.file_name().is_none_or(|name| name.is_empty()) {
             return Err(SkillError::Invalid(format!(
                 "refusing to remove a non-skill path: {path}"
             )));
         }
-        if folder.exists() {
-            std::fs::remove_dir_all(&folder)?;
+
+        let metadata = std::fs::symlink_metadata(&folder)
+            .map_err(|_| SkillError::NotFound(format!("skill folder at {path}")))?;
+        if metadata.file_type().is_symlink() {
+            return Err(SkillError::Invalid(format!(
+                "refusing to remove a symlinked skill: {path}"
+            )));
         }
-        self.installs.remove(&record.path)
+        if !metadata.is_dir() || !folder.join("SKILL.md").is_file() {
+            return Err(SkillError::Invalid(format!(
+                "refusing to remove a folder that is not a skill: {path}"
+            )));
+        }
+
+        let config = self.config_snapshot();
+        let targets =
+            targets::target_dirs(&targets::home_dir(config.home.as_deref()), project_root);
+        let canonical_parent = std::fs::canonicalize(parent)
+            .map_err(|_| SkillError::NotFound(format!("skill folder at {path}")))?;
+        let in_target = targets.iter().any(|target| {
+            std::fs::canonicalize(&target.path)
+                .map(|root| root == canonical_parent)
+                .unwrap_or(false)
+        });
+
+        let records = self.installs.list()?;
+        let recorded = records.iter().any(|record| record.path == path);
+        if !in_target {
+            let legacy = recorded
+                && parent
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "skills");
+            if !legacy {
+                return Err(SkillError::Invalid(format!(
+                    "refusing to remove a skill outside a known target: {path}"
+                )));
+            }
+        }
+
+        remove_tree(&folder).map_err(|error| {
+            SkillError::Io(std::io::Error::new(
+                error.kind(),
+                format!("remove {}: {error}", folder.display()),
+            ))
+        })?;
+        if recorded {
+            self.installs.remove(path)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn github_token(&self) -> Option<String> {
         match self.secrets.get(GITHUB_TOKEN) {
-            Ok(token) => token.filter(|token| !token.is_empty()),
+            Ok(Some(token)) if !token.trim().is_empty() => return Some(token),
+            Ok(_) => {}
             Err(err) => {
                 // The error describes the store, never the value.
                 tracing::warn!(target: "grove::skills", "secret store unavailable: {err}");
-                None
             }
         }
+
+        // The user may already be signed in through the environment or the GitHub CLI. Both are
+        // read-only fallbacks; Grove never writes a discovered token back to disk.
+        env_github_token().or_else(gh_auth_token)
     }
 
     pub(crate) fn paths(&self) -> &AppPaths {
@@ -206,6 +255,84 @@ impl fmt::Debug for SkillService {
             .field("paths", &self.paths)
             .field("config", &self.config_snapshot())
             .finish_non_exhaustive()
+    }
+}
+
+/// Delete a directory tree, clearing Windows read-only attributes if the first attempt is denied.
+fn remove_tree(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                clear_readonly(path)?;
+                std::fs::remove_dir_all(path)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::remove_dir_all(path)
+    }
+}
+
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+fn clear_readonly(path: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            clear_readonly(&entry?.path())?;
+        }
+    }
+    let mut permissions = metadata.permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+/// A GitHub token already present in the environment, without writing it anywhere.
+fn env_github_token() -> Option<String> {
+    for key in ["GITHUB_TOKEN", "GH_TOKEN"] {
+        if let Ok(value) = std::env::var(key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Ask the GitHub CLI for the token it already holds. `gh` is an official client and its token is
+/// already scoped to whatever the user signed in for; a missing CLI is not an error.
+fn gh_auth_token() -> Option<String> {
+    let mut command = std::process::Command::new("gh");
+    command
+        .args(["auth", "token"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
     }
 }
 

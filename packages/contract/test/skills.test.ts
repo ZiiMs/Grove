@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  detectedSkillsSchema,
   installRecordSchema,
   installResultSchema,
   skillCatalogSchema,
@@ -39,13 +40,19 @@ describe("skill contract fixtures", () => {
   it("skill-install.json matches the zod schema", () => {
     const parsed = installResultSchema.parse(fixture("skill-install.json"));
     expect(parsed.overwritten).toBe(true);
-    expect(parsed.path).toBe("C:/Users/demo/.grove/skills/pdf");
+    expect(parsed.path).toBe("C:/Users/demo/.agents/skills/pdf");
   });
 
   it("skill-install-record.json matches the zod schema", () => {
     const parsed = installRecordSchema.parse(fixture("skill-install-record.json"));
     expect(parsed.skill).toBe("provider-adapter");
     expect(parsed.target).toBe("agents");
+  });
+
+  it("skill-inventory.json matches the detected skills schema", () => {
+    const parsed = detectedSkillsSchema.parse(fixture("skill-inventory.json"));
+    expect(parsed.map((skill) => skill.name)).toEqual(["pdf", "provider-adapter"]);
+    expect(parsed[0].target).toBe("user");
   });
 
   it("rejects a catalog entry without a manifest path", () => {

@@ -119,7 +119,7 @@ impl GroveCore {
         Ok(specgraph::SpecIndex::load(self.project_root())?.graph())
     }
 
-    /// The skill destinations: each provider's own directory plus the project-local `.agents/skills`.
+    /// The skill destinations: the user's global `.agents/skills` plus the project-local one.
     ///
     /// An explicit `project_root` wins (the UI may pass one); otherwise the local target follows the
     /// active session like every other project-scoped thing, instead of resolving against the
@@ -128,6 +128,15 @@ impl GroveCore {
         let explicit = project_root.map(Path::to_path_buf);
         let root = explicit.unwrap_or_else(|| self.project_root());
         self.skills.targets(Some(root.as_path()))
+    }
+
+    /// Skill folders already present under either target, including ones Grove did not install.
+    ///
+    /// The root follows the same rule as [`Self::skill_targets`].
+    pub fn skill_inventory(&self, project_root: Option<&Path>) -> Vec<skills::DetectedSkill> {
+        let explicit = project_root.map(Path::to_path_buf);
+        let root = explicit.unwrap_or_else(|| self.project_root());
+        self.skills.detected(Some(root.as_path()))
     }
 
     fn assemble(

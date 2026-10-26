@@ -1,8 +1,8 @@
 [
   {
     "id": "user",
-    "label": "Grove skills (this user)",
-    "path": "C:/Users/demo/.grove/skills",
+    "label": "User .agents/skills",
+    "path": "C:/Users/demo/.agents/skills",
     "exists": true
   },
   {

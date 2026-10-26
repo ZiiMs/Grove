@@ -26,13 +26,18 @@ export function SettingsModal() {
   const openSettings = useUiStore((state) => state.openSettings);
   const close = useUiStore((state) => state.closeSettings);
   const installs = useSkillsStore((state) => state.installs);
+  const inventory = useSkillsStore((state) => state.inventory);
   const loadInstalls = useSkillsStore((state) => state.loadInstalls);
   const session = useSessionStore((state) => state.detail);
   const projectRoot = session?.cwd;
+  const installedCount = new Set([
+    ...installs.map((record) => record.skill.trim().toLowerCase()),
+    ...inventory.map((item) => item.name.trim().toLowerCase()),
+  ]).size;
 
   useEffect(() => {
-    if (tab !== null) void loadInstalls(bridge);
-  }, [bridge, loadInstalls, tab]);
+    if (tab !== null) void loadInstalls(bridge, projectRoot);
+  }, [bridge, loadInstalls, projectRoot, tab]);
 
   return (
     <Dialog
@@ -60,8 +65,8 @@ export function SettingsModal() {
                 onClick={() => openSettings(entry.id)}
               >
                 {entry.label}
-                {entry.id === "skills" && installs.length > 0 ? (
-                  <span className="badge">{installs.length}</span>
+                {entry.id === "skills" && installedCount > 0 ? (
+                  <span className="badge">{installedCount}</span>
                 ) : null}
               </button>
             ))}

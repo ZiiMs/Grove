@@ -38,7 +38,7 @@ the vendor for a turn, streams the text, and executes tools locally.
 - **Persistence:** migration 6 renames `sessions.harness` to `sessions.provider`. A row naming a
   retired harness is simply a provider this build does not register, which the picker already handles.
 - **Skills:** with no per-vendor skill directories left, the two targets are the user's
-  `~/.grove/skills` and the project's `.agents/skills`.
+  `~/.agents/skills` and the project's `.agents/skills`.
 
 ## Why API keys and not "sign in with your account"
 

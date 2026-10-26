@@ -1,4 +1,5 @@
 import type {
+  DetectedSkill,
   InstallRecord,
   InstallResult,
   SkillCatalog,
@@ -11,12 +12,14 @@ export interface SkillCommands {
   skill_catalog: { args: { refresh?: boolean }; result: SkillCatalog };
   skill_preview: { args: { source: string; path: string }; result: SkillPreview };
   skill_targets: { args: { projectRoot?: string }; result: SkillTarget[] };
+  /** Skill folders already present on disk under either target. */
+  skill_inventory: { args: { projectRoot?: string }; result: DetectedSkill[] };
   skill_install: {
     args: { source: string; path: string; target: string; projectRoot?: string };
     result: InstallResult;
   };
   /** Every recorded installation, newest last. */
   skill_installs: { args: Record<string, never>; result: InstallRecord[] };
-  /** Delete one installed skill folder by the recorded path. */
-  skill_remove: { args: { path: string }; result: null };
+  /** Delete one skill folder by its recorded or detected path. */
+  skill_remove: { args: { path: string; projectRoot?: string }; result: null };
 }

@@ -1,5 +1,6 @@
 import type {
   Decision,
+  DetectedSkill,
   ProviderStatus,
   EventEnvelope,
   GitBranch,
@@ -57,6 +58,8 @@ export interface FakeBridgeSeed {
   specGraph?: SpecGraph;
   skillCatalog?: SkillCatalog;
   skillTargets?: SkillTarget[];
+  /** Skill folders already on disk, installed by Grove or not. */
+  skillInventory?: DetectedSkill[];
   /** Installed skill records the fake core remembers. */
   installs?: Array<{
     skill: string;
@@ -266,6 +269,7 @@ export function createFakeBridge(
   const worktrees = structuredClone(seed.worktrees ?? []);
   const branches = structuredClone(seed.branches ?? []);
   const installs = structuredClone(seed.installs ?? []);
+  const inventory = structuredClone(seed.skillInventory ?? []);
   const defaultGit = (): GitStatus => ({
     repoRoot: projectRoot,
     branch: "main",
@@ -708,6 +712,9 @@ export function createFakeBridge(
       if (command === "skill_targets") {
         return structuredClone(seed.skillTargets ?? []) as CommandMap[K]["result"];
       }
+      if (command === "skill_inventory") {
+        return structuredClone(inventory) as CommandMap[K]["result"];
+      }
       if (command === "skill_install") {
         const { source, path, target } = args as {
           source: string;
@@ -715,11 +722,15 @@ export function createFakeBridge(
           target: string;
         };
         const skill = path.replace(/\\/g, "/").split("/").pop() ?? path;
+        const installedPath =
+          target === "user"
+            ? `C:/Users/demo/.agents/skills/${skill}`
+            : `C:/projects/grove/.agents/skills/${skill}`;
         const result = {
           skill,
           source,
           target,
-          path: `C:/projects/grove/.agents/skills/${skill}`,
+          path: installedPath,
           overwritten: false,
           installedAt: "2025-01-01T00:00:00Z",
         };
@@ -730,6 +741,10 @@ export function createFakeBridge(
           path: result.path,
           installedAt: result.installedAt,
         });
+        const detected = { name: skill, target, path: result.path };
+        const known = inventory.findIndex((item) => item.path === detected.path);
+        if (known >= 0) inventory.splice(known, 1);
+        inventory.push(detected);
         return result as CommandMap[K]["result"];
       }
       if (command === "skill_installs") {
@@ -739,6 +754,8 @@ export function createFakeBridge(
         const { path } = args as { path: string };
         const index = installs.findIndex((record) => record.path === path);
         if (index >= 0) installs.splice(index, 1);
+        const detected = inventory.findIndex((item) => item.path === path);
+        if (detected >= 0) inventory.splice(detected, 1);
         return null as CommandMap[K]["result"];
       }
       if (command === "mcp_servers") {

@@ -2,7 +2,7 @@
   "skill": "pdf",
   "source": "anthropics/skills",
   "target": "user",
-  "path": "C:/Users/demo/.grove/skills/pdf",
+  "path": "C:/Users/demo/.agents/skills/pdf",
   "overwritten": true,
   "installedAt": "2026-10-24T18:00:00Z"
 }

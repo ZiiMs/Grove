@@ -57,13 +57,13 @@ fn preview_matches_fixture() {
 
 #[test]
 fn targets_match_fixture() {
-    // Grove runs the agent itself, so a skill is installed where Grove reads it: the user's folder
-    // and the project's `.agents/skills`. There is no per-vendor directory to enumerate.
+    // Grove runs the agent itself, so a skill is installed where Grove reads it: the user's global
+    // folder and the project's `.agents/skills`. There is no per-vendor directory to enumerate.
     let sample = vec![
         SkillTarget {
             id: "user".into(),
-            label: "Grove skills (this user)".into(),
-            path: "C:/Users/demo/.grove/skills".into(),
+            label: "User .agents/skills".into(),
+            path: "C:/Users/demo/.agents/skills".into(),
             exists: true,
         },
         SkillTarget {
@@ -85,7 +85,7 @@ fn install_result_matches_fixture() {
         skill: "pdf".into(),
         source: "anthropics/skills".into(),
         target: "user".into(),
-        path: "C:/Users/demo/.grove/skills/pdf".into(),
+        path: "C:/Users/demo/.agents/skills/pdf".into(),
         overwritten: true,
         installed_at: "2026-10-24T18:00:00Z".into(),
     };

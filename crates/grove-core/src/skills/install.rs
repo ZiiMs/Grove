@@ -27,7 +27,7 @@ pub struct InstallRequest {
 pub struct InstallResult {
     pub skill: String,
     pub source: String,
-    /// Target id the user chose: `claude` | `codex` | `pi` | `opencode` | `agents`.
+    /// Target id the user chose: `user` | `agents`.
     pub target: String,
     /// Forward-slash path of the installed folder.
     pub path: String,
@@ -52,7 +52,7 @@ pub struct InstallRecord {
 pub trait InstallStore: Send + Sync {
     fn record(&self, record: InstallRecord) -> Result<(), SkillError>;
     fn list(&self) -> Result<Vec<InstallRecord>, SkillError>;
-    /// Forget one installation. The folder itself is removed by [`SkillService::remove_install`].
+    /// Forget one installation. The folder itself is removed by [`SkillService::remove_skill`].
     fn remove(&self, path: &str) -> Result<(), SkillError>;
 }
 

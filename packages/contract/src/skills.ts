@@ -38,7 +38,7 @@ export const skillPreviewSchema = z.object({
 export type SkillPreview = z.infer<typeof skillPreviewSchema>;
 
 export const skillTargetSchema = z.object({
-  /** `claude` | `codex` | `pi` | `opencode` | `agents`. */
+  /** `user` (global `~/.agents/skills`) | `agents` (this project). */
   id: z.string(),
   label: z.string(),
   /** Forward-slash display path. */
@@ -48,6 +48,19 @@ export const skillTargetSchema = z.object({
 export type SkillTarget = z.infer<typeof skillTargetSchema>;
 
 export const skillTargetsSchema = z.array(skillTargetSchema);
+
+/** A skill folder found under a target, whether or not Grove installed it. */
+export const detectedSkillSchema = z.object({
+  /** Folder name, which is also the catalog entry's name. */
+  name: z.string(),
+  /** `user` (global) | `agents` (this project). */
+  target: z.string(),
+  /** Forward-slash path of the skill folder. */
+  path: z.string(),
+});
+export type DetectedSkill = z.infer<typeof detectedSkillSchema>;
+
+export const detectedSkillsSchema = z.array(detectedSkillSchema);
 
 export const installResultSchema = z.object({
   skill: z.string(),
