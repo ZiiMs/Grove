@@ -1,6 +1,7 @@
 import type { Project, SessionSummary, SubagentSummary } from "@grove/contract";
 import { useMemo, useState } from "react";
 import { useSessionStore } from "../state/sessionStore";
+import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import { providerMeta, sessionVisual } from "../workspace/models";
 import { Icon } from "../workspace/Icon";
@@ -12,7 +13,6 @@ interface NavTreeProps {
   onFilter: (value: string) => void;
   activeId: string | null;
   onSelect: (id: string) => void;
-  onSelectSubagent: (sessionId: string, callId: string) => void;
   onNewSession: (projectId: string | null, worktreePath: string | null) => void;
   onNewChat: () => void;
   onAddProject: () => void;
@@ -61,18 +61,24 @@ function subagentVisual(status: SubagentSummary["status"]): string {
 
 function SubagentRow({
   subagent,
+  sessionId,
   onSelect,
 }: {
   subagent: SubagentSummary;
-  onSelect: () => void;
+  sessionId: string;
+  onSelect: (id: string) => void;
 }) {
+  const openSubagent = useUiStore((state) => state.openSubagent);
   const visual = subagentVisual(subagent.status);
   return (
     <button
       className="subagent-row"
       type="button"
       data-state={visual}
-      onClick={onSelect}
+      onClick={() => {
+        openSubagent(sessionId, subagent.callId);
+        onSelect(sessionId);
+      }}
       title={subagent.summary ?? subagent.description}
     >
       <span className="dot" data-state={visual} aria-hidden="true" />
@@ -87,13 +93,12 @@ function SessionRow({
   session,
   active,
   onSelect,
-  onSelectSubagent,
 }: {
   session: SessionSummary;
   active: boolean;
   onSelect: (id: string) => void;
-  onSelectSubagent: (sessionId: string, callId: string) => void;
 }) {
+  const closeSubagent = useUiStore((state) => state.closeSubagent);
   const visual = sessionVisual(session);
   const subagents = session.subagents ?? [];
   return (
@@ -103,7 +108,10 @@ function SessionRow({
         type="button"
         data-state={visual}
         aria-current={active ? "true" : undefined}
-        onClick={() => onSelect(session.id)}
+        onClick={() => {
+          closeSubagent();
+          onSelect(session.id);
+        }}
         title={session.title}
       >
         <span className="dot" data-state={visual} aria-hidden="true" />
@@ -125,7 +133,8 @@ function SessionRow({
             <SubagentRow
               key={subagent.callId}
               subagent={subagent}
-              onSelect={() => onSelectSubagent(session.id, subagent.callId)}
+              sessionId={session.id}
+              onSelect={onSelect}
             />
           ))}
         </div>
@@ -164,7 +173,6 @@ export function NavTree({
   onFilter,
   activeId,
   onSelect,
-  onSelectSubagent,
   onNewSession,
   onNewChat,
   onAddProject,
@@ -326,7 +334,6 @@ export function NavTree({
                             session={session}
                             active={session.id === activeId}
                             onSelect={onSelect}
-                            onSelectSubagent={onSelectSubagent}
                           />
                         ))
                       ) : (
@@ -344,7 +351,6 @@ export function NavTree({
                 session={session}
                 active={session.id === activeId}
                 onSelect={onSelect}
-                onSelectSubagent={onSelectSubagent}
               />
             ))
           ) : project.isGit ? null : (
@@ -420,7 +426,6 @@ export function NavTree({
                     session={session}
                     active={session.id === activeId}
                     onSelect={onSelect}
-                    onSelectSubagent={onSelectSubagent}
                   />
                 ))
               ) : (
