@@ -280,6 +280,12 @@ impl AgentSessionImpl {
                 for event in decoder.decode(&payload)? {
                     match event {
                         StreamEvent::Text(delta) => {
+                            // Some OpenAI-compatible gateways send empty content chunks around tool
+                            // calls and usage. Persisting them splits a reply into a preview row
+                            // and a final message, so the transcript would show it twice.
+                            if delta.is_empty() {
+                                continue;
+                            }
                             text.push_str(&delta);
                             self.emit(EventKind::Delta { text: delta });
                         }
@@ -949,6 +955,53 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("session-42")
         );
+    }
+
+    #[tokio::test]
+    async fn empty_text_chunks_do_not_become_delta_events() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        concat!(
+                            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+                            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+                            "data: [DONE]\n\n",
+                        ),
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "gpt-5".into(),
+            "system".into(),
+            vec![Message::user("hi")],
+            MAX_STEPS,
+            "session-42".into(),
+        );
+        let mut events = session.take_events();
+        session.request_turn().await.unwrap();
+
+        let deltas: Vec<String> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event.kind {
+                EventKind::Delta { text } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deltas, vec!["ok"]);
     }
 
     #[tokio::test]

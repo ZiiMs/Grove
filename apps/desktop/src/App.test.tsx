@@ -194,11 +194,20 @@ describe("redesigned shell", () => {
     expect(screen.getByText("Read")).toBeInTheDocument();
   });
 
-  it("puts assistant metadata in a ghost footer and keeps only user turns bubbled", async () => {
-    await ready();
+  it("puts assistant metadata in one ghost footer once the turn is done", async () => {
+    renderApp({
+      sessions: [fakeSummary({ ...session, awaiting: false }, events.length)],
+      details: { [session.id]: { ...detail, awaiting: false } },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
     expect(document.querySelector(".turn-head")).toBeNull();
-    expect(document.querySelector(".turn-foot")).not.toBeNull();
+    expect(document.querySelectorAll(".turn-foot")).toHaveLength(1);
     expect(document.querySelector(".turn-user .bubble")).not.toBeNull();
+  });
+
+  it("hides the ghost footer while the assistant is still working", async () => {
+    await ready();
+    expect(document.querySelector(".turn-foot")).toBeNull();
   });
 
   it("changes the thinking level for the active session", async () => {
