@@ -4,7 +4,8 @@
 use crate::state::AppState;
 use grove_core::ipc::IpcResult;
 use grove_core::skills::{
-    CatalogSnapshot, InstallRecord, InstallRequest, InstallResult, SkillPreview, SkillTarget,
+    CatalogSnapshot, DetectedSkill, InstallRecord, InstallRequest, InstallResult, SkillPreview,
+    SkillTarget,
 };
 use std::path::{Path, PathBuf};
 
@@ -27,7 +28,7 @@ pub async fn skill_preview(
     Ok(state.core.skills.preview(&source, &path).await?)
 }
 
-/// Per-provider skill directories plus project-local `.agents/skills`, each with an `exists` flag.
+/// The skill directories plus project-local `.agents/skills`, each with an `exists` flag.
 ///
 /// An absent `projectRoot` means "the project Grove is looking at": the local target follows the
 /// active session instead of resolving against the app's own directory.
@@ -38,6 +39,16 @@ pub async fn skill_targets(
 ) -> IpcResult<Vec<SkillTarget>> {
     let project_root = project_root.as_deref().map(Path::new);
     Ok(state.core.skill_targets(project_root))
+}
+
+/// Skill folders already present under either `.agents/skills` target, installed by Grove or not.
+#[tauri::command]
+pub async fn skill_inventory(
+    state: tauri::State<'_, AppState>,
+    project_root: Option<String>,
+) -> IpcResult<Vec<DetectedSkill>> {
+    let project_root = project_root.as_deref().map(Path::new);
+    Ok(state.core.skill_inventory(project_root))
 }
 
 /// Copy a skill folder into the chosen target. Refuses traversal and symlink escapes in the core.
@@ -69,9 +80,16 @@ pub async fn skill_installs(state: tauri::State<'_, AppState>) -> IpcResult<Vec<
     Ok(state.core.skills.installs()?)
 }
 
-/// Remove one installed skill folder by its recorded path.
+/// Remove one skill folder by its recorded or detected path.
 #[tauri::command]
-pub async fn skill_remove(state: tauri::State<'_, AppState>, path: String) -> IpcResult<()> {
-    state.core.skills.remove_install(&path)?;
+pub async fn skill_remove(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    project_root: Option<String>,
+) -> IpcResult<()> {
+    let project_root = project_root
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.core.project_root());
+    state.core.skills.remove_skill(&path, Some(&project_root))?;
     Ok(())
 }

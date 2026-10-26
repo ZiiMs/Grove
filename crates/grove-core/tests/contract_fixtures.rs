@@ -12,7 +12,7 @@ use grove_core::sessions::event::{
     Block, ContextDocument, ContextReason, Decision, EventKind, Question, QuestionAnswer,
     QuestionChoice, QuestionOption, Role, SessionEvent, SessionState, ToolStatus,
 };
-use grove_core::skills::InstallRecord;
+use grove_core::skills::{DetectedSkill, InstallRecord};
 
 /// Each fixture is canonical JSON produced by the Rust side. A change to a DTO without a matching
 /// fixture change fails here, and the TS side fails too — that is the contract test.
@@ -792,5 +792,25 @@ fn install_record_matches_fixture() {
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("skill-install-record.json")
+    );
+}
+
+#[test]
+fn detected_skills_match_fixture() {
+    let sample = vec![
+        DetectedSkill {
+            name: "pdf".into(),
+            target: "user".into(),
+            path: "C:/Users/demo/.agents/skills/pdf".into(),
+        },
+        DetectedSkill {
+            name: "provider-adapter".into(),
+            target: "agents".into(),
+            path: "C:/projects/grove/.agents/skills/provider-adapter".into(),
+        },
+    ];
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("skill-inventory.json")
     );
 }

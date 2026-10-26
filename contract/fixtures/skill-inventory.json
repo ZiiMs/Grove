@@ -1,0 +1,12 @@
+[
+  {
+    "name": "pdf",
+    "target": "user",
+    "path": "C:/Users/demo/.agents/skills/pdf"
+  },
+  {
+    "name": "provider-adapter",
+    "target": "agents",
+    "path": "C:/projects/grove/.agents/skills/provider-adapter"
+  }
+]

@@ -115,6 +115,8 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .od-icon{--od-icon-size:16px}
 .od-icon.sm{--od-icon-size:14px}
 .od-icon.xs{--od-icon-size:12px}
+.od-icon.spin{animation:sk-spin .9s linear infinite}
+@keyframes sk-spin{to{transform:rotate(360deg)}}
 
 /* ---------- shell ---------- */
 .app{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;height:100dvh}
@@ -182,6 +184,8 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .btn-ghost.block{width:100%;padding:8px 10px;justify-content:flex-start;gap:8px;background:transparent;border-color:var(--line);color:var(--fg-2)}
 .btn-ghost.block:hover{background:var(--elev);color:var(--fg);border-color:var(--line-2)}
 .btn-ghost.sm{font-size:12px;padding:5px 9px}
+.btn-primary.sm{font-size:12px;padding:5px 10px}
+.btn-primary[disabled]{opacity:.5}
 .btn-ghost.danger{color:var(--red);border-color:color-mix(in srgb, var(--t-bad) 38%, var(--line))}
 .btn-ghost.danger:hover{background:var(--red-soft)}
 .icon-btn{
@@ -665,6 +669,19 @@ dialog{
   padding:18px 20px 20px;box-shadow:0 22px 70px rgba(0,0,0,.6);
 }
 dialog::backdrop{background:color-mix(in srgb, var(--bg) 78%, #000)}
+dialog.settings-modal::backdrop{
+  background:color-mix(in srgb, #000 38%, transparent);
+  -webkit-backdrop-filter:blur(2px);
+  backdrop-filter:blur(2px);
+}
+dialog.skill-install-dialog::backdrop,
+dialog.skill-source-dialog::backdrop,
+dialog.skill-uninstall-dialog::backdrop{
+  background:color-mix(in srgb, #000 30%, transparent);
+  -webkit-backdrop-filter:blur(2px);
+  backdrop-filter:blur(2px);
+}
+dialog.skill-install-dialog{overflow:visible}
 .dlg-head{display:flex;align-items:flex-start;gap:10px}
 .dlg-head h2{font-size:16px;font-weight:600;flex:1}
 .dlg-sub{font-size:12.5px;color:var(--fg-3);margin-top:5px;max-width:54ch}
@@ -766,10 +783,9 @@ dialog.settings-modal{
 .sk-head-text h3{font-size:14.5px;font-weight:600}
 .sk-head-text p{font-size:12.5px;color:var(--fg-3);margin-top:4px;max-width:56ch;line-height:1.5}
 .sk-head-tools{margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:none}
-.sk-head-tools .search{width:210px}
 .count-pill{font-family:var(--mono);font-size:10.5px;color:var(--fg-2);border:1px solid var(--line-2);background:var(--elev);border-radius:99px;padding:4px 10px;white-space:nowrap}
-.sk-browser{display:grid;grid-template-columns:190px minmax(0,1fr) 292px;flex:1;min-height:0;border-top:1px solid var(--line)}
-.sk-catalogs{padding:10px 8px;border-right:1px solid var(--line)}
+.sk-browser{display:grid;grid-template-columns:190px minmax(0,1fr) 292px;flex:1;min-height:0;overflow:hidden;border-top:1px solid var(--line)}
+.sk-catalogs{padding:10px 8px;border-right:1px solid var(--line);min-height:0}
 .sk-cat{display:flex;align-items:flex-start;gap:9px;width:100%;text-align:left;padding:8px 9px;border-radius:var(--r);color:var(--fg-2)}
 .sk-cat:hover{background:var(--elev);color:var(--fg)}
 .sk-cat[aria-current="true"]{background:var(--elev);color:var(--fg)}
@@ -779,15 +795,21 @@ dialog.settings-modal{
 .sk-cat-name{display:block;font-size:12.3px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sk-cat-blurb{display:block;font-size:10.8px;color:var(--fg-3);margin-top:1px;line-height:1.4}
 .sk-cat-count{flex:none;font-family:var(--mono);font-size:9.6px;color:var(--fg-3);padding-top:3px}
-.sk-list-col{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line)}
-.sk-list-head{display:flex;align-items:baseline;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);flex:none}
-.sk-list-title{font-size:12px;font-weight:600;color:var(--fg-2)}
+.sk-cat-add{margin-top:6px;border:1px dashed var(--line);color:var(--fg-3)}
+.sk-cat-add:hover{border-color:var(--line-2);color:var(--fg-2)}
+.sk-cat-add .sk-cat-mark{border-style:dashed;background:transparent;color:var(--fg-3)}
+.sk-list-col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;border-right:1px solid var(--line)}
+.sk-list-head{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);flex:none}
+.sk-list-search{flex:1;min-width:120px;max-width:260px}
+.sk-select-all{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fg-3);cursor:pointer;user-select:none}
+.sk-select-all:hover{color:var(--fg-2)}
+.sk-check{accent-color:var(--jade);width:13px;height:13px;flex:none;margin:1px 0 0;cursor:pointer}
 .sk-list-count{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fg-3)}
 .sk-list{flex:1;padding:4px 0 12px}
-.sk-row{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:10px 14px;border-left:2px solid transparent;border-bottom:1px solid color-mix(in srgb, var(--fg) 6%, transparent)}
+.sk-row{display:flex;align-items:flex-start;gap:9px;width:100%;text-align:left;padding:10px 14px;border-left:2px solid transparent;border-bottom:1px solid color-mix(in srgb, var(--fg) 6%, transparent)}
 .sk-row:hover{background:var(--elev)}
 .sk-row[aria-current="true"]{background:var(--elev);border-left-color:var(--jade)}
-.sk-row-main{min-width:0;flex:1}
+.sk-row-main{display:block;min-width:0;flex:1;text-align:left}
 .sk-row-name{display:flex;align-items:baseline;gap:7px;min-width:0}
 .sk-row-name .n{font-family:var(--mono);font-size:12px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sk-row-name .v{font-family:var(--mono);font-size:9.6px;color:var(--fg-3);flex:none}
@@ -797,7 +819,7 @@ dialog.settings-modal{
 .sk-state{flex:none;display:flex;align-items:center;gap:4px;padding-top:2px;font-size:9.8px;color:var(--fg-3)}
 .sk-state.ok{color:var(--jade)}
 .sk-state.wait{color:var(--amber)}
-.sk-detail{padding:16px 16px 22px;background:var(--panel)}
+.sk-detail{padding:16px 16px 22px;min-height:0;background:var(--panel)}
 .sk-detail-empty{font-size:12px;color:var(--fg-3);padding-top:6px}
 .sk-detail-head{display:flex;align-items:flex-start;gap:9px}
 .sk-detail-ico{width:30px;height:30px;border-radius:7px;flex:none;display:grid;place-items:center;border:1px solid var(--line-2);background:var(--elev);color:var(--jade)}
@@ -828,6 +850,7 @@ dialog.settings-modal{
 .sk-adds li::before{content:"";position:absolute;left:0;top:6px;width:4px;height:4px;border-radius:50%;background:var(--line-2)}
 .sk-path{display:block;font-family:var(--mono);font-size:9.8px;color:var(--fg-3);background:var(--sunken);border:1px solid var(--line);border-radius:var(--r);padding:6px 8px;margin-top:6px;overflow-wrap:anywhere}
 .sk-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+.sk-actions .sk-hint{margin-top:0;align-self:center}
 .act-btn{width:30px;height:30px;display:grid;place-items:center;border-radius:var(--r);border:1px solid var(--line-2);background:var(--elev);color:var(--fg-2);transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease),color var(--dur) var(--ease)}
 .act-btn:hover{background:var(--hover);border-color:var(--line-2);color:var(--fg)}
 .act-btn.primary{background:var(--jade);border-color:var(--jade);color:var(--jade-ink)}
@@ -849,7 +872,6 @@ dialog.settings-modal{
   .sm-head{padding:11px 12px 10px 16px}
   .sk-head{padding:13px 14px 10px}
   .sk-head-tools{margin-left:0;width:100%}
-  .sk-head-tools .search{flex:1;width:auto}
   .sk-browser{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1.2fr) minmax(0,1fr)}
   .sk-catalogs{display:flex;gap:6px;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px}
   .sk-cat{flex:none;width:auto;align-items:center;padding:6px 9px;border:1px solid var(--line)}

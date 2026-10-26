@@ -189,7 +189,7 @@ The ~200 MB idle-memory goal is a design constraint, not an afterthought:
 
 Grove keeps projects, sessions, the event log, plans, pins and settings in
 `%APPDATA%/Grove/grove.db`. Project state stays where it belongs: specs are repo files, worktrees are
-git, skills live in `.grove/skills` or the project's `.agents/skills`, and the git repo is git. `.grove/` in a project holds
-per-session plan mirrors and is gitignored.
+git, skills live in `~/.agents/skills` or the project's `.agents/skills`, and the git repo is git.
+`.grove/` in a project holds per-session plan mirrors and is gitignored.
 
 Provider API keys live in the OS keychain, never in the database or in `settings`.

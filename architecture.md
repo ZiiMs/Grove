@@ -425,11 +425,17 @@ seven-panel shell and the spec/plan editors were retired.
   notion of "the project".
 - **plan** — see dual-edit above; `PlanService` owns version bumps and mirror writes.
 - **skills** — sources are GitHub repos (default `anthropics/skills`, `mattpocock/skills`); fetch the
-  repo tree, keep entries with a `SKILL.md`, cache the manifest with a TTL and serve it offline.
+  repo tree, keep entries with a `SKILL.md`, cache the manifest with a TTL and serve it offline. The
+  source list persists in `settings.catalogSources`, and the Skills pane can append an `owner/repo`
+  (or a pasted GitHub URL).
   `skill_targets()` lists the two places Grove's own agent reads a skill from: the user's
-  `~/.grove/skills` and the project-local `.agents/skills`. Install copies the folder, refuses `..`
-  traversal and symlink escapes, records the install, and removal deletes only a recorded folder under
-  a known target. A GitHub token is optional and lives in the keychain.
+  `~/.agents/skills` and the project-local `.agents/skills`. `skill_inventory()` scans both for
+  folders containing a `SKILL.md`, so a skill another tool placed there still reads as installed.
+  Install copies the folder, refuses `..`
+  traversal and symlink escapes, records the install, and removal deletes only a folder under a
+  known target that contains a `SKILL.md` — recorded or not. A GitHub token is optional: the
+  keychain is checked first, then `GITHUB_TOKEN` / `GH_TOKEN`, then `gh auth token`. Discovered
+  tokens are used in memory only and never written back.
 - **mcp** — discover server definitions from `.mcp.json`, `opencode.json` and provider config;
   normalise to `{name, source, transport, command/url}`. Probing (spawn stdio server → `initialize` +
   `tools/list`, or HTTP `tools/list`) is **explicit**, never automatic: spawning third-party servers is

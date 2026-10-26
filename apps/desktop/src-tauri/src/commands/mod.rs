@@ -65,6 +65,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
         skills::skill_catalog,
         skills::skill_preview,
         skills::skill_targets,
+        skills::skill_inventory,
         skills::skill_install,
         skills::skill_installs,
         skills::skill_remove,
