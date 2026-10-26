@@ -130,6 +130,32 @@ describe("foldTranscript", () => {
     expect(items[0].kind === "question" ? items[0].answers : null).toHaveLength(1);
   });
 
+  it("hides an empty refresh note but keeps a provider switch", () => {
+    const items = foldTranscript([
+      {
+        at: AT,
+        kind: "context_refreshed",
+        reason: "refresh",
+        provider: "opencode-go",
+        documents: [],
+        note: "Context refreshed for opencode-go: no documents",
+      },
+      {
+        at: LATER,
+        kind: "context_refreshed",
+        reason: "provider_switch",
+        provider: "anthropic",
+        documents: [],
+        note: "provider switched from opencode-go to anthropic; context re-sent: no documents",
+      },
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "notice",
+      text: expect.stringContaining("provider switched"),
+    });
+  });
+
   it("renders errors as an error notice and status as nothing", () => {
     const items = foldTranscript([
       { at: AT, kind: "status", state: "busy" },

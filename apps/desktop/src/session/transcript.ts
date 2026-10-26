@@ -254,6 +254,9 @@ export function foldTranscript(events: SessionEvent[]): TranscriptItem[] {
       case "status":
         break;
       case "context_refreshed":
+        // A model change used to write an empty refresh note on every picker change. Keep
+        // provider-switch notices, but an empty refresh has nothing useful to say.
+        if (event.reason === "refresh" && event.documents.length === 0) break;
         items.push({ id, kind: "notice", tone: "info", text: event.note, at: event.at });
         break;
     }

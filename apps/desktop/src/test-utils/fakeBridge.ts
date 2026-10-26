@@ -542,11 +542,13 @@ export function createFakeBridge(
         };
         detail.events = [...detail.events, started];
         bridge.emitSessionEvent({ sessionId: id, payload: started });
-        appendContextNote(
-          id,
-          "provider_switch",
-          `Provider switched from ${from} to ${provider}; context re-sent: ${documentsLabel(contextOf(id).documents.length)}`,
-        );
+        if (provider !== from) {
+          appendContextNote(
+            id,
+            "provider_switch",
+            `Provider switched from ${from} to ${provider}; context re-sent: ${documentsLabel(contextOf(id).documents.length)}`,
+          );
+        }
         return structuredClone(detail) as CommandMap[K]["result"];
       }
       if (command === "project_list") {

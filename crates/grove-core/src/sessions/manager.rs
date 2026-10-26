@@ -517,9 +517,10 @@ impl SessionManager {
     /// Re-launch the same conversation on another provider or model.
     ///
     /// The transcript is the record and stays untouched: the new provider gets the same context
-    /// documents plus a summary of the conversation so far, and the change itself is a visible system
+    /// documents plus a summary of the conversation so far. A provider switch adds a visible system
+    /// note; a same-provider model change is just the composer's picker and does not add a context
     /// note. The resume token belongs to the old provider (and model), so it is dropped rather than
-    /// handed over. A same-provider call with a new model is the composer's model picker.
+    /// handed over.
     pub async fn switch_provider(
         &self,
         id: &str,
@@ -556,10 +557,11 @@ impl SessionManager {
         self.store.set_resume_token(id, None)?;
         let session = self.store.session(id)?.unwrap_or(session);
         self.mark(id, SessionState::Starting)?;
-        if same_provider {
-            // The provider did not change; this is a context/model refresh rather than a switch.
-            self.publish_context(&session, ContextReason::Refresh, &assembly, None);
-        } else {
+        if !same_provider {
+            // A provider switch changes the wire client, so it is worth a transcript note. A
+            // same-provider model change is not a context operation: it re-launches with the same
+            // documents, but the user only asked to change the model. Publishing a refresh note
+            // there produced a "no documents" notice on every picker change.
             self.publish_context(
                 &session,
                 ContextReason::ProviderSwitch,
@@ -1232,5 +1234,12 @@ mod tests {
             "the transcript survives the switch"
         );
         assert_eq!(lock(&contexts).len(), 2, "the switch relaunches");
+        assert!(
+            !detail
+                .events
+                .iter()
+                .any(|event| matches!(event.kind, EventKind::ContextRefreshed { .. })),
+            "a model change must not add a context-refresh notice: {detail:?}"
+        );
     }
 }
