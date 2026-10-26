@@ -3,7 +3,7 @@ use grove_core::gitops::{
 };
 use grove_core::ipc::{
     AppInfo, CreateSessionRequest, DirEntry, DirListing, ErrorCode, EventEnvelope, IpcError,
-    Project, ProjectDetection, Session, SessionDetail, SessionSummary,
+    Project, ProjectDetection, Session, SessionDetail, SessionSummary, SubagentSummary,
 };
 use grove_core::plan::{Plan, PlanUpdate};
 use grove_core::providers::{Capabilities, Detection, ThinkingLevel};
@@ -529,7 +529,26 @@ fn session_summary_matches_fixture() {
     let sample = SessionSummary {
         session: sample_session(),
         event_count: 12,
-        subagents: Vec::new(),
+        subagents: vec![
+            SubagentSummary {
+                call_id: "call_sub_1".into(),
+                description: "audit the store".into(),
+                status: "ok".into(),
+                summary: Some(
+                    "subagent \"audit the store\" finished.\n\nThe store is consistent.".into(),
+                ),
+                started_at: "2025-01-01T00:00:00.000Z".into(),
+                finished_at: Some("2025-01-01T00:00:05.000Z".into()),
+            },
+            SubagentSummary {
+                call_id: "call_sub_2".into(),
+                description: "check the tests".into(),
+                status: "running".into(),
+                summary: None,
+                started_at: "2025-01-01T00:00:06.000Z".into(),
+                finished_at: None,
+            },
+        ],
     };
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),

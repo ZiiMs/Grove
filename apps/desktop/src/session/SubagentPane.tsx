@@ -147,6 +147,7 @@ export function SubagentPane({ active, sessionId, callId, onClose }: SubagentPan
                 <div className="subagent-item" key={item.id}>
                   <TranscriptRow
                     item={item}
+                    footer={false}
                     open={expanded.has(item.id)}
                     onToggle={() => toggle(item.id)}
                     onDecide={decide}

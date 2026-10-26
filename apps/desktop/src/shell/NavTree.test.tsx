@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitWorktree, Project, SessionSummary } from "@grove/contract";
 import { NavTree } from "./NavTree";
 import { useSessionStore } from "../state/sessionStore";
+import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import { fakeSession, fakeSummary } from "../test-utils/fakeBridge";
 
@@ -40,7 +41,6 @@ function renderTree(overrides: Partial<ComponentProps<typeof NavTree>> = {}) {
     onFilter: vi.fn(),
     activeId: "s1",
     onSelect: vi.fn(),
-    onSelectSubagent: vi.fn(),
     onNewSession: vi.fn(),
     onNewChat: vi.fn(),
     onAddProject: vi.fn(),
@@ -54,6 +54,7 @@ function renderTree(overrides: Partial<ComponentProps<typeof NavTree>> = {}) {
 beforeEach(() => {
   useSessionStore.getState().reset();
   useWorkspaceStore.getState().reset();
+  useUiStore.getState().reset();
   useSessionStore.setState({ sessions: [linked, loose], activeId: "s1" });
   useWorkspaceStore.setState({
     projects: [project],
@@ -111,7 +112,7 @@ describe("NavTree", () => {
     expect(props.onSelect).toHaveBeenCalledWith("s1");
   });
 
-  it("shows subagents under their session and selects the parent", async () => {
+  it("shows subagents under their session and opens the worker", async () => {
     const delegated: SessionSummary = {
       ...fakeSummary(
         fakeSession({ id: "s3", projectId: "p1", cwd: worktree.path, title: "Store audit" }),
@@ -133,6 +134,7 @@ describe("NavTree", () => {
     expect(screen.getByText("read the store")).toBeInTheDocument();
     expect(screen.getByTitle("1 subagent")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /read the store/ }));
-    expect(props.onSelectSubagent).toHaveBeenCalledWith("s3", "call-1");
+    expect(props.onSelect).toHaveBeenCalledWith("s3");
+    expect(useUiStore.getState().subagent).toEqual({ sessionId: "s3", callId: "call-1" });
   });
 });
