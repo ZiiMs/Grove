@@ -147,12 +147,17 @@ Provider rules that keep them isolated:
   gone); a failed probe leaves the catalog list in place. The whole currency is the API's own list, so
   a newly released model appears without a Grove release and an unavailable preset does not trap a new
   session. The request is only made after boot or a key change, never on a session turn.
-- **Thinking is a session preference, not a prompt trick.** `ThinkingLevel` (`off`, `low`, `medium`,
-  `high`) lives in `sessions.adapter_config` as `thinkingLevel` and is surfaced as
-  `SessionDetail.thinkingLevel`. `session_set_thinking` updates the live agent's next turn and persists
-  the config for a stopped session. Each wire module maps it to the vendor's native knob: Anthropic
+- **Thinking is a session preference, not a prompt trick.** `ThinkingLevel` lives in
+  `sessions.adapter_config` as `thinkingLevel` and is surfaced as `SessionDetail.thinkingLevel`.
+  `session_set_thinking` updates the live agent's next turn and persists the config for a stopped
+  session. The selectable values are per-model, not global: `providers::model_catalog` reads the
+  public models.dev catalogue's provider-specific `reasoning_options` into a one-hour file cache and
+  `provider_thinking` hands the result to the webview. A model can therefore expose `off`/`none`,
+  `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or the static fallback when metadata is absent.
+  Each wire module maps the selected value to the vendor's native knob: Anthropic
   `thinking.budget_tokens`, OpenAI/OpenRouter/OpenCode Go `reasoning_effort`, and Google
-  `generationConfig.thinkingConfig.thinkingBudget`; `off` omits the field.
+  `generationConfig.thinkingConfig.thinkingBudget`; `off` omits the field and `none` is the explicit
+  disabled value for models that require one.
 - **Forward compatible by default.** Unknown stream frames are dropped, not fatal: a vendor adding an
   event must degrade to a missing detail, never a dead session.
 - **No panics on the wire.** Every parse error becomes `ProviderError`, which the runtime turns into a
@@ -468,8 +473,9 @@ initials. The live list from `provider_models` overrides the fallback once a pro
 ## Windows-first, offline, security
 
 - Windows is the build target; paths go through `AppPaths`, never string-concatenated separators.
-- A session **is** network traffic: it calls the provider the user configured. Nothing else does except
-  the skill catalog, which serves its cache when offline.
+- A session **is** network traffic: it calls the provider the user configured. Outside a turn, the
+  skill catalog, the live provider model refresh, and the public model-capability catalogue fetch; each
+  serves a cache or static fallback when offline.
 - Keys go to the OS keychain. `settings` JSON is asserted secret-free by test, and no command returns a
   key value.
 - Grove sends the model request directly with the user's key. There is no Grove service in the middle,

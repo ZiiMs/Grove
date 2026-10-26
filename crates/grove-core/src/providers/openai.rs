@@ -363,6 +363,10 @@ mod tests {
     fn reasoning_effort_is_sent_only_for_a_thinking_level() {
         let medium = body("gpt-5", "system", &[], &[], ThinkingLevel::Medium);
         assert_eq!(medium["reasoning_effort"], "medium");
+        let max = body("gpt-5", "system", &[], &[], ThinkingLevel::Max);
+        assert_eq!(max["reasoning_effort"], "max");
+        let none = body("gpt-5", "system", &[], &[], ThinkingLevel::None);
+        assert_eq!(none["reasoning_effort"], "none");
         let off = body("gpt-5", "system", &[], &[], ThinkingLevel::Off);
         assert!(off.get("reasoning_effort").is_none());
     }

@@ -7,6 +7,7 @@ import type {
   SettingsPatch,
   ThinkingLevel,
 } from "@grove/contract";
+import { thinkingLevelSchema } from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 import { errorText } from "../ipc/errors";
@@ -67,9 +68,8 @@ function booleanValue(value: unknown, fallback: boolean): boolean {
 }
 
 function thinkingLevelValue(value: unknown, fallback: ThinkingLevel): ThinkingLevel {
-  return value === "off" || value === "low" || value === "medium" || value === "high"
-    ? value
-    : fallback;
+  const parsed = thinkingLevelSchema.safeParse(value);
+  return parsed.success ? parsed.data : fallback;
 }
 
 function prefsFromSettings(settings: Record<string, unknown>): Preferences {

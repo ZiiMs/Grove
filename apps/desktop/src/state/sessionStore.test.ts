@@ -28,6 +28,7 @@ describe("session store model refresh", () => {
       },
     );
     bridge.on("provider_models", () => ["mock-1", "mock-2"]);
+    bridge.on("provider_thinking", () => ({ mock: { "mock-1": ["low", "high"] } }));
 
     await useSessionStore.getState().load(bridge);
 
@@ -35,6 +36,9 @@ describe("session store model refresh", () => {
       expect(useSessionStore.getState().providers[0].models).toEqual(["mock-1", "mock-2"]);
     });
     expect(useSessionStore.getState().providerStatuses[0].models).toEqual(["mock-1", "mock-2"]);
+    expect(useSessionStore.getState().modelThinking).toEqual({
+      mock: { "mock-1": ["low", "high"] },
+    });
   });
 
   it("moves the default off a preset the provider no longer lists", async () => {

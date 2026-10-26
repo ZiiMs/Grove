@@ -14,6 +14,7 @@ pub mod anthropic;
 pub mod catalog;
 pub mod credentials;
 pub mod google;
+pub mod model_catalog;
 pub mod offline;
 pub mod openai;
 pub mod probe;
@@ -67,34 +68,52 @@ impl AuthMethod {
     }
 }
 
-/// How much hidden reasoning to ask a model for. `off` omits the vendor field entirely; the other
-/// levels map to the closest native knob (Anthropic thinking budget, OpenAI reasoning effort, or
-/// Google thinking budget).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// How much hidden reasoning to ask a model for. The exact list is model-specific and comes from the
+/// public models.dev catalogue; `off` omits the vendor field entirely, while the effort levels map to
+/// the closest native knob (Anthropic thinking budget, OpenAI-compatible `reasoning_effort`, or
+/// Google thinking budget). The ordering is intentional: it is the display order and the fallback
+/// ranking when a saved level is not supported by a newly selected model.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingLevel {
     #[default]
     Off,
+    /// Explicitly disabled, for a model that accepts `reasoning_effort: "none"` rather than
+    /// inferring "off" from a missing field. The UI labels this Off like [`ThinkingLevel::Off`].
+    None,
+    Minimal,
     Low,
     Medium,
     High,
+    XHigh,
+    Max,
 }
 
 impl ThinkingLevel {
     pub fn as_str(self) -> &'static str {
         match self {
             ThinkingLevel::Off => "off",
+            ThinkingLevel::None => "none",
+            ThinkingLevel::Minimal => "minimal",
             ThinkingLevel::Low => "low",
             ThinkingLevel::Medium => "medium",
             ThinkingLevel::High => "high",
+            ThinkingLevel::XHigh => "xhigh",
+            ThinkingLevel::Max => "max",
         }
     }
 
     pub fn parse(value: &str) -> Self {
         match value {
+            "none" => ThinkingLevel::None,
+            "minimal" => ThinkingLevel::Minimal,
             "low" => ThinkingLevel::Low,
             "medium" => ThinkingLevel::Medium,
             "high" => ThinkingLevel::High,
+            "xhigh" => ThinkingLevel::XHigh,
+            "max" => ThinkingLevel::Max,
             _ => ThinkingLevel::Off,
         }
     }

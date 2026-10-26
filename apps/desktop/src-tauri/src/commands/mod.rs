@@ -61,6 +61,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
         settings::provider_key_set,
         settings::provider_key_delete,
         settings::provider_models,
+        settings::provider_thinking,
         skills::skill_catalog,
         skills::skill_preview,
         skills::skill_targets,

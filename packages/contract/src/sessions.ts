@@ -36,8 +36,20 @@ export type ToolStatus = z.infer<typeof toolStatusSchema>;
 export const decisionSchema = z.enum(["approve", "deny"]);
 export type Decision = z.infer<typeof decisionSchema>;
 
-/** How much hidden reasoning to ask a provider for. `off` omits the vendor field. */
-export const thinkingLevelSchema = z.enum(["off", "low", "medium", "high"]);
+/**
+ * How much hidden reasoning to ask a provider for. The selectable subset is model-specific: the
+ * composer reads it from the core's models.dev capability map. `off` omits the vendor field.
+ */
+export const thinkingLevelSchema = z.enum([
+  "off",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
 
 /** One option in a structured question. */

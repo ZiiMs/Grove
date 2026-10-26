@@ -3,6 +3,7 @@ import type {
   SecretStatusView,
   Settings,
   SettingsPatch,
+  ThinkingLevel,
 } from "@grove/contract";
 
 /**
@@ -23,4 +24,9 @@ export interface SettingsCommands {
   provider_key_delete: { args: { provider: string }; result: ProviderStatus };
   /** Ask the vendor which models the key can reach; this is the "test key" action. */
   provider_models: { args: { provider: string }; result: string[] };
+  /** Provider id → model id → reasoning levels, from the cached models.dev catalogue. */
+  provider_thinking: {
+    args: Record<string, never>;
+    result: Record<string, Record<string, ThinkingLevel[]>>;
+  };
 }

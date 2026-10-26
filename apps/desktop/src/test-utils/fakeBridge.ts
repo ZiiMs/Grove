@@ -21,6 +21,7 @@ import type {
   SkillCatalog,
   SkillTarget,
   SpecGraph,
+  ThinkingLevel,
 } from "@grove/contract";
 import type { GroveBridge, GroveEventName, UnlistenFn } from "../ipc/bridge";
 import type { CommandArgs, CommandMap, CommandName } from "../ipc/commands";
@@ -41,6 +42,8 @@ export interface FakeBridgeSeed {
   secretStatuses?: Record<string, SecretStatus>;
   /** Provider readiness rows the settings pane renders. */
   providerStatuses?: ProviderStatus[];
+  /** Provider → model → reasoning levels, as the cached models.dev catalogue would return. */
+  modelThinking?: Record<string, Record<string, ThinkingLevel[]>>;
   /** Session id → pinned spec ids, in pin order. */
   pins?: Record<string, string[]>;
   /** Spec id → title, so pinned specs read like the Specs panel shows them. */
@@ -826,6 +829,9 @@ export function createFakeBridge(
         const { provider } = args as { provider: string };
         const row = providerStatuses().find((item) => item.id === provider);
         return (row?.models ?? []) as CommandMap[K]["result"];
+      }
+      if (command === "provider_thinking") {
+        return structuredClone(seed.modelThinking ?? {}) as CommandMap[K]["result"];
       }
 
       throw new Error(`FakeBridge has no handler for command: ${command}`);

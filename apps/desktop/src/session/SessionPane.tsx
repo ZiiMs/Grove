@@ -10,12 +10,6 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 
 const EMPTY_QUEUE: string[] = [];
 
-const THINKING_LEVELS: { value: ThinkingLevel; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-];
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBridge } from "../ipc/context";
 import { errorText } from "../ipc/errors";
@@ -33,6 +27,12 @@ import {
   SESSION_UI_STATE,
 } from "../workspace/models";
 import { Icon } from "../workspace/Icon";
+import {
+  knownThinkingLevels,
+  nearestThinkingLevel,
+  thinkingGroups,
+  thinkingLevelsFor,
+} from "../workspace/thinking";
 import { Combo } from "../shell/Combo";
 import {
   clockLabel,
@@ -855,6 +855,7 @@ function Composer({
   const prefs = useWorkspaceStore((state) => state.prefs);
   const registered = useSessionStore((state) => state.providers);
   const providerStatuses = useSessionStore((state) => state.providerStatuses);
+  const modelThinking = useSessionStore((state) => state.modelThinking);
   const notify = useUiStore((state) => state.notify);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -871,6 +872,11 @@ function Composer({
   const currentProvider = detail?.provider ?? fallbackProvider;
   const currentModel = model ?? defaultModelFor(currentProvider, modelsByProvider[currentProvider]);
   const currentThinking = detail?.thinkingLevel ?? "off";
+  const knownLevels = useMemo(
+    () => knownThinkingLevels(currentProvider, currentModel, modelThinking),
+    [currentModel, currentProvider, modelThinking],
+  );
+  const thinkingLevels = knownLevels ?? thinkingLevelsFor(currentProvider, currentModel, modelThinking);
 
   useEffect(() => {
     const node = inputRef.current;
@@ -878,6 +884,14 @@ function Composer({
     node.style.height = "auto";
     node.style.height = `${Math.min(node.scrollHeight, 132)}px`;
   }, [draft]);
+
+  // A saved level can outlive the model it was chosen for. As soon as the capability catalogue
+  // knows the current model, move an unsupported level to the nearest one it does support. This
+  // also handles an old session whose `off` is not an option on a mandatory-reasoning model.
+  useEffect(() => {
+    if (!detail || !knownLevels || knownLevels.includes(currentThinking)) return;
+    void setThinking(bridge, nearestThinkingLevel(currentThinking, knownLevels));
+  }, [bridge, currentThinking, detail?.id, knownLevels, setThinking]);
 
   const submit = async () => {
     if (!typed || locked) return;
@@ -985,7 +999,7 @@ function Composer({
               id="thinking-select"
               label="Thinking level for this session"
               value={currentThinking}
-              groups={[{ options: THINKING_LEVELS }]}
+              groups={thinkingGroups(thinkingLevels)}
               disabled={busy}
               placement="up"
               title="Thinking level for the next turn"

@@ -13,6 +13,7 @@ import {
   modelGroupsFor,
   providerForModel,
 } from "../workspace/models";
+import { knownThinkingLevels, nearestThinkingLevel } from "../workspace/thinking";
 import { Icon } from "../workspace/Icon";
 import { Combo } from "../shell/Combo";
 import { basename, dirname } from "../workspace/tree";
@@ -40,6 +41,7 @@ export function NewSessionDialog() {
   const storeError = useSessionStore((state) => state.error);
   const registered = useSessionStore((state) => state.providers);
   const providerStatuses = useSessionStore((state) => state.providerStatuses);
+  const modelThinking = useSessionStore((state) => state.modelThinking);
 
   const [title, setTitle] = useState("");
   const [projectId, setProjectId] = useState<string>("chat");
@@ -197,6 +199,11 @@ export function NewSessionDialog() {
       return;
     }
     const provider = providerForModel(model, modelGroups) ?? fallbackProvider;
+    const knownLevels = knownThinkingLevels(provider, model, modelThinking);
+    const thinkingLevel =
+      knownLevels && !knownLevels.includes(prefs.thinkingLevel)
+        ? nearestThinkingLevel(prefs.thinkingLevel, knownLevels)
+        : prefs.thinkingLevel;
     setWorking(true);
     setError(null);
     try {
@@ -220,7 +227,7 @@ export function NewSessionDialog() {
         title: title.trim(),
         projectId: project?.id ?? null,
         worktreePath,
-        config: { thinkingLevel: prefs.thinkingLevel },
+        config: { thinkingLevel },
       });
       if (!created) {
         setError(useSessionStore.getState().error ?? "The session could not be created.");

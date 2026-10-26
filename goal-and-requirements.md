@@ -106,7 +106,8 @@ first; she opens the diff, sees the spec it was meant to satisfy beside it, and 
 
 - **Local-first.** No account required; project state lives in local files and the repo. Secrets (tokens,
   keys) stay in the OS keychain, never in plaintext config.
-- **Offline-capable sessions.** Only the skill catalog needs the network; a running session must not.
+- **Offline-capable sessions.** A running session only needs the network for its own provider call;
+  the skill catalog and model-capability metadata serve a cache or static fallback when offline.
 - **Windows first-class.** Windows is the supported build; macOS/Linux builds are unverified until the
   core is stable.
 - **Adapter isolation.** Adding or breaking a harness adapter must not affect the others or the UI shell.

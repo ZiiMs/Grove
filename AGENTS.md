@@ -49,8 +49,9 @@ Rust builds go through sccache (`.cargo/config.toml`) and tests through nextest;
 `PATH`. `cargo nextest run` does not run doctests, so run the separate `--doc` command when a crate
 adds one.
 
-Never add a network call to a session path: only the skill catalog fetches, and it falls back to its
-cache. Secrets go through `SecretStore` (OS keychain) — never into `settings`, fixtures, or logs.
+Never add a network call to a session path. Only the skill catalog, the live provider model refresh,
+and the cached public model-capability catalogue fetch; all three have a cache or static fallback.
+Secrets go through `SecretStore` (OS keychain) — never into `settings`, fixtures, or logs.
 
 ## Conventions
 

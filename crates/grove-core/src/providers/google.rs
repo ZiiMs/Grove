@@ -11,7 +11,8 @@ use super::wire::{Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamE
 use super::{ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
 
-/// One turn's output ceiling.
+/// One turn's output ceiling. The largest thinking budget below leaves room for a final answer
+/// inside the ceiling without raising the ceiling past a model's own output limit.
 pub const MAX_OUTPUT_TOKENS: u32 = 8_192;
 
 /// `POST {base}/v1beta/models/{model}:streamGenerateContent?alt=sse`.
@@ -34,9 +35,14 @@ pub fn body(
     let mut generation = json!({ "maxOutputTokens": MAX_OUTPUT_TOKENS });
     if let Some(budget) = match thinking {
         ThinkingLevel::Off => None,
+        // Gemini uses a zero budget for an explicit off; omitting the config can still reason.
+        ThinkingLevel::None => Some(0),
+        ThinkingLevel::Minimal => Some(512),
         ThinkingLevel::Low => Some(1_024),
         ThinkingLevel::Medium => Some(2_048),
         ThinkingLevel::High => Some(4_096),
+        ThinkingLevel::XHigh => Some(6_144),
+        ThinkingLevel::Max => Some(7_168),
     } {
         generation["thinkingConfig"] = json!({ "thinkingBudget": budget });
     }
@@ -335,7 +341,17 @@ mod tests {
             high["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             4_096
         );
+        let max = body("system", &[], &[], ThinkingLevel::Max);
+        assert_eq!(
+            max["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            7_168
+        );
         let off = body("system", &[], &[], ThinkingLevel::Off);
         assert!(off["generationConfig"].get("thinkingConfig").is_none());
+        let none = body("system", &[], &[], ThinkingLevel::None);
+        assert_eq!(
+            none["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
     }
 }

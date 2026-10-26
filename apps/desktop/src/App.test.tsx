@@ -10,7 +10,14 @@ import type {
   SessionDetail,
 } from "@grove/contract";
 import { BridgeProvider } from "./ipc/context";
-import { DEFAULT_PROVIDERS, createFakeBridge, fakeSession, fakeSummary } from "./test-utils/fakeBridge";
+import {
+  DEFAULT_PROVIDERS,
+  createFakeBridge,
+  fakeProviderStatus,
+  fakeSession,
+  fakeSummary,
+  type FakeBridgeSeed,
+} from "./test-utils/fakeBridge";
 import { useSessionStore } from "./state/sessionStore";
 import { useWorkspaceStore } from "./state/workspaceStore";
 import { useContextStore } from "./state/contextStore";
@@ -152,7 +159,7 @@ function seed() {
   };
 }
 
-function renderApp(overrides: Partial<ReturnType<typeof seed>> = {}) {
+function renderApp(overrides: FakeBridgeSeed = {}) {
   const bridge = createFakeBridge({}, { ...seed(), ...overrides });
   render(
     <BridgeProvider bridge={bridge}>
@@ -203,6 +210,47 @@ describe("redesigned shell", () => {
     await userEvent.click(screen.getByRole("option", { name: "High" }));
     await waitFor(() => expect(bridge.invocations).toContain("session_set_thinking"));
     await waitFor(() => expect(trigger).toHaveTextContent("High"));
+  });
+
+  it("uses the selected model's own thinking tiers", async () => {
+    const mocked = { ...session, provider: "mock", model: "mock-1" };
+    const mockedDetail: SessionDetail = {
+      ...mocked,
+      events,
+      thinkingLevel: "off",
+    };
+    const bridge = renderApp({
+      sessions: [fakeSummary(mocked, events.length)],
+      details: { [mocked.id]: mockedDetail },
+      providerStatuses: [
+        fakeProviderStatus({
+          id: "mock",
+          name: "Offline",
+          models: ["mock-1"],
+          defaultModel: "mock-1",
+          configured: true,
+        }),
+      ],
+      modelThinking: { mock: { "mock-1": ["max"] } },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    // The saved level was off, which beam-free-style models do not support. The composer moves it
+    // to the only tier the catalogue announced before the next turn can be sent.
+    await waitFor(() =>
+      expect(
+        bridge.calls.some(
+          (call) =>
+            call.command === "session_set_thinking" &&
+            (call.args as { level?: string }).level === "max",
+        ),
+      ).toBe(true),
+    );
+    const trigger = screen.getByRole("combobox", { name: "Thinking level for this session" });
+    await waitFor(() => expect(trigger).toHaveTextContent("Max"));
+    await userEvent.click(trigger);
+    expect(screen.queryByRole("option", { name: "Off" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Max" })).toBeInTheDocument();
   });
 
   it("searches the model combo before switching models", async () => {

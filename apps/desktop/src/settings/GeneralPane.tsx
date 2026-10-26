@@ -12,6 +12,12 @@ import {
   modelGroupsFor,
   providerForModel,
 } from "../workspace/models";
+import {
+  knownThinkingLevels,
+  nearestThinkingLevel,
+  thinkingGroups,
+  thinkingLevelsFor,
+} from "../workspace/thinking";
 import { Combo } from "../shell/Combo";
 
 const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
@@ -20,18 +26,12 @@ const PERMISSION_OPTIONS: { value: PermissionMode; label: string }[] = [
   { value: "bypass", label: "Bypass approvals" },
 ];
 
-const THINKING_OPTIONS: { value: ThinkingLevel; label: string }[] = [
-  { value: "off", label: "Off" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-];
-
 export function GeneralPane({ onSaved }: { onSaved: () => void }) {
   const bridge = useBridge();
   const prefs = useWorkspaceStore((state) => state.prefs);
   const registered = useSessionStore((state) => state.providers);
   const providerStatuses = useSessionStore((state) => state.providerStatuses);
+  const modelThinking = useSessionStore((state) => state.modelThinking);
   const saveSettings = useWorkspaceStore((state) => state.saveSettings);
   const notify = useUiStore((state) => state.notify);
 
@@ -58,6 +58,21 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
     [available, modelsByProvider, prefs.enabledProviders],
   );
   const fallbackProvider = firstAvailableProvider(prefs.enabledProviders, available, prefs.defaultProvider);
+  const selectedProvider = providerForModel(model, groups) ?? fallbackProvider;
+  const knownLevels = useMemo(
+    () => knownThinkingLevels(selectedProvider, model, modelThinking),
+    [model, modelThinking, selectedProvider],
+  );
+  const thinkingLevels = knownLevels ?? thinkingLevelsFor(selectedProvider, model, modelThinking);
+
+  // Keep the default thinking level valid when the default model changes. Only rewrite once the
+  // catalogue knows the model; an unavailable catalogue must not silently downgrade the preference.
+  useEffect(() => {
+    if (!knownLevels) return;
+    setThinking((current) =>
+      knownLevels.includes(current) ? current : nearestThinkingLevel(current, knownLevels),
+    );
+  }, [knownLevels]);
 
   const previewRoot = root.trim().replace(/\/+$/, "") || "~/code";
 
@@ -120,7 +135,7 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
               id="set-thinking"
               label="Thinking level"
               value={thinking}
-              groups={[{ options: THINKING_OPTIONS }]}
+              groups={thinkingGroups(thinkingLevels)}
               onChange={(value) => setThinking(value as ThinkingLevel)}
             />
             <p className="field-hint">

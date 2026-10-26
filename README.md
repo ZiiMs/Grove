@@ -69,7 +69,8 @@ npm run tauri dev    # builds the Rust shell and opens the desktop window
    turns.
 
 The tree footer shows the session and awaiting counts, and the status bar carries the version from the
-core. Only the skill catalog and a session's own model call touch the network; everything else runs locally.
+core. Only the skill catalog, a session's own model call, and the cached public model catalogue used to
+describe reasoning levels touch the network; everything else runs locally.
 
 ## Develop
 
@@ -168,8 +169,9 @@ The ~200 MB idle-memory goal is a design constraint, not an afterthought:
   lazy chunks. The successful output ends with a line like
   `Bundle guard: entry index-…js 299.7 kB (budget 600 kB); lazy …`.
 - **No background polling on the session path.** Plans are reconciled by a read-time hash check and
-  re-read when the Plan tab opens; sessions do not poll the network (only the skill catalog fetches,
-  and it falls back to its cache).
+  re-read when the Plan tab opens; sessions do not poll the network. The only background fetches are
+  the skill catalog, the provider model list after boot or a key change, and the cached
+  model-capability catalogue; each falls back to its cache or static list.
 
 ## Layout
 

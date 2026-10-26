@@ -140,6 +140,15 @@ pub async fn provider_models(
         .map_err(provider_error)
 }
 
+/// The reasoning levels each provider model advertises. Cached by the core; an unavailable catalogue
+/// returns an empty map so the composer keeps its static fallback.
+#[tauri::command]
+pub async fn provider_thinking(
+    state: tauri::State<'_, AppState>,
+) -> IpcResult<grove_core::providers::model_catalog::ThinkingMap> {
+    Ok(state.core.provider_thinking().await)
+}
+
 fn provider_error(error: ProviderError) -> IpcError {
     match error {
         ProviderError::Unavailable(message) => IpcError::unavailable(message),

@@ -10,7 +10,9 @@ use super::{ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
 
 pub const API_VERSION: &str = "2023-06-01";
-/// One turn's output ceiling. Anthropic requires it; a huge value would be a cost surprise.
+/// One turn's output ceiling. Anthropic requires it; a huge value would be a cost surprise, and
+/// raising it can exceed an older model's own output limit. The largest thinking budget below
+/// leaves room for a final answer inside this ceiling.
 pub const MAX_TOKENS: u32 = 8_192;
 
 /// `POST {base}/v1/messages`.
@@ -42,10 +44,14 @@ pub fn body(
         "stream": true,
     });
     if let Some(budget) = match thinking {
-        ThinkingLevel::Off => None,
-        ThinkingLevel::Low => Some(1_024),
+        // Both "off" and an explicit `none` disable extended thinking by leaving the field out.
+        ThinkingLevel::Off | ThinkingLevel::None => None,
+        // Anthropic's minimum thinking budget is 1024 tokens; the UI's "minimal" is clamped to it.
+        ThinkingLevel::Minimal | ThinkingLevel::Low => Some(1_024),
         ThinkingLevel::Medium => Some(2_048),
         ThinkingLevel::High => Some(4_096),
+        ThinkingLevel::XHigh => Some(6_144),
+        ThinkingLevel::Max => Some(7_168),
     } {
         body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
     }
@@ -387,7 +393,13 @@ mod tests {
     fn thinking_budget_is_only_sent_when_requested() {
         let high = body("claude", "system", &[], &[], ThinkingLevel::High);
         assert_eq!(high["thinking"]["budget_tokens"], 4_096);
+        let max = body("claude", "system", &[], &[], ThinkingLevel::Max);
+        assert_eq!(max["thinking"]["budget_tokens"], 7_168);
+        let minimal = body("claude", "system", &[], &[], ThinkingLevel::Minimal);
+        assert_eq!(minimal["thinking"]["budget_tokens"], 1_024);
         let off = body("claude", "system", &[], &[], ThinkingLevel::Off);
         assert!(off.get("thinking").is_none());
+        let none = body("claude", "system", &[], &[], ThinkingLevel::None);
+        assert!(none.get("thinking").is_none());
     }
 }

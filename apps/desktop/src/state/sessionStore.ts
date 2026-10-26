@@ -12,6 +12,7 @@ import type {
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 import { errorText } from "../ipc/errors";
+import type { ModelThinkingMap } from "../workspace/thinking";
 
 /**
  * Session domain state: the list, the open tabs, the active transcript, and the commands that move
@@ -43,6 +44,8 @@ interface SessionStoreData {
   providers: ProviderSpec[];
   /** Credential readiness for the registered providers; drives which models a session may use. */
   providerStatuses: ProviderStatus[];
+  /** Model-specific reasoning levels, keyed by provider and model. Empty means "not known yet". */
+  modelThinking: ModelThinkingMap;
   sessions: SessionSummary[];
   activeId: string | null;
   detail: SessionDetail | null;
@@ -104,6 +107,7 @@ export interface SessionStore extends SessionStoreData {
 const initial: SessionStoreData = {
   providers: [],
   providerStatuses: [],
+  modelThinking: {},
   sessions: [],
   activeId: null,
   detail: null,
@@ -174,6 +178,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const { providerStatuses } = get();
     const configured = providerStatuses.filter((status) => status.configured).map((status) => status.id);
     if (configured.length === 0) return;
+    // Start the tier request alongside the live model probes, but do not make the model list wait
+    // for it: the catalogue is larger, and a slow or failed fetch must only leave the picker on its
+    // static fallback.
+    const thinkingRequest = bridge.invoke("provider_thinking").catch(() => null);
     const results = await Promise.allSettled(
       configured.map(async (provider) => {
         const models = await bridge.invoke("provider_models", { provider });
@@ -186,27 +194,30 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         discovered.set(result.value[0], result.value[1]);
       }
     }
-    if (discovered.size === 0) return;
-    set((state) => ({
-      providers: state.providers.map((provider) => {
-        const models = discovered.get(provider.id);
-        if (!models) return provider;
-        return {
-          ...provider,
-          models,
-          defaultModel: models.includes(provider.defaultModel) ? provider.defaultModel : models[0],
-        };
-      }),
-      providerStatuses: state.providerStatuses.map((status) => {
-        const models = discovered.get(status.id);
-        if (!models) return status;
-        return {
-          ...status,
-          models,
-          defaultModel: models.includes(status.defaultModel) ? status.defaultModel : models[0],
-        };
-      }),
-    }));
+    if (discovered.size > 0) {
+      set((state) => ({
+        providers: state.providers.map((provider) => {
+          const models = discovered.get(provider.id);
+          if (!models) return provider;
+          return {
+            ...provider,
+            models,
+            defaultModel: models.includes(provider.defaultModel) ? provider.defaultModel : models[0],
+          };
+        }),
+        providerStatuses: state.providerStatuses.map((status) => {
+          const models = discovered.get(status.id);
+          if (!models) return status;
+          return {
+            ...status,
+            models,
+            defaultModel: models.includes(status.defaultModel) ? status.defaultModel : models[0],
+          };
+        }),
+      }));
+    }
+    const thinking = await thinkingRequest;
+    if (thinking) set({ modelThinking: thinking });
   },
 
   create: async (bridge, input) => {

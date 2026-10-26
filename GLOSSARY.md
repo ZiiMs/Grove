@@ -49,11 +49,14 @@ normalized events the transcript records, and asks the user before a tool change
 
 ## Thinking level
 
-A session preference (`off`, `low`, `medium`, `high`) stored as `thinkingLevel` in the session's
-`adapter_config` and surfaced as `SessionDetail.thinkingLevel`. `session_set_thinking` updates a live
-agent's next turn and persists the config for a stopped session. Each wire client maps it to the
-vendor's native control: Anthropic thinking budget, OpenAI-compatible `reasoning_effort`, or Google
-thinking budget; `off` omits it.
+A session preference stored as `thinkingLevel` in the session's `adapter_config` and surfaced as
+`SessionDetail.thinkingLevel`. The selectable values are model-specific: the core reads models.dev's
+per-provider `reasoning_options` into a cached map, so a model can expose `off`/`none`, `minimal`,
+`low`, `medium`, `high`, `xhigh`, `max`, or a fallback subset instead of one global ladder.
+`session_set_thinking` updates a live agent's next turn and persists the config for a stopped session.
+Each wire client maps the selected value to the vendor's native control: Anthropic thinking budget,
+OpenAI-compatible `reasoning_effort`, or Google thinking budget. `off` omits the field; `none` is the
+explicit `reasoning_effort: "none"` value some models require.
 
 ## Tool
 

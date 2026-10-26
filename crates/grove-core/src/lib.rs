@@ -212,6 +212,16 @@ impl GroveCore {
         providers::probe::list_models(&self.http, &spec, &key, transport.models_url).await
     }
 
+    /// Each provider model's reasoning levels, from the cached models.dev catalogue.
+    ///
+    /// The model list itself comes from the provider; this only supplies the capability layer the
+    /// composer needs to show the tiers the selected model actually accepts. A catalogue failure is
+    /// intentionally not an error: the UI has a static fallback.
+    pub async fn provider_thinking(&self) -> providers::model_catalog::ThinkingMap {
+        let cache = self.paths.cache.join("model-thinking.json");
+        providers::model_catalog::thinking_options(&self.http, &cache).await
+    }
+
     /// What the webview shows in its header. Shape is pinned by `contract/fixtures/app-info.json`.
     pub fn info(&self) -> ipc::AppInfo {
         ipc::AppInfo {
