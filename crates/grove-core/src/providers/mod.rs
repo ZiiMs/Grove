@@ -87,6 +87,8 @@ pub enum ThinkingLevel {
     Low,
     Medium,
     High,
+    // `snake_case` would split this acronym into `x_high`; the wire name is the effort value.
+    #[serde(rename = "xhigh", alias = "x_high")]
     XHigh,
     Max,
 }
@@ -364,7 +366,36 @@ pub trait AgentSession: Send {
 
 #[cfg(test)]
 mod tests {
-    use super::catalog;
+    use super::{catalog, ThinkingLevel};
+
+    #[test]
+    fn thinking_levels_use_the_same_names_on_the_wire_as_in_the_config() {
+        for level in [
+            ThinkingLevel::Off,
+            ThinkingLevel::None,
+            ThinkingLevel::Minimal,
+            ThinkingLevel::Low,
+            ThinkingLevel::Medium,
+            ThinkingLevel::High,
+            ThinkingLevel::XHigh,
+            ThinkingLevel::Max,
+        ] {
+            let encoded = serde_json::to_string(&level).unwrap();
+            assert_eq!(
+                encoded,
+                format!("\"{}\"", level.as_str()),
+                "serialized form must match the effort name"
+            );
+            let decoded: ThinkingLevel = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded, level);
+        }
+        // An earlier cache wrote serde's `x_high` spelling; keep reading it rather than refetching
+        // solely because the wire name changed.
+        assert_eq!(
+            serde_json::from_str::<ThinkingLevel>("\"x_high\"").unwrap(),
+            ThinkingLevel::XHigh
+        );
+    }
 
     #[test]
     fn every_provider_has_a_unique_id_and_a_default_model_it_ships() {
