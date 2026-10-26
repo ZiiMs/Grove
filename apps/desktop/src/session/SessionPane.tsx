@@ -38,6 +38,7 @@ import {
   clockLabel,
   durationLabel,
   foldTranscript,
+  footerIndexes,
   type TranscriptItem,
 } from "../session/transcript";
 
@@ -183,6 +184,7 @@ function Transcript({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const footers = useMemo(() => footerIndexes(items, working), [items, working]);
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
@@ -255,6 +257,7 @@ function Transcript({
                 >
                   <TranscriptRow
                     item={item}
+                    footer={footers.has(row.index)}
                     open={expanded.has(item.id)}
                     onToggle={() => toggle(item.id)}
                     onDecide={onDecide}
@@ -265,13 +268,6 @@ function Transcript({
             })}
           </div>
         )}
-        {working ? (
-          <div className="typing" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -281,14 +277,12 @@ function AssistantFoot({
   provider,
   at,
   durationMs,
-  streaming = false,
 }: {
   provider: string;
   at: string;
   durationMs?: number | null;
-  streaming?: boolean;
 }) {
-  const timing = durationLabel(durationMs ?? null) || (streaming ? "" : clockLabel(at));
+  const timing = durationLabel(durationMs ?? null) || clockLabel(at);
   return (
     <div className="turn-foot">
       <span>{providerMeta(provider).name}</span>
@@ -306,12 +300,14 @@ function AssistantFoot({
 
 function TranscriptRow({
   item,
+  footer,
   open,
   onToggle,
   onDecide,
   onAnswer,
 }: {
   item: TranscriptItem;
+  footer: boolean;
   open: boolean;
   onToggle: () => void;
   onDecide: (requestId: string, decision: Decision) => void;
@@ -355,18 +351,19 @@ function TranscriptRow({
             }
             return <p key={index}>{block.text}</p>;
           })}
-          <AssistantFoot provider={provider} at={item.at} durationMs={item.durationMs} />
+          {footer ? (
+            <AssistantFoot provider={provider} at={item.at} durationMs={item.durationMs} />
+          ) : null}
         </div>
       );
     }
     case "stream":
+      // Whitespace-only deltas would otherwise leave a bare, blinking row behind tool cards.
+      if (!item.text.trim()) return null;
       return (
         <div className="turn">
-          <p>
-            {item.text}
-            <span className="stream-caret" aria-hidden="true" />
-          </p>
-          <AssistantFoot provider={provider} at={item.at} streaming />
+          <p>{item.text}</p>
+          {footer ? <AssistantFoot provider={provider} at={item.at} /> : null}
         </div>
       );
     case "tool": {

@@ -5,27 +5,6 @@
   font-size: 12px;
 }
 
-.stream-caret {
-  display: inline-block;
-  width: 6px;
-  height: 1em;
-  margin-left: 2px;
-  vertical-align: text-bottom;
-  background: var(--jade);
-  animation: caretBlink 1.05s steps(2, start) infinite;
-}
-
-@keyframes caretBlink {
-  0%,
-  45% {
-    opacity: 1;
-  }
-  55%,
-  100% {
-    opacity: 0;
-  }
-}
-
 .turn-thinking {
   margin: 8px 0;
   padding-left: 10px;

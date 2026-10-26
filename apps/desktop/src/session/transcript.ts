@@ -80,6 +80,20 @@ function elapsed(from: string, to: string): number | null {
 }
 
 /**
+ * The preview a delta still belongs to. Usage rows are metadata, not a reply boundary: some
+ * gateways report token counts mid-sentence, and starting a row for the next delta would split one
+ * sentence across several turns.
+ */
+function openStream(items: TranscriptItem[]): number {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item.kind === "usage") continue;
+    return item.kind === "stream" ? i : -1;
+  }
+  return -1;
+}
+
+/**
  * Fold the event log into rows. Deltas accumulate into one streaming bubble and are replaced by the
  * message that completes them, so a live turn and a replayed one look identical. Tool results attach
  * to their call, which is what makes one card per tool.
@@ -93,9 +107,13 @@ export function foldTranscript(events: SessionEvent[]): TranscriptItem[] {
     const sincePrevious = previousAt ? elapsed(previousAt, event.at) : null;
     switch (event.kind) {
       case "delta": {
-        const last = items[items.length - 1];
-        if (last && last.kind === "stream") {
-          last.text += event.text;
+        // OpenAI-compatible gateways send empty content chunks around tool calls and usage. They
+        // add no text, but starting a row for one breaks the preview-to-message fold below.
+        if (event.text.length === 0) break;
+        const open = openStream(items);
+        if (open >= 0) {
+          const stream = items[open];
+          if (stream.kind === "stream") stream.text += event.text;
         } else {
           items.push({ id, kind: "stream", text: event.text, at: event.at });
         }
@@ -103,13 +121,15 @@ export function foldTranscript(events: SessionEvent[]): TranscriptItem[] {
       }
       case "message": {
         const text = messageText(event.blocks);
-        // A usage event lands between the last delta and the final assistant message, so the stream
-        // is not necessarily the last row. Skip those invisible rows when looking for the preview.
+        // A usage event and whitespace-only deltas can land between the last text delta and the
+        // final assistant message, so the preview is not necessarily the last row. Skip those
+        // invisible rows; the first real row decides whether this message completes a stream.
         let streamIndex = -1;
         if (event.role === "assistant") {
           for (let i = items.length - 1; i >= 0; i -= 1) {
             const item = items[i];
             if (item.kind === "usage") continue;
+            if (item.kind === "stream" && item.text.trim().length === 0) continue;
             if (item.kind === "stream" && item.text.trimEnd() === text) streamIndex = i;
             break;
           }
@@ -263,6 +283,37 @@ export function foldTranscript(events: SessionEvent[]): TranscriptItem[] {
   });
 
   return items;
+}
+
+/**
+ * Which rows carry the ghost provider footer. A footer belongs to the last prose row of a turn, and
+ * only once that turn is over: a user message closes the previous turn, and the live turn stays open
+ * while the agent is working. Intermediate fragments between tool calls therefore share one footer
+ * instead of repeating the model name as the agent resumes.
+ *
+ * A stream counts only when a message never completed it, so a cancelled partial reply keeps its
+ * metadata. Whitespace-only streams are noise, not prose.
+ */
+export function footerIndexes(items: TranscriptItem[], working: boolean): ReadonlySet<number> {
+  const footers = new Set<number>();
+  let candidate: number | null = null;
+  const closeTurn = () => {
+    if (candidate !== null) footers.add(candidate);
+    candidate = null;
+  };
+  items.forEach((item, index) => {
+    if (item.kind === "message" && item.role === "user") {
+      closeTurn();
+      return;
+    }
+    if (item.kind === "message" && item.role === "assistant" && item.blocks.length > 0) {
+      candidate = index;
+      return;
+    }
+    if (item.kind === "stream" && item.text.trim().length > 0) candidate = index;
+  });
+  if (!working) closeTurn();
+  return footers;
 }
 
 /** A short elapsed label for a tool card or a turn. */

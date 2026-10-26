@@ -336,12 +336,6 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .turn-note.danger{color:var(--red)}
 .turn-note .n-ico{display:flex;padding-top:2px;flex:none}
 
-.typing{display:flex;align-items:center;gap:7px;color:var(--fg-3);font-size:12px;padding:2px 0 6px}
-.typing i{width:5px;height:5px;border-radius:50%;background:var(--fg-3);display:block;opacity:.35;animation:blink 1.2s infinite}
-.typing i:nth-child(2){animation-delay:.16s}
-.typing i:nth-child(3){animation-delay:.32s}
-@keyframes blink{0%,60%,100%{opacity:.28}30%{opacity:.95}}
-
 .empty{padding:24px 16px;text-align:center;color:var(--fg-3);font-size:12.5px;line-height:1.6}
 .empty strong{display:block;color:var(--fg-2);font-size:13px;font-weight:600;margin-bottom:5px}
 
@@ -1062,7 +1056,6 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .session .composer-box:focus-within{border-color:var(--line-2);background:var(--sunken);box-shadow:none}
 .session .composer-box textarea{font-size:14px;line-height:1.6;max-height:96px}
 .session .composer-foot .combo-trigger{font-size:10px;background:transparent;border-color:var(--line-2);color:var(--fg-3);padding:3px 6px}
-.session .typing{font-family:var(--mono);font-size:10.5px}
 .session .empty{border:0;background:transparent;padding:24px 0}
 
 /* ---------- inline question card ---------- */

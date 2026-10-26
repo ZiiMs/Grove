@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldTranscript, durationLabel } from "./transcript";
+import { foldTranscript, footerIndexes, durationLabel } from "./transcript";
 
 const AT = "2025-01-01T00:00:01.000Z";
 const LATER = "2025-01-01T00:00:02.000Z";
@@ -43,6 +43,58 @@ describe("foldTranscript", () => {
     expect(items[0]).toMatchObject({ kind: "message", role: "assistant" });
     expect(items.some((item) => item.kind === "stream")).toBe(false);
     expect(items.filter((item) => item.kind === "usage")).toHaveLength(1);
+  });
+
+  it("folds a completion across empty deltas and usage without duplicating the reply", () => {
+    const items = foldTranscript([
+      { at: AT, kind: "delta", text: "Okay" },
+      { at: LATER, kind: "delta", text: " man" },
+      { at: LATER, kind: "usage", input_tokens: 10, output_tokens: 2 },
+      { at: LATER, kind: "delta", text: "" },
+      {
+        at: LATER,
+        kind: "message",
+        role: "assistant",
+        blocks: [{ type: "text", text: "Okay man" }],
+      },
+      { at: LATER, kind: "status", state: "idle" },
+    ]);
+    expect(items.filter((item) => item.kind === "message")).toHaveLength(1);
+    expect(items.some((item) => item.kind === "stream")).toBe(false);
+    expect(items[0]).toMatchObject({ kind: "message", role: "assistant" });
+  });
+
+  it("keeps one preview when usage arrives mid-reply", () => {
+    const items = foldTranscript([
+      { at: AT, kind: "delta", text: "Okay man" },
+      { at: LATER, kind: "usage", input_tokens: 1859, output_tokens: 4 },
+      { at: LATER, kind: "delta", text: "2" },
+      {
+        at: LATER,
+        kind: "message",
+        role: "assistant",
+        blocks: [{ type: "text", text: "Okay man2" }],
+      },
+    ]);
+    expect(items.filter((item) => item.kind === "message")).toHaveLength(1);
+    expect(items.some((item) => item.kind === "stream")).toBe(false);
+    expect(items[0]).toMatchObject({ kind: "message", role: "assistant" });
+  });
+
+  it("skips whitespace streams when matching a completed reply", () => {
+    const items = foldTranscript([
+      { at: AT, kind: "delta", text: "Okay man" },
+      { at: LATER, kind: "usage", input_tokens: 10, output_tokens: 2 },
+      { at: LATER, kind: "delta", text: "  " },
+      {
+        at: LATER,
+        kind: "message",
+        role: "assistant",
+        blocks: [{ type: "text", text: "Okay man" }],
+      },
+    ]);
+    expect(items.filter((item) => item.kind === "message")).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "message", role: "assistant" });
   });
 
   it("keeps a partial reply when the stream was cancelled", () => {
@@ -163,6 +215,75 @@ describe("foldTranscript", () => {
     ]);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "notice", tone: "error", text: "agent exited" });
+  });
+
+  it("puts one footer on the last assistant prose of a finished turn", () => {
+    const items = foldTranscript([
+      {
+        at: AT,
+        kind: "message",
+        role: "user",
+        blocks: [{ type: "text", text: "Fix the build." }],
+      },
+      {
+        at: LATER,
+        kind: "message",
+        role: "assistant",
+        blocks: [{ type: "text", text: "Checking the types." }],
+      },
+      { at: LATER, kind: "tool_call", call_id: "call-1", name: "Read", title: "src/lib.rs" },
+      {
+        at: LATER,
+        kind: "tool_result",
+        call_id: "call-1",
+        status: "ok",
+        summary: "read",
+      },
+      {
+        at: LATER,
+        kind: "message",
+        role: "assistant",
+        blocks: [{ type: "text", text: "Fixed." }],
+      },
+    ]);
+    expect([...footerIndexes(items, false)]).toEqual([3]);
+    expect([...footerIndexes(items, true)]).toEqual([]);
+  });
+
+  it("keeps the footer after a user message closes a turn that was still running", () => {
+    const items = foldTranscript([
+      {
+        at: AT,
+        kind: "message",
+        role: "assistant",
+        blocks: [{ type: "text", text: "Still working." }],
+      },
+      {
+        at: LATER,
+        kind: "message",
+        role: "user",
+        blocks: [{ type: "text", text: "Stop and try this instead." }],
+      },
+      {
+        at: LATER,
+        kind: "message",
+        role: "assistant",
+        blocks: [{ type: "text", text: "Done." }],
+      },
+    ]);
+    expect([...footerIndexes(items, true)]).toEqual([0]);
+    expect([...footerIndexes(items, false)]).toEqual([0, 2]);
+  });
+
+  it("gives a cancelled partial reply the footer and ignores whitespace streams", () => {
+    const items = foldTranscript([
+      { at: AT, kind: "delta", text: "   " },
+      { at: LATER, kind: "tool_call", call_id: "call-1", name: "Read", title: "src/lib.rs" },
+      { at: LATER, kind: "delta", text: "Partial answer" },
+      { at: LATER, kind: "status", state: "idle" },
+    ]);
+    expect([...footerIndexes(items, false)]).toEqual([2]);
+    expect(items[2]).toMatchObject({ kind: "stream", text: "Partial answer" });
   });
 
   it("formats short and long durations", () => {
