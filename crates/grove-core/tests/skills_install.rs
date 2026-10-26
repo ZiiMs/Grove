@@ -362,6 +362,46 @@ async fn offline_install_reuses_the_cached_blobs() {
 }
 
 #[tokio::test]
+async fn removing_a_deleted_recorded_skill_only_clears_the_record() {
+    let (dir, paths) = temp_paths();
+    let server = MockServer::start().await;
+    mount_repo(&server, REPO, "main", pdf_tree()).await;
+    mount_skill(
+        &server,
+        REPO,
+        "skills/pdf",
+        &[("SKILL.md", SKILL_MD), ("scripts/render.py", "")],
+    )
+    .await;
+    let mut config = config(&server);
+    let home = dir.path().join("home");
+    config.home = Some(home.clone());
+    let service = service(paths, config);
+
+    let result = service
+        .install(request("skills/pdf", "user"))
+        .await
+        .expect("install");
+    let destination = home.join(".agents/skills/pdf");
+    assert_eq!(service.installs().expect("records").len(), 1);
+
+    // Simulate an external delete or a removed worktree: the record outlives the folder.
+    std::fs::remove_dir_all(&destination).unwrap();
+    service
+        .remove_skill(&result.path, None)
+        .expect("a stale record is cleared without touching the filesystem");
+    assert!(service.installs().expect("records").is_empty());
+    assert!(!destination.exists());
+
+    // An unrecorded path that is also missing remains a not-found error.
+    let missing = display_path(&home.join(".agents/skills/missing"));
+    let error = service
+        .remove_skill(&missing, None)
+        .expect_err("an unrecorded missing path is not a stale record");
+    assert!(matches!(error, SkillError::NotFound(_)));
+}
+
+#[tokio::test]
 async fn removing_an_installed_skill_deletes_its_folder_and_record() {
     let (dir, paths) = temp_paths();
     let server = MockServer::start().await;

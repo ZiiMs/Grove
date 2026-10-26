@@ -140,7 +140,7 @@ impl SkillService {
     /// The folder must be a direct child of a known `.agents/skills` target and must contain a
     /// `SKILL.md`; symlinked folders are refused. A recorded path from an older target keeps the
     /// narrower `<...>/skills/<name>` rule, so legacy installs remain removable without allowing an
-    /// arbitrary recursive delete.
+    /// arbitrary recursive delete. If a recorded folder is already gone, its record is cleared.
     pub fn remove_skill(&self, path: &str, project_root: Option<&Path>) -> Result<(), SkillError> {
         let folder = PathBuf::from(path);
         let parent = folder.parent().ok_or_else(|| {
@@ -152,8 +152,22 @@ impl SkillService {
             )));
         }
 
-        let metadata = std::fs::symlink_metadata(&folder)
-            .map_err(|_| SkillError::NotFound(format!("skill folder at {path}")))?;
+        let records = self.installs.list()?;
+        let recorded = records.iter().any(|record| record.path == path);
+
+        let metadata = match std::fs::symlink_metadata(&folder) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // An external delete or a removed worktree leaves only the record. Forgetting it is
+                // safe because there is nothing on disk to remove.
+                if recorded {
+                    self.installs.remove(path)?;
+                    return Ok(());
+                }
+                return Err(SkillError::NotFound(format!("skill folder at {path}")));
+            }
+            Err(error) => return Err(SkillError::Io(error)),
+        };
         if metadata.file_type().is_symlink() {
             return Err(SkillError::Invalid(format!(
                 "refusing to remove a symlinked skill: {path}"
@@ -176,8 +190,6 @@ impl SkillService {
                 .unwrap_or(false)
         });
 
-        let records = self.installs.list()?;
-        let recorded = records.iter().any(|record| record.path == path);
         if !in_target {
             let legacy = recorded
                 && parent
