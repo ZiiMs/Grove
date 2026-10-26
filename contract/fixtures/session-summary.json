@@ -8,7 +8,24 @@
   "model": "mock-1",
   "projectId": null,
   "status": "idle",
-  "subagents": [],
+  "subagents": [
+    {
+      "callId": "call_sub_1",
+      "description": "audit the store",
+      "status": "ok",
+      "summary": "subagent \"audit the store\" finished.\n\nThe store is consistent.",
+      "startedAt": "2025-01-01T00:00:00.000Z",
+      "finishedAt": "2025-01-01T00:00:05.000Z"
+    },
+    {
+      "callId": "call_sub_2",
+      "description": "check the tests",
+      "status": "running",
+      "summary": null,
+      "startedAt": "2025-01-01T00:00:06.000Z",
+      "finishedAt": null
+    }
+  ],
   "title": "Refactor the store",
   "updatedAt": "2025-01-01T00:00:05.000Z"
 }
