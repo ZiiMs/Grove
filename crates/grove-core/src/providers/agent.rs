@@ -14,6 +14,10 @@
 //! A turn is spawned rather than awaited inside [`AgentSession::send`], because the session manager
 //! serializes commands with a mutex: a turn that ran under that lock would make `cancel` unreachable.
 //! Turns are still serialized against each other by [`AgentSessionImpl::gate`].
+//!
+//! A `subagent` call nests a worker session inside `run_tool`: the worker's permission and question
+//! requests are re-emitted on the parent's stream under `sub-` ids, and only its final report goes
+//! back to the parent model.
 
 use super::credentials::Credentials;
 use super::wire::{
@@ -42,6 +46,8 @@ use tokio::task::JoinHandle;
 pub const MAX_STEPS: u32 = 24;
 /// How much of one tool result is kept when it is written to the transcript row.
 const TOOL_SUMMARY_CHARS: usize = 280;
+/// How much of a worker subagent's final report is handed back to the parent model.
+const SUBAGENT_REPORT_CHARS: usize = 100_000;
 /// How many events may queue for the pump before new ones are dropped. A transcript row lost to a
 /// full buffer is better than a turn that blocks on the writer.
 const EVENT_BUFFER: usize = 1024;
@@ -50,6 +56,13 @@ const EVENT_BUFFER: usize = 1024;
 #[derive(Deserialize)]
 struct AskUserInput {
     questions: Vec<Question>,
+}
+
+/// The model-facing shape of the `subagent` tool.
+#[derive(Deserialize)]
+struct SubagentInput {
+    description: String,
+    prompt: String,
 }
 
 /// One provider, as the registry holds it. The wire format decides the encoding, so one
@@ -180,6 +193,9 @@ pub struct AgentSessionImpl {
     gate: Arc<Mutex<()>>,
     turn: Option<JoinHandle<()>>,
     max_steps: u32,
+    /// The tools this conversation offers. The top-level agent gets everything; a worker gets the
+    /// same list minus `subagent`, so delegation cannot recurse.
+    tools: Vec<tools::ToolSpec>,
 }
 
 impl AgentSessionImpl {
@@ -213,6 +229,7 @@ impl AgentSessionImpl {
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps,
+            tools: tools::specs(),
         }
     }
 
@@ -225,26 +242,26 @@ impl AgentSessionImpl {
     async fn request_turn(&self) -> Result<TurnOutput, ProviderError> {
         let history = self.history.lock().await.clone();
         let thinking = *self.thinking.lock().await;
-        let specs = tools::specs();
+        let specs = &self.tools;
         let request =
             with_session_header(
                 match self.spec.wire {
                     Wire::Anthropic => {
                         let url = anthropic::endpoint(&self.spec);
                         authorize(self.http.post(url), self.spec.wire, &self.key).json(
-                            &anthropic::body(&self.model, &self.system, &history, &specs, thinking),
+                            &anthropic::body(&self.model, &self.system, &history, specs, thinking),
                         )
                     }
                     Wire::OpenAi => {
                         let url = openai::endpoint(&self.spec);
                         authorize(self.http.post(url), self.spec.wire, &self.key).json(
-                            &openai::body(&self.model, &self.system, &history, &specs, thinking),
+                            &openai::body(&self.model, &self.system, &history, specs, thinking),
                         )
                     }
                     Wire::Google => {
                         let url = google::endpoint(&self.spec, &self.model);
                         authorize(self.http.post(url), self.spec.wire, &self.key)
-                            .json(&google::body(&self.system, &history, &specs, thinking))
+                            .json(&google::body(&self.system, &history, specs, thinking))
                     }
                 },
                 catalog::transport(&self.spec.id).session_header,
@@ -427,7 +444,14 @@ impl AgentSessionImpl {
             allowed = decision == Decision::Approve;
         }
 
-        let outcome = tools::execute(&self.cwd, call, allowed).await;
+        let outcome = if name == "subagent" && self.tools.iter().any(|tool| tool.name == "subagent")
+        {
+            // The worker re-enters the runtime (`run_turn` -> `run_tool`), so the nested future is
+            // boxed to keep the async recursion finite.
+            Box::pin(self.subagent(&call_id, input)).await
+        } else {
+            tools::execute(&self.cwd, call, allowed).await
+        };
         if let Some(change) = &outcome.diff {
             self.emit(EventKind::Diff {
                 path: change.path.clone(),
@@ -499,6 +523,288 @@ impl AgentSessionImpl {
             state: SessionState::Idle,
         });
     }
+
+    /// Run one worker agent to completion and return its final report as this call's result.
+    ///
+    /// The worker shares the provider, model, key and project directory but starts a fresh
+    /// conversation. Its mutating calls still come back through this session's approval cards, and
+    /// its tool rows and diffs are forwarded so the work stays visible.
+    async fn subagent(&self, call_id: &str, input: &Value) -> tools::ToolOutcome {
+        let ask: SubagentInput = match serde_json::from_value(input.clone()) {
+            Ok(ask) => ask,
+            Err(error) => {
+                return tools::ToolOutcome::error(format!("invalid subagent input: {error}"))
+            }
+        };
+        let prompt = ask.prompt.trim();
+        if prompt.is_empty() {
+            return tools::ToolOutcome::error("subagent needs a non-empty prompt");
+        }
+        let description = ask.description.trim();
+        let label = if description.is_empty() {
+            "task"
+        } else {
+            description
+        };
+        let thinking = *self.thinking.lock().await;
+        let system = format!(
+            "{}\n\n## Worker subagent\n\
+             You are a worker subagent. Work only on the task in the next message. You have the \
+             project tools except `subagent`, so you cannot delegate again. Inspect before changing, \
+             follow the project's conventions, and verify what you change. Finish with a concise \
+             report: what you found or changed, where, and what you verified.\n",
+            self.system
+        );
+        let (worker, events) = self.worker_session(system, thinking);
+        worker.history.lock().await.push(Message::user(prompt));
+        match self.drive_worker(&worker, events, call_id).await {
+            Ok(report) => {
+                tools::ToolOutcome::ok(format!("subagent \"{label}\" finished.\n\n{report}"))
+            }
+            Err(error) => {
+                tools::ToolOutcome::error(format!("subagent \"{label}\" failed: {error}"))
+            }
+        }
+    }
+
+    /// A worker session: same dependencies and limits as this one, but a fresh conversation and the
+    /// no-recursion tool set. It gets its own event channel; the parent forwards what matters.
+    fn worker_session(
+        &self,
+        system: String,
+        thinking: ThinkingLevel,
+    ) -> (Self, mpsc::Receiver<SessionEvent>) {
+        let (tx, rx) = mpsc::channel(EVENT_BUFFER);
+        let session = Self {
+            spec: self.spec.clone(),
+            http: self.http.clone(),
+            key: self.key.clone(),
+            cwd: self.cwd.clone(),
+            model: self.model.clone(),
+            system,
+            // A fresh conversation gets its own gateway session key; the parent's transcript is not
+            // sent, so sharing the key would only mix two unrelated histories. A UUID keeps the
+            // header valid without embedding a provider-supplied id.
+            session_id: format!("{}-sub-{}", self.session_id, uuid::Uuid::new_v4()),
+            history: Arc::new(Mutex::new(Vec::new())),
+            events: None,
+            tx,
+            permits: Arc::new(Mutex::new(HashMap::new())),
+            questions: Arc::new(Mutex::new(HashMap::new())),
+            thinking: Arc::new(Mutex::new(thinking)),
+            gate: Arc::new(Mutex::new(())),
+            turn: None,
+            max_steps: self.max_steps,
+            tools: tools::worker_specs(),
+        };
+        (session, rx)
+    }
+
+    /// Drive the worker's turn while translating its events into the parent transcript. Requests for
+    /// approval or an answer are re-emitted under a `sub-` id and parked in the parent's maps, so the
+    /// UI answers them through the same commands as the parent's own cards.
+    async fn drive_worker(
+        &self,
+        worker: &AgentSessionImpl,
+        mut events: mpsc::Receiver<SessionEvent>,
+        call_id: &str,
+    ) -> Result<String, String> {
+        let prefix = format!("sub-{call_id}");
+        let mut errors: Vec<String> = Vec::new();
+        let turn = worker.run_turn();
+        tokio::pin!(turn);
+        loop {
+            tokio::select! {
+                _ = &mut turn => break,
+                event = events.recv() => {
+                    let Some(event) = event else { break };
+                    self.forward_worker_event(worker, &mut errors, event, &prefix, true)
+                        .await;
+                }
+            }
+        }
+        // The turn future can win the select with events still buffered. Nothing can be waiting on
+        // the user at this point (the turn could not have finished), so only rows are forwarded.
+        while let Ok(event) = events.try_recv() {
+            self.forward_worker_event(worker, &mut errors, event, &prefix, false)
+                .await;
+        }
+        let report = worker
+            .history
+            .lock()
+            .await
+            .iter()
+            .rev()
+            .find_map(|message| {
+                if message.role != MsgRole::Assistant {
+                    return None;
+                }
+                let text = message
+                    .blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        MsgBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!text.trim().is_empty()).then_some(text)
+            });
+        match report {
+            Some(report) => {
+                let mut report = cap_report(&report);
+                if !errors.is_empty() {
+                    report.push_str(&format!("\n\n[subagent warning: {}]", errors.join("; ")));
+                }
+                Ok(report)
+            }
+            None if errors.is_empty() => Err("the worker finished without a report".into()),
+            None => Err(errors.join("; ")),
+        }
+    }
+
+    async fn forward_worker_event(
+        &self,
+        worker: &AgentSessionImpl,
+        errors: &mut Vec<String>,
+        event: SessionEvent,
+        prefix: &str,
+        allow_requests: bool,
+    ) {
+        match event.kind {
+            EventKind::ToolCall {
+                call_id,
+                name,
+                title,
+            } => {
+                self.emit(EventKind::ToolCall {
+                    call_id: format!("{prefix}-{call_id}"),
+                    name,
+                    title: format!("subagent · {title}"),
+                });
+            }
+            EventKind::ToolResult {
+                call_id,
+                status,
+                summary,
+            } => {
+                self.emit(EventKind::ToolResult {
+                    call_id: format!("{prefix}-{call_id}"),
+                    status,
+                    summary,
+                });
+            }
+            EventKind::Diff {
+                path,
+                patch,
+                added,
+                removed,
+            } => {
+                self.emit(EventKind::Diff {
+                    path,
+                    patch,
+                    added,
+                    removed,
+                });
+            }
+            EventKind::Usage {
+                input_tokens,
+                output_tokens,
+            } => {
+                self.emit(EventKind::Usage {
+                    input_tokens,
+                    output_tokens,
+                });
+            }
+            EventKind::Error { message, .. } => errors.push(message),
+            EventKind::PermissionRequest {
+                request_id,
+                title,
+                detail,
+            } if allow_requests => {
+                let forwarded = format!("{prefix}-{request_id}");
+                let (sender, receiver) = oneshot::channel();
+                self.permits.lock().await.insert(forwarded.clone(), sender);
+                self.emit(EventKind::PermissionRequest {
+                    request_id: forwarded.clone(),
+                    title: format!("subagent · {title}"),
+                    detail: format!("A subagent is asking to run this.\n{detail}"),
+                });
+                let decision = receiver.await.unwrap_or(Decision::Deny);
+                self.permits.lock().await.remove(&forwarded);
+                self.emit(EventKind::PermissionResolved {
+                    request_id: forwarded,
+                    decision,
+                });
+                let _ = worker.answer_permission(&request_id, decision).await;
+            }
+            EventKind::QuestionRequest {
+                request_id,
+                questions,
+            } if allow_requests => {
+                let forwarded = format!("{prefix}-{request_id}");
+                let questions = questions
+                    .into_iter()
+                    .map(|mut question| {
+                        question.title = format!("Subagent: {}", question.title);
+                        question
+                    })
+                    .collect::<Vec<_>>();
+                let (sender, receiver) = oneshot::channel();
+                self.questions
+                    .lock()
+                    .await
+                    .insert(forwarded.clone(), sender);
+                self.emit(EventKind::QuestionRequest {
+                    request_id: forwarded.clone(),
+                    questions,
+                });
+                let answers = receiver.await.unwrap_or_default();
+                self.questions.lock().await.remove(&forwarded);
+                self.emit(EventKind::QuestionResolved {
+                    request_id: forwarded,
+                    answers: answers.clone(),
+                });
+                let _ = worker.answer_question(&request_id, answers).await;
+            }
+            _ => {}
+        }
+    }
+
+    async fn answer_permission(
+        &self,
+        request_id: &str,
+        decision: Decision,
+    ) -> Result<(), ProviderError> {
+        let sender = self.permits.lock().await.remove(request_id);
+        match sender {
+            Some(sender) => {
+                // The receiver being gone means the turn was cancelled; the answer is moot.
+                let _ = sender.send(decision);
+                Ok(())
+            }
+            None => Err(ProviderError::Other(format!(
+                "no tool approval is waiting under {request_id}"
+            ))),
+        }
+    }
+
+    async fn answer_question(
+        &self,
+        request_id: &str,
+        answers: Vec<QuestionAnswer>,
+    ) -> Result<(), ProviderError> {
+        let sender = self.questions.lock().await.remove(request_id);
+        match sender {
+            Some(sender) => {
+                let _ = sender.send(answers);
+                Ok(())
+            }
+            None => Err(ProviderError::Other(format!(
+                "no question is waiting under {request_id}"
+            ))),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -532,6 +838,7 @@ impl AgentSession for AgentSessionImpl {
         let thinking = Arc::clone(&self.thinking);
         let gate = Arc::clone(&self.gate);
         let max_steps = self.max_steps;
+        let tools = self.tools.clone();
         let turn = tokio::spawn(async move {
             let session = AgentSessionImpl {
                 spec,
@@ -550,6 +857,7 @@ impl AgentSession for AgentSessionImpl {
                 gate,
                 turn: None,
                 max_steps,
+                tools,
             };
             session.run_turn().await;
         });
@@ -563,17 +871,7 @@ impl AgentSession for AgentSessionImpl {
         request_id: &str,
         decision: Decision,
     ) -> Result<(), ProviderError> {
-        let sender = self.permits.lock().await.remove(request_id);
-        match sender {
-            Some(sender) => {
-                // The receiver being gone means the turn was cancelled; the answer is moot.
-                let _ = sender.send(decision);
-                Ok(())
-            }
-            None => Err(ProviderError::Other(format!(
-                "no tool approval is waiting under {request_id}"
-            ))),
-        }
+        self.answer_permission(request_id, decision).await
     }
 
     async fn respond_question(
@@ -581,16 +879,7 @@ impl AgentSession for AgentSessionImpl {
         request_id: &str,
         answers: Vec<QuestionAnswer>,
     ) -> Result<(), ProviderError> {
-        let sender = self.questions.lock().await.remove(request_id);
-        match sender {
-            Some(sender) => {
-                let _ = sender.send(answers);
-                Ok(())
-            }
-            None => Err(ProviderError::Other(format!(
-                "no question is waiting under {request_id}"
-            ))),
-        }
+        self.answer_question(request_id, answers).await
     }
 
     async fn set_thinking(&mut self, level: ThinkingLevel) -> Result<(), ProviderError> {
@@ -693,6 +982,20 @@ fn summarize(content: &str) -> String {
     }
     let kept: String = first.chars().take(TOOL_SUMMARY_CHARS).collect();
     format!("{kept}…")
+}
+
+/// Keep a worker's report from blowing the parent's context. The marker makes the cut explicit to the
+/// model instead of silently dropping the tail.
+fn cap_report(report: &str) -> String {
+    if report.chars().count() <= SUBAGENT_REPORT_CHARS {
+        return report.to_string();
+    }
+    let kept: String = report.chars().take(SUBAGENT_REPORT_CHARS).collect();
+    format!(
+        "{kept}\n[truncated: {} of {} characters shown]",
+        SUBAGENT_REPORT_CHARS,
+        report.chars().count()
+    )
 }
 
 /// The system prompt: what the agent is, where it is, and what the user pinned to this session.
@@ -1078,5 +1381,233 @@ mod tests {
 
         let requests = server.received_requests().await.unwrap();
         assert!(requests[0].headers.get("x-opencode-session").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_subagent_runs_with_the_parents_approval_and_returns_its_report() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn sse(body: &str) -> ResponseTemplate {
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+
+        let server = MockServer::start().await;
+        // The parent delegates. Each response is used once, so the follow-up request (which still
+        // contains the earlier messages) cannot match an earlier step.
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("delegate the write"))
+            .respond_with(sse(
+                r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-sub","type":"function","function":{"name":"subagent","arguments":"{\"description\":\"write out.txt\",\"prompt\":\"WROTE-MARKER-PROMPT: write out.txt with hi.\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#,
+            ))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // The worker asks for a mutating tool; the parent must approve it.
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("WROTE-MARKER-PROMPT"))
+            .respond_with(sse(
+                r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-write","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"out.txt\",\"content\":\"hi\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#,
+            ))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // The worker sees the write result and reports.
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("wrote out.txt"))
+            .respond_with(sse(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"WORKER-REPORT\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            ))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // The parent sees the worker's report and answers.
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("WORKER-REPORT"))
+            .respond_with(sse(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            ))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            dir.path().to_path_buf(),
+            "gpt-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "session-sub".into(),
+        );
+        let mut events = session.take_events();
+        session
+            .send(UserInput::text("delegate the write"))
+            .await
+            .unwrap();
+
+        let mut approvals = 0;
+        let mut worker_row = false;
+        loop {
+            let event = events.recv().await.expect("an event");
+            match event.kind {
+                EventKind::ToolCall { title, .. } if title.starts_with("subagent · write_file") => {
+                    worker_row = true;
+                }
+                EventKind::PermissionRequest {
+                    request_id, title, ..
+                } => {
+                    assert!(title.starts_with("subagent · "), "{title}");
+                    approvals += 1;
+                    session
+                        .respond_permission(&request_id, Decision::Approve)
+                        .await
+                        .unwrap();
+                }
+                EventKind::Status {
+                    state: SessionState::Idle,
+                } => break,
+                EventKind::Error { message, .. } => panic!("unexpected error: {message}"),
+                _ => {}
+            }
+        }
+        assert_eq!(approvals, 1, "the worker's write asked exactly once");
+        assert!(worker_row, "the worker's tool call is forwarded");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "hi"
+        );
+
+        // The parent was offered `subagent`; the worker's request was not, so it cannot recurse.
+        let requests = server.received_requests().await.unwrap();
+        let parent_body = String::from_utf8_lossy(&requests[0].body);
+        assert!(
+            parent_body.contains("\"name\":\"subagent\""),
+            "the parent is offered the subagent tool"
+        );
+        let worker_body = requests
+            .iter()
+            .map(|request| String::from_utf8_lossy(&request.body))
+            .find(|body| body.contains("WROTE-MARKER-PROMPT"))
+            .expect("the worker's first request");
+        assert!(
+            !worker_body.contains("\"name\":\"subagent\""),
+            "the worker cannot delegate again"
+        );
+
+        let history = session.history.lock().await;
+        let final_text = history.iter().rev().find_map(|message| {
+            if message.role != MsgRole::Assistant {
+                return None;
+            }
+            let text = message
+                .blocks
+                .iter()
+                .filter_map(|block| match block {
+                    MsgBlock::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.is_empty()).then_some(text)
+        });
+        assert_eq!(final_text.as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
+    async fn a_workers_question_reaches_the_parent_and_the_answers_go_back() {
+        use crate::sessions::event::{QuestionChoice, QuestionOption};
+
+        let mut parent = AgentSessionImpl::new(
+            catalog::find("anthropic").unwrap(),
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "claude-sonnet-4-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "session-parent".into(),
+        );
+        let mut events = parent.take_events();
+        let (worker, _worker_events) = parent.worker_session("system".into(), ThinkingLevel::Off);
+        // Park the worker's side of the question so the relay has somewhere to land.
+        let (sender, receiver) = oneshot::channel();
+        worker
+            .questions
+            .lock()
+            .await
+            .insert("question-call-1".into(), sender);
+
+        let event = SessionEvent::new(EventKind::QuestionRequest {
+            request_id: "question-call-1".into(),
+            questions: vec![Question {
+                id: "scope".into(),
+                title: "Which scope?".into(),
+                hint: String::new(),
+                multi: false,
+                other: true,
+                options: vec![QuestionOption {
+                    label: "Small".into(),
+                    description: String::new(),
+                }],
+            }],
+        });
+        let mut errors = Vec::new();
+        let forward = parent.forward_worker_event(&worker, &mut errors, event, "sub-call-1", true);
+        let respond = async {
+            let event = events.recv().await.expect("the forwarded question");
+            let request_id = match event.kind {
+                EventKind::QuestionRequest {
+                    request_id,
+                    questions,
+                } => {
+                    assert!(request_id.starts_with("sub-call-1-"), "{request_id}");
+                    assert_eq!(questions[0].title, "Subagent: Which scope?");
+                    request_id
+                }
+                other => panic!("expected a question_request, got {other:?}"),
+            };
+            let answers = vec![QuestionAnswer {
+                question_id: "scope".into(),
+                answers: vec![QuestionChoice {
+                    label: "Small".into(),
+                    note: None,
+                }],
+            }];
+            parent
+                .answer_question(&request_id, answers.clone())
+                .await
+                .unwrap();
+            answers
+        };
+        let (_, answers) = tokio::join!(forward, respond);
+
+        assert_eq!(
+            receiver.await.expect("the worker receives the answers"),
+            answers
+        );
+        let resolved = events.recv().await.expect("a question resolution");
+        assert!(matches!(resolved.kind, EventKind::QuestionResolved { .. }));
+        assert!(errors.is_empty());
     }
 }

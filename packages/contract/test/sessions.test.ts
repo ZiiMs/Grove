@@ -31,6 +31,32 @@ describe("session contract fixtures", () => {
     const parsed = sessionSummarySchema.parse(fixture("session-summary.json"));
     expect(parsed.id).toBe("session-1");
     expect(parsed.eventCount).toBe(12);
+    expect(parsed.subagents).toEqual([]);
+  });
+
+  it("a session summary carries its subagents, and a legacy row defaults to none", () => {
+    const base = fixture("session-summary.json") as Record<string, unknown>;
+    const parsed = sessionSummarySchema.parse({
+      ...base,
+      subagents: [
+        {
+          callId: "call-1",
+          description: "read the store",
+          status: "running",
+          summary: null,
+          startedAt: "2025-01-01T00:00:00.000Z",
+          finishedAt: null,
+        },
+      ],
+    });
+    expect(parsed.subagents[0]).toMatchObject({
+      callId: "call-1",
+      description: "read the store",
+      status: "running",
+    });
+
+    const { subagents: _omitted, ...legacy } = base;
+    expect(sessionSummarySchema.parse(legacy).subagents).toEqual([]);
   });
 
   it("session-detail.json carries a transcript of normalized events", () => {

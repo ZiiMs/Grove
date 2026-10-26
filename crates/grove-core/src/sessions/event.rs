@@ -264,6 +264,16 @@ pub enum ToolStatus {
     Cancelled,
 }
 
+impl ToolStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolStatus::Ok => "ok",
+            ToolStatus::Error => "error",
+            ToolStatus::Cancelled => "cancelled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {

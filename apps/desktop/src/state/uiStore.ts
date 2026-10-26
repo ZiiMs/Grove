@@ -21,6 +21,12 @@ export interface ToastMessage {
   tone: "ok" | "error";
 }
 
+/** The worker whose forwarded transcript is open in place of the parent session. */
+export interface SubagentSelection {
+  sessionId: string;
+  callId: string;
+}
+
 interface UiState {
   view: PaneView;
   setView: (view: PaneView) => void;
@@ -44,6 +50,9 @@ interface UiState {
   prSeed: PullRequestSeed | null;
   openPr: (seed?: PullRequestSeed) => void;
   closePr: () => void;
+  subagent: SubagentSelection | null;
+  openSubagent: (sessionId: string, callId: string) => void;
+  closeSubagent: () => void;
   toast: ToastMessage | null;
   notify: (message: string, tone?: "ok" | "error") => void;
   clearToast: () => void;
@@ -79,6 +88,9 @@ export const useUiStore = create<UiState>((set) => ({
   prSeed: null,
   openPr: (prSeed) => set({ prOpen: true, prSeed: prSeed ?? null }),
   closePr: () => set({ prOpen: false, prSeed: null }),
+  subagent: null,
+  openSubagent: (sessionId, callId) => set({ subagent: { sessionId, callId } }),
+  closeSubagent: () => set({ subagent: null }),
   toast: null,
   notify: (message, tone = "ok") => set({ toast: { message, tone } }),
   clearToast: () => set({ toast: null }),
@@ -93,6 +105,7 @@ export const useUiStore = create<UiState>((set) => ({
       diffPath: null,
       prOpen: false,
       prSeed: null,
+      subagent: null,
       toast: null,
     }),
 }));

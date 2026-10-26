@@ -298,7 +298,7 @@ function AssistantFoot({
   );
 }
 
-function TranscriptRow({
+export function TranscriptRow({
   item,
   footer,
   open,

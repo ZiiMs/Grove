@@ -2,7 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitWorktree, Project } from "@grove/contract";
+import type { GitWorktree, Project, SessionSummary } from "@grove/contract";
 import { NavTree } from "./NavTree";
 import { useSessionStore } from "../state/sessionStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
@@ -40,6 +40,7 @@ function renderTree(overrides: Partial<ComponentProps<typeof NavTree>> = {}) {
     onFilter: vi.fn(),
     activeId: "s1",
     onSelect: vi.fn(),
+    onSelectSubagent: vi.fn(),
     onNewSession: vi.fn(),
     onNewChat: vi.fn(),
     onAddProject: vi.fn(),
@@ -108,5 +109,30 @@ describe("NavTree", () => {
     const props = renderTree();
     await userEvent.click(screen.getByRole("button", { name: /OAuth device flow/ }));
     expect(props.onSelect).toHaveBeenCalledWith("s1");
+  });
+
+  it("shows subagents under their session and selects the parent", async () => {
+    const delegated: SessionSummary = {
+      ...fakeSummary(
+        fakeSession({ id: "s3", projectId: "p1", cwd: worktree.path, title: "Store audit" }),
+      ),
+      subagents: [
+        {
+          callId: "call-1",
+          description: "read the store",
+          status: "ok",
+          summary: "the report",
+          startedAt: "2025-01-01T00:00:00.000Z",
+          finishedAt: "2025-01-01T00:00:05.000Z",
+        },
+      ],
+    };
+    useSessionStore.setState({ sessions: [delegated], activeId: "s3" });
+    const props = renderTree({ activeId: "s3" });
+
+    expect(screen.getByText("read the store")).toBeInTheDocument();
+    expect(screen.getByTitle("1 subagent")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /read the store/ }));
+    expect(props.onSelectSubagent).toHaveBeenCalledWith("s3", "call-1");
   });
 });

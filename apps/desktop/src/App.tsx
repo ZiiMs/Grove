@@ -14,6 +14,7 @@ import { NavTree } from "./shell/NavTree";
 import { StatusBar } from "./shell/StatusBar";
 import { Titlebar } from "./shell/Titlebar";
 import { SessionPane } from "./session/SessionPane";
+import { SubagentPane } from "./session/SubagentPane";
 import { ContextPanel } from "./context/ContextPanel";
 import { SettingsModal } from "./settings/SettingsModal";
 import { NewSessionDialog } from "./dialogs/NewSessionDialog";
@@ -50,6 +51,9 @@ export default function App() {
   const openNewSession = useUiStore((state) => state.openNewSession);
   const openAddProject = useUiStore((state) => state.openAddProject);
   const openSettings = useUiStore((state) => state.openSettings);
+  const subagent = useUiStore((state) => state.subagent);
+  const openSubagent = useUiStore((state) => state.openSubagent);
+  const closeSubagent = useUiStore((state) => state.closeSubagent);
   const git = useContextStore((state) => state.git);
   const gitStats = useContextStore((state) => state.gitStats);
   const plan = useContextStore((state) => state.plan);
@@ -59,6 +63,7 @@ export default function App() {
   const applyPlan = useContextStore((state) => state.applyPlan);
   const [filter, setFilter] = useState("");
   const autoSelected = useRef(false);
+  const pendingSubagent = useRef<string | null>(null);
 
   const activeSummary = sessions.find((row) => row.id === activeId) ?? null;
   const activeProject = activeSummary ? projectForSession(activeSummary, projects) : null;
@@ -132,9 +137,30 @@ export default function App() {
   }, [activeProject, bridge, refreshProjectGit]);
 
   const onSelect = (id: string) => {
+    closeSubagent();
+    pendingSubagent.current = null;
     void select(bridge, id);
     setView("session");
   };
+
+  const onSelectSubagent = (sessionId: string, callId: string) => {
+    pendingSubagent.current = sessionId;
+    openSubagent(sessionId, callId);
+    if (activeId !== sessionId) void select(bridge, sessionId);
+    setView("session");
+  };
+
+  // A different active session means the worker view is stale. The pending guard keeps the view
+  // alive while the parent session is still being fetched.
+  useEffect(() => {
+    if (!subagent) return;
+    if (activeId === subagent.sessionId) {
+      pendingSubagent.current = null;
+      return;
+    }
+    if (pendingSubagent.current === subagent.sessionId) return;
+    closeSubagent();
+  }, [activeId, closeSubagent, subagent]);
 
   const onGit = () => {
     setContextTab("git");
@@ -202,17 +228,27 @@ export default function App() {
           onFilter={setFilter}
           activeId={activeId}
           onSelect={onSelect}
+          onSelectSubagent={onSelectSubagent}
           onNewSession={newSessionFor}
           onNewChat={() => newSessionFor(null, null)}
           onAddProject={openAddProject}
           onSettings={() => openSettings("general")}
         />
 
-        <SessionPane
-          active={view === "session"}
-          summary={activeSummary}
-          project={activeProject}
-        />
+        {subagent ? (
+          <SubagentPane
+            active={view === "session"}
+            sessionId={subagent.sessionId}
+            callId={subagent.callId}
+            onClose={closeSubagent}
+          />
+        ) : (
+          <SessionPane
+            active={view === "session"}
+            summary={activeSummary}
+            project={activeProject}
+          />
+        )}
 
         <ContextPanel
           active={view === "context"}

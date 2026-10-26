@@ -184,13 +184,24 @@ status busy → delta* → message(assistant) → tool_call → permission_reque
 ```
 
 - **Tools** (`providers/tools.rs`): `read_file`, `list_dir`, `grep`, `write_file`, `edit_file`,
-  `run_command`, `ask_user`. Paths resolve against the session's working directory; `..`, an absolute
-  path outside it, and a symlink escape are refused.
+  `run_command`, `ask_user`, `subagent`. Paths resolve against the session's working directory; `..`,
+  an absolute path outside it, and a symlink escape are refused.
 - **Approval** is a property of the tool name, not something the model can influence.
   `needs_approval` covers the three mutating tools; the runtime parks the call on a `oneshot` channel
   until `respond_permission` resolves it, and a denied call becomes an error tool result the model
   reads and adapts to. `ask_user` is a separate parked call: it emits `question_request`, renders as
   an inline card, and returns the structured answer as its tool result.
+- **Subagents are worker turns.** `subagent` starts another `AgentSessionImpl` with the same provider,
+  model, key, project directory and pinned context, but a fresh conversation and every tool except
+  `subagent`, so it cannot recurse. Its mutating calls still ask the parent's user: the worker's
+  `permission_request` and `question_request` are re-emitted on the parent's stream under `sub-` ids
+  and the answers are relayed back. Its tool rows and diffs are forwarded with the same prefix; its
+  deltas, messages, status and errors stay inside the worker. The parent receives one tool result: the
+  worker's final report, capped and marked when truncated. The pump records the call in `subagents`
+  (description, status, result summary), so the session tree lists the worker without reading the
+  transcript; selecting it opens a read-only view of the worker's forwarded rows, with its question
+  and approval cards still answerable. A turn that ends while a worker is still running closes it as
+  cancelled.
 - **The loop is bounded** by `maxSteps` (default 24, from `StartContext.config`), so a model that
   never converges stops and says so instead of spending indefinitely.
 - **Cancellation** aborts the turn task, denies every parked approval, resolves every parked question

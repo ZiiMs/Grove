@@ -529,6 +529,7 @@ fn session_summary_matches_fixture() {
     let sample = SessionSummary {
         session: sample_session(),
         event_count: 12,
+        subagents: Vec::new(),
     };
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),

@@ -60,6 +60,22 @@ pub struct Session {
     pub updated_at: String,
 }
 
+/// One `subagent` call in a session, as the tree shows it. The worker's conversation is ephemeral;
+/// this row is the durable trace of that it ran, what it was asked to do, and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentSummary {
+    /// The parent's tool-call id, which also prefixes the worker's forwarded transcript rows.
+    pub call_id: String,
+    pub description: String,
+    /// `running`, then the tool result's `ok`, `error` or `cancelled`.
+    pub status: String,
+    /// The stored tool-result summary; the full report is only in the parent model's context.
+    pub summary: Option<String>,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
 /// One row of the session list: the session plus the transcript size, so the list needs no join in
 /// the webview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +84,9 @@ pub struct SessionSummary {
     #[serde(flatten)]
     pub session: Session,
     pub event_count: u64,
+    /// Delegations started from this session, oldest first. Empty for a session that never used one.
+    #[serde(default)]
+    pub subagents: Vec<SubagentSummary>,
 }
 
 /// A session and its full transcript in sequence order. `session_resume` restarts it from the row.

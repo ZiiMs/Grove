@@ -217,7 +217,7 @@ export function fakeSession(overrides: Partial<Session> = {}): Session {
 }
 
 export function fakeSummary(session: Session = fakeSession(), eventCount = 0): SessionSummary {
-  return { ...session, eventCount };
+  return { ...session, eventCount, subagents: [] };
 }
 
 /**
@@ -406,7 +406,7 @@ export function createFakeBridge(
         });
         const detail: SessionDetail = { ...session, events: [] };
         details[session.id] = detail;
-        sessions.unshift({ ...session, eventCount: 0 });
+        sessions.unshift({ ...session, eventCount: 0, subagents: [] });
         return detail as CommandMap[K]["result"];
       }
       if (command === "session_send") {

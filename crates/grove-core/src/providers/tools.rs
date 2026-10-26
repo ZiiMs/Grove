@@ -1,12 +1,15 @@
 //! The tools the agent may call, and their sandbox.
 //!
-//! Every tool runs locally, in the session's working directory. A path is resolved against that
-//! directory and anything that escapes it (`..`, an absolute path elsewhere, a symlink pointing out)
-//! is refused: the agent works on the project the user opened and nothing else.
+//! Apart from `subagent`, every tool runs locally in the session's working directory. A path is
+//! resolved against that directory and anything that escapes it (`..`, an absolute path elsewhere, a
+//! symlink pointing out) is refused: the agent works on the project the user opened and nothing else.
 //!
-//! A link that points outside the project is refused even when its own path looks relative.\n//!\n//! Three tools change the machine — `write_file`, `edit_file` and `run_command` — and those need the
+//! A link that points outside the project is refused even when its own path looks relative.
+//!
+//! Three tools change the machine — `write_file`, `edit_file` and `run_command` — and those need the
 //! user's approval. The read-only ones do not, because asking about every `read_file` makes the
-//! approval cards noise the user learns to click through.
+//! approval cards noise the user learns to click through. `subagent` starts another session in the
+//! same project; its worker's mutating calls go through the same approval gate.
 
 use super::wire::MsgBlock;
 use serde::Serialize;
@@ -106,7 +109,28 @@ pub fn specs() -> Vec<ToolSpec> {
                 "required": ["questions"]
             }),
         },
+        ToolSpec {
+            name: "subagent",
+            description: "Delegate a self-contained task to a worker agent that has the same project \
+                          tools but a fresh conversation. The worker cannot delegate again. Use it \
+                          when a subtask would flood this conversation with exploration, or when it \
+                          can run independently; give it a complete brief because it cannot see this \
+                          conversation. Returns the worker's final report.",
+            input_schema: object(&[
+                ("description", "Short label for the task, shown in the transcript."),
+                ("prompt", "The complete task: goal, files to inspect, constraints, and what to report back."),
+            ]),
+        },
     ]
+}
+
+/// The tools a worker subagent may use: everything except `subagent`, so delegation cannot recurse.
+/// Its mutating calls still go through the parent session's approval cards.
+pub fn worker_specs() -> Vec<ToolSpec> {
+    specs()
+        .into_iter()
+        .filter(|spec| spec.name != "subagent")
+        .collect()
 }
 
 fn object(fields: &[(&str, &str)]) -> serde_json::Value {
@@ -130,7 +154,8 @@ fn object(fields: &[(&str, &str)]) -> serde_json::Value {
 /// Whether a tool mutates the machine and therefore needs approval before it runs.
 ///
 /// Deliberately a function of the name, not a flag the model can influence: the model cannot talk its
-/// way out of an approval.
+/// way out of an approval. `subagent` needs no approval of its own — it changes nothing directly, and
+/// every mutating call inside the worker asks separately.
 pub fn needs_approval(name: &str) -> bool {
     matches!(name, "write_file" | "edit_file" | "run_command")
 }
@@ -149,6 +174,10 @@ pub fn title(call: &MsgBlock) -> String {
             format!("{name} {}", str_arg(input, "path").unwrap_or_default())
         }
         "grep" => format!("grep {}", str_arg(input, "pattern").unwrap_or_default()),
+        "subagent" => format!(
+            "subagent · {}",
+            str_arg(input, "description").unwrap_or_default()
+        ),
         other => other.to_string(),
     }
 }
@@ -672,7 +701,16 @@ mod tests {
             );
         }
         let names: Vec<&str> = specs().iter().map(|spec| spec.name).collect();
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 8);
+    }
+
+    #[test]
+    fn a_subagent_cannot_delegate_again_and_never_needs_its_own_approval() {
+        assert!(!needs_approval("subagent"));
+        let worker: Vec<&str> = worker_specs().iter().map(|spec| spec.name).collect();
+        assert_eq!(worker.len(), 7);
+        assert!(!worker.contains(&"subagent"));
+        assert!(specs().iter().any(|spec| spec.name == "subagent"));
     }
 
     #[test]

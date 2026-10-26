@@ -169,6 +169,11 @@ fn parse_catalog(value: &Value) -> ThinkingMap {
 /// ladder), and `budget_tokens` adds the three budgets the wire encoders already map. Some models
 /// advertise several option kinds at once, so the sets are merged and sorted by [`ThinkingLevel`]'s
 /// declaration order rather than trusting the catalogue's ordering.
+///
+/// A budget model whose minimum is zero can be disabled explicitly, so it offers `None` instead of
+/// `Off`: `Off` omits the vendor field, which leaves a model that reasons by default still reasoning,
+/// while `None` is the zero budget the encoders send. A positive minimum keeps `Off`, since the
+/// vendor has no off state to request.
 fn model_levels(model: &Value) -> Vec<ThinkingLevel> {
     let reasoning = model
         .get("reasoning")
@@ -200,7 +205,14 @@ fn model_levels(model: &Value) -> Vec<ThinkingLevel> {
                 levels.insert(ThinkingLevel::High);
             }
             Some("budget_tokens") => {
-                levels.insert(ThinkingLevel::Off);
+                // A zero minimum is the vendor saying "budget 0 is a valid off switch". Omitting the
+                // field instead (what `Off` does) leaves a default-on model reasoning.
+                let can_turn_off = option.get("min").and_then(Value::as_f64) == Some(0.0);
+                levels.insert(if can_turn_off {
+                    ThinkingLevel::None
+                } else {
+                    ThinkingLevel::Off
+                });
                 levels.insert(ThinkingLevel::Low);
                 levels.insert(ThinkingLevel::Medium);
                 levels.insert(ThinkingLevel::High);
@@ -352,6 +364,59 @@ mod tests {
                 ThinkingLevel::Medium,
                 ThinkingLevel::High,
                 ThinkingLevel::XHigh,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_budget_model_with_a_zero_minimum_offers_an_explicit_off() {
+        let value = json!({
+            "google": {
+                "models": {
+                    "can-turn-off": {
+                        "reasoning": true,
+                        "reasoning_options": [{ "type": "budget_tokens", "min": 0, "max": 24576 }]
+                    },
+                    "has-a-floor": {
+                        "reasoning": true,
+                        "reasoning_options": [{ "type": "budget_tokens", "min": 128 }]
+                    },
+                    "unknown-floor": {
+                        "reasoning": true,
+                        "reasoning_options": [{ "type": "budget_tokens" }]
+                    }
+                }
+            }
+        });
+
+        let map = parse_catalog(&value);
+        // `none` is what the Google encoder turns into a zero budget; `off` would omit the config
+        // and let a default-on model keep reasoning.
+        assert_eq!(
+            levels(&map, "google", "can-turn-off"),
+            vec![
+                ThinkingLevel::None,
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
+            ]
+        );
+        assert_eq!(
+            levels(&map, "google", "has-a-floor"),
+            vec![
+                ThinkingLevel::Off,
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
+            ]
+        );
+        assert_eq!(
+            levels(&map, "google", "unknown-floor"),
+            vec![
+                ThinkingLevel::Off,
+                ThinkingLevel::Low,
+                ThinkingLevel::Medium,
+                ThinkingLevel::High,
             ]
         );
     }
