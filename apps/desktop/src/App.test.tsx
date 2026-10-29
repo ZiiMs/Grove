@@ -378,6 +378,7 @@ describe("redesigned shell", () => {
     await ready();
     const titlebar = document.querySelector(".titlebar") as HTMLElement;
     const panel = screen.getByRole("complementary", { name: "Session info" });
+    expect(document.getElementById("app")).toHaveAttribute("data-info", "open");
     expect(within(panel).getByText("Model")).toBeInTheDocument();
     expect(within(panel).getByText("Context")).toBeInTheDocument();
     expect(within(panel).getByText("Usage")).toBeInTheDocument();

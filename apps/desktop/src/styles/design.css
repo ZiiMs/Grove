@@ -1306,8 +1306,13 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .sh-pill.archived{color:var(--fg-2)}
 
 /* ---------- floating session info ---------- */
+/* The card floats, but its footprint is reserved as a third column so the centred chat sits
+   between the tree and the card instead of running underneath it. */
+.app[data-info="open"] .workspace{
+  grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) 312px;
+}
 .session-info{
-  position:fixed;z-index:34;top:98px;right:18px;bottom:40px;width:280px;
+  position:fixed;z-index:34;top:98px;right:32px;bottom:40px;width:280px;
   display:flex;flex-direction:column;min-height:0;overflow:hidden;
   background:color-mix(in srgb, var(--panel) 86%, transparent);
   -webkit-backdrop-filter:blur(18px) saturate(1.06);backdrop-filter:blur(18px) saturate(1.06);
@@ -1339,6 +1344,16 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .si-sub-status{font-size:10px;color:var(--fg-3);font-family:var(--mono)}
 .si-add{color:var(--jade)}
 .si-del{color:var(--red)}
+@media (max-width:1279px){
+  .app[data-info="open"] .workspace,
+  .app[data-info="open"][data-ctx="closed"] .workspace{
+    grid-template-columns:var(--nav) minmax(0,1fr) 312px;
+  }
+}
 @media (max-width:899px){
+  .app[data-info="open"] .workspace,
+  .app[data-info="open"][data-ctx="closed"] .workspace{
+    grid-template-columns:minmax(0,1fr);
+  }
   .session-info{top:138px;left:12px;right:12px;bottom:38px;width:auto;z-index:39}
 }

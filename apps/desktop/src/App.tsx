@@ -220,7 +220,12 @@ export default function App() {
   );
 
   return (
-    <div className="app" id="app" data-ctx={contextOpen ? "open" : "closed"}>
+    <div
+      className="app"
+      id="app"
+      data-ctx={contextOpen ? "open" : "closed"}
+      data-info={infoVisible ? "open" : "closed"}
+    >
       <Titlebar
         project={activeProject}
         session={detail}
