@@ -74,7 +74,7 @@
   --r-sm:max(0px, calc(var(--t-r) - 2px));
   --r:var(--t-r);
   --r-lg:calc(var(--t-r) + 2px);
-  --nav:272px; --ctx:304px;
+  --nav:300px; --ctx:304px;
   --chat-max:730px;
   --mono:var(--t-font-mono);
   --sans:var(--t-font-body);
