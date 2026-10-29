@@ -220,6 +220,12 @@ function applySessionRow(
   };
 }
 
+/** Remove one session's queued messages without disturbing the other tabs' queues. */
+function dropQueue(queues: Record<string, string[]>, id: string): Record<string, string[]> {
+  const { [id]: _removed, ...rest } = queues;
+  return rest;
+}
+
 /**
  * Fold a subagent tool call/result into the tree rows. A worker's forwarded rows use a prefixed
  * call id, so only the parent's own `subagent` call opens a row and only its result closes one.
@@ -524,6 +530,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (!activeId) return;
     const queue = queues[activeId] ?? [];
     if (queue.length === 0) return;
+    if (detail?.archivedAt) return;
     if (
       detail &&
       (detail.awaiting || detail.status === "starting" || detail.status === "busy")
@@ -649,6 +656,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         sessions: state.sessions.map((row) =>
           row.id === id ? { ...row, model: detail.model, updatedAt: detail.updatedAt } : row,
         ),
+        // The newer same-provider choice supersedes a cross-provider switch queued behind the turn.
+        pendingModel: state.pendingModel?.sessionId === id ? null : state.pendingModel,
       }));
       return true;
     } catch (error) {
@@ -688,11 +697,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   archive: async (bridge, id) => {
     set({ error: null });
+    // Archiving stops the agent, and the stop's `exited` event can arrive before the archive result.
+    // Drop the queue and the pending switch first so that event cannot auto-send into the session the
+    // user is archiving (a send would restore or resume it).
+    get().clearPendingModel(id);
+    set((state) => ({ queues: dropQueue(state.queues, id) }));
     try {
       const session = await bridge.invoke("session_archive", { id });
-      // An archived session will not go idle, so a queued model switch for it can never land.
+      // A message or switch queued while the command was in flight must not survive either.
       get().clearPendingModel(id);
-      set((state) => applySessionRow(state, session));
+      set((state) => ({
+        ...applySessionRow(state, session),
+        queues: dropQueue(state.queues, id),
+      }));
       return true;
     } catch (error) {
       set({ error: errorText(error) });

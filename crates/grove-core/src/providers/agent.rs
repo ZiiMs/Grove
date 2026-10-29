@@ -590,7 +590,6 @@ impl AgentSessionImpl {
             description
         };
         let thinking = *self.thinking.lock().await;
-        let permission = *self.permission.lock().await;
         let system = format!(
             "{}\n\n## Worker subagent\n\
              You are a worker subagent. Work only on the task in the next message. You have the \
@@ -599,7 +598,7 @@ impl AgentSessionImpl {
              report: what you found or changed, where, and what you verified.\n",
             self.system
         );
-        let (worker, events) = self.worker_session(system, thinking, permission);
+        let (worker, events) = self.worker_session(system, thinking);
         worker.history.lock().await.push(Message::user(prompt));
         match self.drive_worker(&worker, events, call_id).await {
             Ok(report) => {
@@ -612,12 +611,13 @@ impl AgentSessionImpl {
     }
 
     /// A worker session: same dependencies and limits as this one, but a fresh conversation and the
-    /// no-recursion tool set. It gets its own event channel; the parent forwards what matters.
+    /// no-recursion tool set. It gets its own event channel; the parent forwards what matters. The
+    /// permission mode is shared with the parent so tightening approval applies to the worker's next
+    /// tool call too.
     fn worker_session(
         &self,
         system: String,
         thinking: ThinkingLevel,
-        permission: PermissionMode,
     ) -> (Self, mpsc::Receiver<SessionEvent>) {
         let (tx, rx) = mpsc::channel(EVENT_BUFFER);
         let session = Self {
@@ -637,7 +637,7 @@ impl AgentSessionImpl {
             permits: Arc::new(Mutex::new(HashMap::new())),
             questions: Arc::new(Mutex::new(HashMap::new())),
             thinking: Arc::new(Mutex::new(thinking)),
-            permission: Arc::new(Mutex::new(permission)),
+            permission: Arc::clone(&self.permission),
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps: self.max_steps,
@@ -1998,6 +1998,86 @@ data: [DONE]
     }
 
     #[tokio::test]
+    async fn a_worker_sees_the_parents_live_permission_mode() {
+        let parent = AgentSessionImpl::new(
+            catalog::find("anthropic").unwrap(),
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "claude-sonnet-4-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "session-worker-permission".into(),
+        );
+        let (worker, _events) = parent.worker_session("system".into(), ThinkingLevel::Off);
+
+        assert!(Arc::ptr_eq(&parent.permission, &worker.permission));
+        *parent.permission.lock().await = PermissionMode::Full;
+        assert_eq!(*worker.permission.lock().await, PermissionMode::Full);
+        *parent.permission.lock().await = PermissionMode::Ask;
+        assert_eq!(*worker.permission.lock().await, PermissionMode::Ask);
+    }
+
+    #[tokio::test]
+    async fn a_worker_asks_when_the_parent_tightens_permission_mid_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = AgentSessionImpl::new(
+            catalog::find("anthropic").unwrap(),
+            reqwest::Client::new(),
+            "key".into(),
+            dir.path().to_path_buf(),
+            "claude-sonnet-4-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "session-worker-ask".into(),
+        );
+
+        // The worker starts under Full, then the user tightens the parent to Ask.
+        *parent.permission.lock().await = PermissionMode::Full;
+        let (worker, mut events) = parent.worker_session("system".into(), ThinkingLevel::Off);
+        *parent.permission.lock().await = PermissionMode::Ask;
+
+        let call = MsgBlock::ToolUse {
+            id: "call-write".into(),
+            name: "write_file".into(),
+            input: serde_json::json!({ "path": "out.txt", "content": "hi" }),
+        };
+        let permits = Arc::clone(&worker.permits);
+        let approve = async move {
+            loop {
+                if let Some(sender) = permits.lock().await.remove("perm-call-write") {
+                    let _ = sender.send(Decision::Approve);
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        let (result, _) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(worker.run_tool(&call), approve)
+        })
+        .await
+        .expect("the worker must ask after the parent tightens approval");
+
+        let MsgBlock::ToolResult { is_error, .. } = result else {
+            panic!("the tool should return a result");
+        };
+        assert!(!is_error, "the approved write should succeed");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "hi"
+        );
+        let mut asked = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event.kind, EventKind::PermissionRequest { .. }) {
+                asked = true;
+            }
+        }
+        assert!(asked, "the worker's next mutating call asked for approval");
+    }
+
+    #[tokio::test]
     async fn a_workers_question_reaches_the_parent_and_the_answers_go_back() {
         use crate::sessions::event::{QuestionChoice, QuestionOption};
 
@@ -2013,8 +2093,7 @@ data: [DONE]
             "session-parent".into(),
         );
         let mut events = parent.take_events();
-        let (worker, _worker_events) =
-            parent.worker_session("system".into(), ThinkingLevel::Off, PermissionMode::Ask);
+        let (worker, _worker_events) = parent.worker_session("system".into(), ThinkingLevel::Off);
         // Park the worker's side of the question so the relay has somewhere to land.
         let (sender, receiver) = oneshot::channel();
         worker

@@ -710,6 +710,41 @@ describe("redesigned shell", () => {
     expect(bridge.invocations).not.toContain("session_switch_provider");
   });
 
+  it("lets a newer same-provider choice supersede a queued cross-provider switch", async () => {
+    const bridge = await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /GPT-5 Mini/ }));
+    expect(
+      await screen.findByTitle(/Waiting for this turn to finish before switching to GPT-5 Mini/),
+    ).toBeInTheDocument();
+
+    // The user changes their mind and picks a model on the current provider. That hot swap must
+    // retire the older queued switch instead of letting it land at idle.
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /Opus 4.1/ }));
+    await waitFor(() => expect(bridge.invocations).toContain("session_set_model"));
+    expect(screen.queryByTitle(/Waiting for this turn to finish/)).not.toBeInTheDocument();
+
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: session.id,
+        payload: {
+          at: "2025-01-01T00:00:06.000Z",
+          kind: "permission_resolved",
+          request_id: "perm-1",
+          decision: "approve",
+        },
+      });
+      bridge.emitSessionEvent({
+        sessionId: session.id,
+        payload: { at: "2025-01-01T00:00:07.000Z", kind: "status", state: "idle" },
+      });
+    });
+
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+    expect(await screen.findByText("Session now runs on Anthropic · Opus 4.1")).toBeInTheDocument();
+  });
+
   it("opens settings on the requested tab and applies a theme", async () => {
     await ready();
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
@@ -1866,6 +1901,43 @@ describe("archive and delete", () => {
     expect(within(nav()).getByText("0 sessions · 0 awaiting you")).toBeInTheDocument();
     await userEvent.click(within(nav()).getByRole("button", { name: "Show archived sessions" }));
     expect(within(nav()).getByText("OAuth device flow")).toBeInTheDocument();
+  });
+
+  it("drops queued sends before archiving so the stop cannot restart the agent", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const busy = { ...session, status: "busy" as const, awaiting: false };
+    const bridge = renderApp({
+      sessions: [fakeSummary(busy, events.length)],
+      details: { [session.id]: { ...detail, status: "busy" as const, awaiting: false } },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    await userEvent.type(
+      screen.getByLabelText("Message the active session"),
+      "Do not send this after archiving",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Queue this message for the next turn" }));
+    expect(await screen.findByText("queued")).toBeInTheDocument();
+
+    fireEvent.contextMenu(treeRow("OAuth device flow"), { clientX: 120, clientY: 160 });
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Archive" }),
+    );
+    await waitFor(() => expect(bridge.invocations).toContain("session_archive"));
+    expect(useSessionStore.getState().queues[session.id] ?? []).toHaveLength(0);
+
+    // The core's stop path lands after the archive result; the shell must not flush the old queue.
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: session.id,
+        payload: { at: "2025-01-01T00:00:09.000Z", kind: "status", state: "exited" },
+      });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(bridge.invocations).not.toContain("session_send");
+    expect(bridge.invocations).not.toContain("session_restore");
+    expect(bridge.invocations).not.toContain("session_resume");
   });
 
   it("offers permanent delete only on an archived row, after a confirmation that names it", async () => {
