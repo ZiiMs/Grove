@@ -71,6 +71,7 @@ impl From<SessionError> for IpcError {
             }
             SessionError::NotRunning(_) => IpcError::unavailable(message),
             SessionError::Provider(ProviderError::Unavailable(_)) => IpcError::unavailable(message),
+            SessionError::Provider(ProviderError::Unsupported(_)) => IpcError::unavailable(message),
             SessionError::Provider(_) => IpcError::invalid(message),
             SessionError::Store(_) | SessionError::Io(_) => IpcError::io(message),
         }
@@ -415,6 +416,36 @@ impl SessionManager {
         let mut handle = live.commands.lock().await;
         handle.respond_question(request_id, answers).await?;
         Ok(())
+    }
+
+    /// Change the model for the next turn, and optionally the thinking level that goes with it.
+    ///
+    /// A live session keeps its process, its conversation and any parked permission: the agent only
+    /// swaps the model its next request names (and, when supplied, the level it asks for). A stopped
+    /// session just records the pair for the next resume. There is no transcript note; the composer's
+    /// toast is the feedback.
+    pub async fn set_model(
+        &self,
+        id: &str,
+        model: &str,
+        thinking: Option<ThinkingLevel>,
+    ) -> Result<SessionDetail, SessionError> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(SessionError::Invalid("model is empty".into()));
+        }
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        if let Some(live) = self.live.lock().await.get(id).cloned() {
+            let mut handle = live.commands.lock().await;
+            handle.set_model(model.to_string()).await?;
+            if let Some(level) = thinking {
+                handle.set_thinking(level).await?;
+            }
+        }
+        self.store.set_session_model(id, model, thinking)?;
+        self.get(id)
     }
 
     /// Change the reasoning level for the next turn. The setting is persisted in the session config,
@@ -840,6 +871,10 @@ mod tests {
         peak: Arc<AtomicUsize>,
         contexts: Arc<StdMutex<Vec<StartContext>>>,
         permissions: Arc<StdMutex<Vec<(String, Decision)>>>,
+        /// The models the manager assigned to the live handle, in order.
+        models: Arc<StdMutex<Vec<String>>>,
+        /// The thinking levels the manager assigned to the live handle, in order.
+        thinking: Arc<StdMutex<Vec<ThinkingLevel>>>,
         /// The outbound event channel of every started session, oldest first, so a test can park a
         /// permission or a question the way a real agent does mid-turn.
         events: Arc<StdMutex<Vec<mpsc::Sender<SessionEvent>>>>,
@@ -858,6 +893,8 @@ mod tests {
                 peak: Arc::new(AtomicUsize::new(0)),
                 contexts: Arc::new(StdMutex::new(Vec::new())),
                 permissions: Arc::new(StdMutex::new(Vec::new())),
+                models: Arc::new(StdMutex::new(Vec::new())),
+                thinking: Arc::new(StdMutex::new(Vec::new())),
                 events: Arc::new(StdMutex::new(Vec::new())),
                 ready: true,
             }
@@ -915,6 +952,8 @@ mod tests {
                 active: Arc::clone(&self.active),
                 peak: Arc::clone(&self.peak),
                 permissions: Arc::clone(&self.permissions),
+                models: Arc::clone(&self.models),
+                thinking: Arc::clone(&self.thinking),
             }))
         }
     }
@@ -925,6 +964,8 @@ mod tests {
         active: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
         permissions: Arc<StdMutex<Vec<(String, Decision)>>>,
+        models: Arc<StdMutex<Vec<String>>>,
+        thinking: Arc<StdMutex<Vec<ThinkingLevel>>>,
     }
 
     #[async_trait::async_trait]
@@ -960,8 +1001,14 @@ mod tests {
 
         async fn set_thinking(
             &mut self,
-            _level: crate::providers::ThinkingLevel,
+            level: crate::providers::ThinkingLevel,
         ) -> Result<(), ProviderError> {
+            lock(&self.thinking).push(level);
+            Ok(())
+        }
+
+        async fn set_model(&mut self, model: String) -> Result<(), ProviderError> {
+            lock(&self.models).push(model);
             Ok(())
         }
 
@@ -1276,6 +1323,151 @@ mod tests {
             manager.get(&session).unwrap().session.status,
             SessionState::Ready,
             "a resumed session accepts its next message"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_change_updates_the_live_agent_without_relaunching_it() {
+        let stub = StubProvider::new();
+        let models = Arc::clone(&stub.models);
+        let (manager, contexts) = manager_with(stub);
+        let session = create(&manager).await;
+        let before = manager.get(&session).unwrap().events.len();
+
+        let detail = manager
+            .set_model(&session, "claude-opus-4-1", None)
+            .await
+            .expect("the live agent accepts a model change");
+
+        assert_eq!(detail.session.model.as_deref(), Some("claude-opus-4-1"));
+        assert_eq!(*lock(&models), vec!["claude-opus-4-1".to_string()]);
+        assert_eq!(lock(&contexts).len(), 1, "a hot swap does not relaunch");
+        assert_eq!(detail.session.status, SessionState::Ready);
+        assert_eq!(
+            detail.events.len(),
+            before,
+            "a same-provider swap adds no transcript event"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_change_persists_the_model_and_thinking_together() {
+        let stub = StubProvider::new();
+        let models = Arc::clone(&stub.models);
+        let thinking = Arc::clone(&stub.thinking);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+
+        let detail = manager
+            .set_model(&session, "claude-opus-4-1", Some(ThinkingLevel::High))
+            .await
+            .expect("the pair is accepted");
+
+        assert_eq!(detail.session.model.as_deref(), Some("claude-opus-4-1"));
+        assert_eq!(detail.thinking_level, ThinkingLevel::High);
+        assert_eq!(*lock(&models), vec!["claude-opus-4-1".to_string()]);
+        assert_eq!(
+            *lock(&thinking),
+            vec![ThinkingLevel::High],
+            "the live agent gets the clamped level with the model"
+        );
+        let stored = manager.get(&session).unwrap();
+        assert_eq!(stored.session.model.as_deref(), Some("claude-opus-4-1"));
+        assert_eq!(stored.thinking_level, ThinkingLevel::High);
+    }
+
+    #[tokio::test]
+    async fn a_stopped_session_keeps_its_new_model_and_resumes_with_it() {
+        let (manager, contexts) = manager_with(StubProvider::new());
+        let session = create(&manager).await;
+        manager.close(&session).await.unwrap();
+
+        let stopped = manager
+            .set_model(&session, "claude-opus-4-1", Some(ThinkingLevel::Low))
+            .await
+            .expect("a stopped session can still choose its next model");
+        assert_eq!(stopped.session.status, SessionState::Exited);
+        assert_eq!(stopped.session.model.as_deref(), Some("claude-opus-4-1"));
+        assert_eq!(stopped.thinking_level, ThinkingLevel::Low);
+        assert_eq!(lock(&contexts).len(), 1, "nothing was launched");
+
+        manager.resume(&session).await.unwrap();
+        let launched = lock(&contexts);
+        assert_eq!(launched.len(), 2, "resume launches once");
+        assert_eq!(
+            launched[1].model.as_deref(),
+            Some("claude-opus-4-1"),
+            "the resumed agent starts on the chosen model"
+        );
+        assert_eq!(
+            launched[1].config["thinkingLevel"], "low",
+            "the chosen level resumes with the model"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hot_swap_during_a_parked_permission_does_not_strand_the_turn() {
+        // A hot swap leaves the running turn alone, so the parked permission stays answerable. The
+        // C5 stop path is still what clears `awaiting` when the session is actually stopped.
+        let stub = StubProvider::new();
+        let events = Arc::clone(&stub.events);
+        let permissions = Arc::clone(&stub.permissions);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+
+        latest_sink(&events)
+            .send(SessionEvent::new(EventKind::PermissionRequest {
+                request_id: "req-1".into(),
+                title: "cargo test".into(),
+                detail: "Runs the suite".into(),
+            }))
+            .await
+            .expect("the stub accepts the request");
+        wait_until_awaiting(&manager, &session).await;
+        let mut bus = manager.subscribe();
+
+        manager
+            .set_model(&session, "claude-opus-4-1", None)
+            .await
+            .expect("a hot swap during a parked permission is allowed");
+
+        assert!(
+            manager.get(&session).unwrap().session.awaiting,
+            "the parked turn is still waiting for the user"
+        );
+        assert!(
+            !saw_exited(&mut bus),
+            "a hot swap must not stop the agent out from under the parked request"
+        );
+        manager
+            .respond_permission(&session, "req-1", Decision::Approve)
+            .await
+            .expect("the answer still reaches the live agent");
+        assert_eq!(
+            *lock(&permissions),
+            vec![("req-1".to_string(), Decision::Approve)]
+        );
+
+        manager.close(&session).await.unwrap();
+        await_is_clear(&manager, &session);
+    }
+
+    #[tokio::test]
+    async fn an_empty_or_unknown_model_change_is_rejected() {
+        let manager = manager();
+        let session = create(&manager).await;
+
+        let empty = manager.set_model(&session, "   ", None).await.unwrap_err();
+        assert!(matches!(empty, SessionError::Invalid(_)));
+        let missing = manager
+            .set_model("missing", "claude-opus-4-1", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(missing, SessionError::NotFound(_)));
+        assert_eq!(
+            manager.get(&session).unwrap().session.model,
+            None,
+            "a rejected change leaves the row alone"
         );
     }
 
