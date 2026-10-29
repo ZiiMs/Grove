@@ -660,11 +660,23 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       // persisted rather than what was typed (the core may have trimmed it).
       set((state) => ({
         sessions: state.sessions.map((row) =>
-          row.id === id ? { ...row, title: session.title, updatedAt: session.updatedAt } : row,
+          row.id === id
+            ? {
+                ...row,
+                title: session.title,
+                titleSource: session.titleSource,
+                updatedAt: session.updatedAt,
+              }
+            : row,
         ),
         detail:
           state.detail?.id === id
-            ? { ...state.detail, title: session.title, updatedAt: session.updatedAt }
+            ? {
+                ...state.detail,
+                title: session.title,
+                titleSource: session.titleSource,
+                updatedAt: session.updatedAt,
+              }
             : state.detail,
       }));
       return null;
@@ -689,6 +701,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
               stopped
             ? false
             : null;
+      const title = event.kind === "title_changed" ? event.title : null;
+      const titleSource = event.kind === "title_changed" ? event.source : null;
       return {
         sessions: state.sessions.map((row) => {
           if (row.id !== sessionId) return row;
@@ -697,6 +711,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             ...row,
             status: status ?? row.status,
             awaiting: awaiting ?? row.awaiting,
+            title: title ?? row.title,
+            titleSource: titleSource ?? row.titleSource,
             eventCount: row.eventCount + 1,
             updatedAt: event.at,
             ...(subagents ? { subagents } : {}),
@@ -708,6 +724,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
                 ...state.detail,
                 status: status ?? state.detail.status,
                 awaiting: awaiting ?? state.detail.awaiting,
+                title: title ?? state.detail.title,
+                titleSource: titleSource ?? state.detail.titleSource,
                 updatedAt: event.at,
               }
             : state.detail,

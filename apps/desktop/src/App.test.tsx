@@ -529,8 +529,55 @@ describe("redesigned shell", () => {
     await screen.findByRole("heading", { name: "Add the session tabs" });
     expect(bridge.invocations).toContain("session_create");
     expect(bridge.calls.find((call) => call.command === "session_create")?.args).toMatchObject({
-      req: { config: { thinkingLevel: "off" } },
+      req: { title: "Add the session tabs", config: { thinkingLevel: "off" } },
     });
+    expect(useSessionStore.getState().detail?.titleSource).toBe("manual");
+  });
+
+  it("starts an auto-named session when the title is left blank", async () => {
+    const bridge = await ready();
+    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+    const title = screen.getByLabelText("What should this session work on?");
+    expect(title).toHaveAttribute("placeholder", "Auto from first message");
+    expect(
+      screen.getByText(/Leave blank to name this session from its first message/),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Start session" }));
+
+    await screen.findByRole("heading", { name: "New session" });
+    const request = bridge.calls.find((call) => call.command === "session_create")?.args as {
+      req: { title?: string | null };
+    };
+    expect(request.req.title ?? null).toBeNull();
+    expect(useSessionStore.getState().detail?.titleSource).toBe("auto");
+    expect(useSessionStore.getState().sessions[0].titleSource).toBe("auto");
+  });
+
+  it("patches the tree and the open header from title_changed", async () => {
+    const bridge = await ready();
+
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: session.id,
+        payload: {
+          at: "2025-01-01T00:00:06.000Z",
+          kind: "title_changed",
+          title: "OAuth flow polish",
+          source: "generated",
+        },
+      });
+    });
+
+    expect(
+      await screen.findByRole("heading", { name: "OAuth flow polish" }),
+    ).toBeInTheDocument();
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+    expect(within(nav).getByText("OAuth flow polish")).toBeInTheDocument();
+    expect(useSessionStore.getState().detail?.titleSource).toBe("generated");
+    expect(
+      useSessionStore.getState().sessions.find((row) => row.id === session.id)?.titleSource,
+    ).toBe("generated");
   });
 
   it("auto-resumes a stopped session when you send", async () => {
@@ -1496,6 +1543,10 @@ describe("session rename", () => {
     );
     expect(screen.getByRole("heading", { name: "Release notes" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "Session title" })).not.toBeInTheDocument();
+    expect(useSessionStore.getState().detail?.titleSource).toBe("manual");
+    expect(
+      useSessionStore.getState().sessions.find((entry) => entry.id === session.id)?.titleSource,
+    ).toBe("manual");
   });
 
   it("commits the edit on blur", async () => {
