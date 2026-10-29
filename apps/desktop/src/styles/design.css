@@ -601,7 +601,7 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 
 /* diff popup */
 dialog.diff-modal{width:min(1180px,calc(100vw - 44px));height:min(820px,calc(100dvh - 44px));max-width:none;max-height:none;
-  padding:0;overflow:hidden;border:1px solid var(--line-2);border-radius:12px;background:var(--panel);color:var(--fg);
+  padding:0;overflow:hidden;border:1px solid var(--line-2);border-radius:12px;background:color-mix(in srgb, var(--panel) 62%, transparent);color:var(--fg);
   box-shadow:0 30px 90px rgba(0,0,0,.55)}
 .dd-shell{display:flex;flex-direction:column;height:100%;min-height:0}
 .dd-head{display:flex;align-items:center;gap:9px;padding:11px 12px 11px 16px;border-bottom:1px solid var(--line);flex:none}
@@ -656,23 +656,17 @@ dialog.diff-modal{width:min(1180px,calc(100vw - 44px));height:min(820px,calc(100
 .sb-item{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--fg-3)}
 
 /* ---------- dialog ---------- */
+/* Every modal is a translucent glass panel over a blurred, undimmed app. */
 dialog{
   width:min(500px,calc(100vw - 30px));max-height:calc(100dvh - 40px);overflow:auto;
-  border:1px solid var(--line-2);border-radius:12px;background:var(--elev);color:var(--fg);
+  border:1px solid var(--line-2);border-radius:12px;color:var(--fg);
+  background:color-mix(in srgb, var(--elev) 58%, transparent);
+  -webkit-backdrop-filter:blur(20px) saturate(1.06);backdrop-filter:blur(20px) saturate(1.06);
   padding:18px 20px 20px;box-shadow:0 22px 70px rgba(0,0,0,.6);
 }
-dialog::backdrop{background:color-mix(in srgb, var(--bg) 78%, #000)}
-dialog.settings-modal::backdrop{
-  background:color-mix(in srgb, #000 38%, transparent);
-  -webkit-backdrop-filter:blur(2px);
-  backdrop-filter:blur(2px);
-}
-dialog.skill-install-dialog::backdrop,
-dialog.skill-source-dialog::backdrop,
-dialog.skill-uninstall-dialog::backdrop{
-  background:color-mix(in srgb, #000 30%, transparent);
-  -webkit-backdrop-filter:blur(2px);
-  backdrop-filter:blur(2px);
+dialog::backdrop{
+  background:transparent;
+  -webkit-backdrop-filter:blur(12px) saturate(1.02);backdrop-filter:blur(12px) saturate(1.02);
 }
 dialog.skill-install-dialog{overflow:visible}
 .dlg-head{display:flex;align-items:flex-start;gap:10px}
@@ -700,8 +694,7 @@ dialog.skill-install-dialog{overflow:visible}
 .git-detect-head{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--fg-2)}
 .git-detect-head .od-icon{color:var(--jade)}
 .git-none{font-size:11.5px;color:var(--fg-3);line-height:1.55;margin-top:13px;border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:10px}
-dialog.add-project-dialog{width:min(760px,calc(100vw - 32px));background:color-mix(in srgb, var(--elev) 88%, transparent);-webkit-backdrop-filter:blur(16px) saturate(1.1);backdrop-filter:blur(16px) saturate(1.1)}
-dialog.add-project-dialog::backdrop{background:color-mix(in srgb, var(--bg) 55%, #000);-webkit-backdrop-filter:blur(14px) saturate(1.05);backdrop-filter:blur(14px) saturate(1.05)}
+dialog.add-project-dialog{width:min(760px,calc(100vw - 32px))}
 .fp-address-row{display:flex;align-items:center;gap:8px;padding:9px 0 7px}
 .fp-address{flex:1;min-width:0;background:var(--sunken);border:1px solid var(--line-2);border-radius:var(--r);padding:7px 9px;font-family:var(--mono);font-size:11.5px;color:var(--fg)}
 .fp-address::placeholder{color:var(--fg-3)}
@@ -751,7 +744,7 @@ button.fp-crumb:hover{background:var(--sunken);color:var(--fg)}
 dialog.settings-modal{
   width:min(1120px,calc(100vw - 48px));height:min(800px,calc(100dvh - 48px));
   max-width:none;max-height:none;padding:0;overflow:hidden;
-  border-radius:14px;border:1px solid var(--line-2);background:var(--panel);color:var(--fg);
+  border-radius:14px;border:1px solid var(--line-2);background:color-mix(in srgb, var(--panel) 62%, transparent);color:var(--fg);
   box-shadow:0 28px 90px rgba(0,0,0,.62);
 }
 .sm-shell{display:flex;flex-direction:column;height:100%;min-height:0}
