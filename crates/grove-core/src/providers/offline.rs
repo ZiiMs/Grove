@@ -82,11 +82,18 @@ impl AgentProvider for OfflineProvider {
             .get("chunkDelayMs")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        let session = OfflineSession::new(ctx.cwd, ctx.resume_token.is_some(), delay);
+        let model = ctx
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| spec().default_model);
+        let session = OfflineSession::new(ctx.cwd, model, ctx.resume_token.is_some(), delay);
         session
             .emit(EventKind::SessionStarted {
                 provider: ID.to_string(),
-                model: Some(spec().default_model),
+                model: Some(session.model.clone()),
                 resumed: session.resumed,
             })
             .await;
@@ -101,6 +108,8 @@ impl AgentProvider for OfflineProvider {
 
 struct OfflineSession {
     cwd: PathBuf,
+    /// The model the next turn reports; a hot swap only changes this field.
+    model: String,
     resumed: bool,
     delay_ms: u64,
     events: Option<mpsc::Receiver<SessionEvent>>,
@@ -109,10 +118,11 @@ struct OfflineSession {
 }
 
 impl OfflineSession {
-    fn new(cwd: PathBuf, resumed: bool, delay_ms: u64) -> Self {
+    fn new(cwd: PathBuf, model: String, resumed: bool, delay_ms: u64) -> Self {
         let (tx, rx) = mpsc::channel(256);
         Self {
             cwd,
+            model,
             resumed,
             delay_ms,
             events: Some(rx),
@@ -225,6 +235,11 @@ impl AgentSession for OfflineSession {
         Ok(())
     }
 
+    async fn set_model(&mut self, model: String) -> Result<(), ProviderError> {
+        self.model = model;
+        Ok(())
+    }
+
     async fn cancel(&mut self) -> Result<(), ProviderError> {
         if let Some(turn) = self.turn.lock().await.take() {
             turn.abort();
@@ -259,6 +274,13 @@ mod tests {
         assert!(crate::providers::catalog::find(ID).is_none());
         assert_eq!(registry().len(), 1);
         assert_eq!(registry()[0].id(), ID);
+    }
+
+    #[tokio::test]
+    async fn changing_the_model_updates_the_offline_session() {
+        let mut session = OfflineSession::new(std::env::temp_dir(), "mock-1".into(), false, 0);
+        session.set_model("mock-2".into()).await.unwrap();
+        assert_eq!(session.model, "mock-2");
     }
 
     #[tokio::test]

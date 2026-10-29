@@ -296,6 +296,9 @@ pub enum ProviderError {
     Api(String),
     #[error("provider io: {0}")]
     Io(#[from] std::io::Error),
+    /// The provider (or its running session) cannot perform this operation.
+    #[error("unsupported: {0}")]
+    Unsupported(String),
     #[error("{0}")]
     Other(String),
 }
@@ -338,6 +341,15 @@ pub trait AgentProvider: Send + Sync {
 pub trait AgentSession: Send {
     fn take_events(&mut self) -> tokio::sync::mpsc::Receiver<SessionEvent>;
     async fn send(&mut self, input: UserInput) -> Result<(), ProviderError>;
+    /// Change the model used by the next turn. The running turn keeps the model it started with.
+    ///
+    /// Most providers can hot-swap a model because their wire client is stateless per turn; one that
+    /// cannot says so instead of pretending the change landed.
+    async fn set_model(&mut self, _model: String) -> Result<(), ProviderError> {
+        Err(ProviderError::Unsupported(
+            "this provider cannot change models mid-session".into(),
+        ))
+    }
     /// Answer a tool permission request. Until it is answered the tool call is parked.
     async fn respond_permission(
         &mut self,
@@ -366,7 +378,65 @@ pub trait AgentSession: Send {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalog, ThinkingLevel};
+    use super::{catalog, AgentSession as _, ThinkingLevel};
+
+    /// A session that implements only the required methods, so the default `set_model` is exercised.
+    struct PlainSession;
+
+    #[async_trait::async_trait]
+    impl super::AgentSession for PlainSession {
+        fn take_events(
+            &mut self,
+        ) -> tokio::sync::mpsc::Receiver<crate::sessions::event::SessionEvent> {
+            tokio::sync::mpsc::channel(1).1
+        }
+
+        async fn send(&mut self, _input: super::UserInput) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn respond_permission(
+            &mut self,
+            _request_id: &str,
+            _decision: crate::sessions::event::Decision,
+        ) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn respond_question(
+            &mut self,
+            _request_id: &str,
+            _answers: Vec<crate::sessions::event::QuestionAnswer>,
+        ) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn set_thinking(
+            &mut self,
+            _level: super::ThinkingLevel,
+        ) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn cancel(&mut self) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        fn resume_token(&self) -> Option<String> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_without_hot_swap_reports_unsupported() {
+        let mut session = PlainSession;
+        let error = session.set_model("another-model".into()).await.unwrap_err();
+        assert!(matches!(error, super::ProviderError::Unsupported(_)));
+    }
 
     #[test]
     fn thinking_levels_use_the_same_names_on_the_wire_as_in_the_config() {
