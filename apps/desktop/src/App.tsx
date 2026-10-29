@@ -29,6 +29,8 @@ import { Toast } from "./shell/Toast";
 import { Icon } from "./workspace/Icon";
 import { normalizePath, projectForSession, worktreeForSession } from "./workspace/tree";
 import { planProgress } from "./context/PlanPanel";
+import { providerMeta } from "./workspace/models";
+import { modelLabel } from "./workspace/modelLabel";
 
 /** The production shell: titlebar, tree, always-chat centre, context column, status bar. */
 export default function App() {
@@ -107,6 +109,20 @@ export default function App() {
         (event.state === "idle" || event.state === "ready" || event.state === "exited")
       ) {
         void useSessionStore.getState().flushQueue(bridge);
+        // A cross-provider model change queued behind a turn lands here, once the session is idle.
+        void useSessionStore
+          .getState()
+          .flushPendingModel(bridge)
+          .then((applied) => {
+            if (applied) {
+              notify(
+                `Session now runs on ${providerMeta(applied.provider).name} · ${modelLabel(
+                  applied.model,
+                  applied.provider,
+                )}`,
+              );
+            }
+          });
       }
     }).then(keep);
     void subscribeToGitChanged(bridge, (status) => {
@@ -122,7 +138,7 @@ export default function App() {
       active = false;
       stops.forEach((stop) => stop());
     };
-  }, [applyPlan, bridge, refreshGit, refreshSpecs]);
+  }, [applyPlan, bridge, notify, refreshGit, refreshSpecs]);
 
   // Restore the last conversation once the list and preferences are both here. An archived session
   // is not a launch target: it opens from the Archive section, on purpose.
