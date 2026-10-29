@@ -42,6 +42,9 @@ export default function App() {
   const loading = useSessionStore((state) => state.loading);
   const load = useSessionStore((state) => state.load);
   const select = useSessionStore((state) => state.select);
+  const archiveSession = useSessionStore((state) => state.archive);
+  const restoreSession = useSessionStore((state) => state.restore);
+  const deleteSession = useSessionStore((state) => state.deleteSession);
   const projects = useWorkspaceStore((state) => state.projects);
   const worktrees = useWorkspaceStore((state) => state.worktrees);
   const branchesByProject = useWorkspaceStore((state) => state.branches);
@@ -77,7 +80,8 @@ export default function App() {
   const activeWorktree = activeSummary ? worktreeForSession(activeSummary, activeWorktrees) : null;
   const branches = activeProject ? (branchesByProject[activeProject.id] ?? []) : [];
   const planStats = plan ? planProgress(plan.markdown) : { done: 0, total: 0 };
-  const awaiting = sessions.filter((row) => row.awaiting);
+  // Archived sessions are hidden from the tree; they must not summon the "needs you" badge either.
+  const awaiting = sessions.filter((row) => row.awaiting && !row.archivedAt);
 
   useEffect(() => {
     void loadWorkspace(bridge);
@@ -130,9 +134,11 @@ export default function App() {
     };
   }, [applyPlan, bridge, notify, refreshGit, refreshSpecs]);
 
-  // Restore the last conversation once the list and preferences are both here.
+  // Restore the last conversation once the list and preferences are both here. An archived session
+  // is not a launch target: it opens from the Archive section, on purpose.
   useEffect(() => {
-    if (autoSelected.current || loading || sessions.length === 0) return;
+    const restorable = sessions.filter((row) => !row.archivedAt);
+    if (autoSelected.current || loading || restorable.length === 0) return;
     autoSelected.current = true;
     if (!prefs.restoreSessions) return;
     let restore: string | null = null;
@@ -141,7 +147,8 @@ export default function App() {
     } catch {
       restore = null;
     }
-    const id = restore && sessions.some((row) => row.id === restore) ? restore : sessions[0].id;
+    const id =
+      restore && restorable.some((row) => row.id === restore) ? restore : restorable[0].id;
     void select(bridge, id);
     setContextTab("git");
   }, [bridge, loading, prefs.restoreSessions, select, sessions, setContextTab]);
@@ -185,29 +192,81 @@ export default function App() {
   };
 
   /**
-   * Session menu for this slice. Generate name and Archive land in later slices and prepend their
-   * entries here; the array is the whole surface, so nothing else has to change.
+   * Session menu. Generate name arrives in a later slice and prepends its entry here; the array is
+   * the whole surface, so nothing else has to change. Rename works on both sides of the archive;
+   * permanent delete exists only on an archived row, where Archive's action becomes Restore.
    */
-  const sessionMenuItems = (row: SessionSummary): MenuItem[] => [
-    {
-      kind: "item",
-      label: "Rename",
-      icon: "edit",
-      onSelect: () => useUiStore.getState().startRename(row.id),
-    },
-    {
-      kind: "item",
-      label: "Copy working directory",
-      icon: "copy",
-      onSelect: () => void copyWithToast(row.cwd, "Working directory copied"),
-    },
-    {
-      kind: "item",
-      label: "Reveal in Explorer",
-      icon: "folder",
-      onSelect: () => void revealPath(bridge, row.cwd, notify),
-    },
-  ];
+  const sessionMenuItems = (row: SessionSummary): MenuItem[] => {
+    const items: MenuItem[] = [
+      {
+        kind: "item",
+        label: "Rename",
+        icon: "edit",
+        onSelect: () => useUiStore.getState().startRename(row.id),
+      },
+    ];
+    if (row.archivedAt) {
+      items.push({
+        kind: "item",
+        label: "Restore",
+        icon: "restore",
+        onSelect: () => void restoreSession(bridge, row.id),
+      });
+    } else {
+      items.push({
+        kind: "item",
+        label: "Archive",
+        icon: "archive",
+        onSelect: () => {
+          const running = row.status !== "exited" && row.status !== "error";
+          const confirmed =
+            !running ||
+            window.confirm(
+              `Stop and archive "${row.title}"? The agent stops and the session moves to Archive.`,
+            );
+          if (!confirmed) return;
+          void archiveSession(bridge, row.id).then((ok) => {
+            if (ok) notify(`Archived ${row.title}`);
+          });
+        },
+      });
+    }
+    items.push(
+      {
+        kind: "item",
+        label: "Copy working directory",
+        icon: "copy",
+        onSelect: () => void copyWithToast(row.cwd, "Working directory copied"),
+      },
+      {
+        kind: "item",
+        label: "Reveal in Explorer",
+        icon: "folder",
+        onSelect: () => void revealPath(bridge, row.cwd, notify),
+      },
+    );
+    if (row.archivedAt) {
+      items.push(
+        { kind: "separator" },
+        {
+          kind: "item",
+          label: "Delete permanently",
+          icon: "trash",
+          danger: true,
+          onSelect: () => {
+            const confirmed = window.confirm(
+              `Delete "${row.title}" permanently? Its transcript, plan, pins and subagents are removed. This cannot be undone.`,
+            );
+            if (!confirmed) return;
+            void deleteSession(bridge, row.id).then((ok) => {
+              if (ok) notify(`Deleted ${row.title}`);
+            });
+          },
+        },
+      );
+    }
+    return items;
+  };
 
   const projectMenuItems = (project: Project): MenuItem[] => [
     {

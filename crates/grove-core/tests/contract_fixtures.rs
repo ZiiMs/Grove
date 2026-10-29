@@ -333,6 +333,7 @@ fn sample_session() -> Session {
         status: SessionState::Idle,
         project_id: None,
         awaiting: false,
+        archived_at: None,
         created_at: "2025-01-01T00:00:00.000Z".into(),
         updated_at: "2025-01-01T00:00:05.000Z".into(),
     }

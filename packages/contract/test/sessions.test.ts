@@ -25,6 +25,16 @@ describe("session contract fixtures", () => {
     expect(parsed.provider).toBe("mock");
     expect(parsed.status).toBe("idle");
     expect(parsed.createdAt).toBe("2025-01-01T00:00:00.000Z");
+    expect(parsed.archivedAt).toBeNull();
+  });
+
+  it("an archived session keeps a timestamp the tree can filter on", () => {
+    const base = fixture("session.json") as Record<string, unknown>;
+    const parsed = sessionSchema.parse({
+      ...base,
+      archivedAt: "2025-01-02T00:00:00.000Z",
+    });
+    expect(parsed.archivedAt).toBe("2025-01-02T00:00:00.000Z");
   });
 
   it("session-summary.json flattens the session, its count and its workers", () => {

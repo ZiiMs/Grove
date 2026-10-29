@@ -242,17 +242,28 @@ describe("session store cross-provider switches", () => {
     expect(bridge.invocations).not.toContain("session_switch_provider");
   });
 
-  it("clears a pending switch when its session is archived or deleted", () => {
+  it("clears a pending switch when its session is archived", async () => {
     const detail = baseSession({ status: "busy" });
+    const bridge = bridgeFor(detail);
     seed(detail);
-    useSessionStore.setState({
-      pendingModel: { sessionId: "s1", provider: "openai", model: "gpt-5-mini" },
-    });
+    await useSessionStore.getState().switchModel(bridge, "openai", "gpt-5-mini");
+    expect(useSessionStore.getState().pendingModel).not.toBeNull();
 
-    // The archive/delete actions call this; the seam exists before those actions land.
-    useSessionStore.getState().clearPendingModel("s1");
+    expect(await useSessionStore.getState().archive(bridge, "s1")).toBe(true);
 
     expect(useSessionStore.getState().pendingModel).toBeNull();
+  });
+
+  it("clears a pending switch when its session is deleted", async () => {
+    const detail = baseSession({ status: "busy" });
+    const bridge = bridgeFor(detail);
+    seed(detail);
+    await useSessionStore.getState().switchModel(bridge, "openai", "gpt-5-mini");
+
+    expect(await useSessionStore.getState().deleteSession(bridge, "s1")).toBe(true);
+
+    expect(useSessionStore.getState().pendingModel).toBeNull();
+    expect(useSessionStore.getState().sessions).toEqual([]);
   });
 });
 

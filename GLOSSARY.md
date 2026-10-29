@@ -97,6 +97,12 @@ live row `exited`, and `session_resume` relaunches the agent with the stored res
 of the conversation tail. Sending the next message resumes a stopped session automatically; the
 conversation survives a quit.
 
+## Archived session
+
+A session whose `sessions.archived_at` is set. It leaves the active tree and appears in the sidebar's
+Archive section, keeps its transcript, plan, pins and workers, and can be restored at any time. Only an
+archived session can be permanently deleted; archive itself is reversible soft state, never a delete.
+
 ## Spec graph
 
 The index of repo `.md` files whose frontmatter carries `id` + `type`, with `parent`, `depends-on`,

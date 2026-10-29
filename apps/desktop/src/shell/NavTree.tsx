@@ -202,11 +202,16 @@ function SessionTitleEditor({ session, active }: { session: SessionSummary; acti
 function SessionRow({
   session,
   active,
+  archived,
+  suffix,
   onSelect,
   onMenu,
 }: {
   session: SessionSummary;
   active: boolean;
+  archived?: boolean;
+  /** A quiet trailing label on archived rows: the project the session came from. */
+  suffix?: string | null;
   onSelect: (id: string) => void;
   onMenu?: (session: SessionSummary, anchor: MenuAnchor) => void;
 }) {
@@ -215,7 +220,7 @@ function SessionRow({
   const visual = sessionVisual(session);
   const subagents = session.subagents ?? [];
   return (
-    <div className="session-block">
+    <div className="session-block" data-archived={archived ? "true" : undefined}>
       {editing ? (
         <SessionTitleEditor session={session} active={active} />
       ) : (
@@ -223,6 +228,7 @@ function SessionRow({
           className="session-row"
           type="button"
           data-state={visual}
+          data-archived={archived ? "true" : undefined}
           aria-current={active ? "true" : undefined}
           onClick={() => {
             closeSubagent();
@@ -237,6 +243,7 @@ function SessionRow({
         >
           <span className="dot" data-state={visual} aria-hidden="true" />
           <span className="s-title">{session.title}</span>
+          {suffix ? <span className="s-suffix">{suffix}</span> : null}
           {subagents.length ? (
             <span
               className="subagent-count"
@@ -333,14 +340,25 @@ export function NavTree({
   const worktrees = useWorkspaceStore((state) => state.worktrees);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
+  // One list, two views: archive is a column on the row, so a session moves between the trees without
+  // being fetched again. The active tree never contains an archived row.
+  const activeSessions = useMemo(
+    () => sessions.filter((session) => !session.archivedAt),
+    [sessions],
+  );
+  const archivedSessions = useMemo(
+    () => sessions.filter((session) => session.archivedAt),
+    [sessions],
+  );
+
   const query = filter.trim().toLowerCase();
   const chats = useMemo(
     () =>
-      sessions.filter((session) => {
+      activeSessions.filter((session) => {
         const project = projectForSession(session, projects);
         return !project && matches(session, null, query);
       }),
-    [projects, query, sessions],
+    [activeSessions, projects, query],
   );
 
   const toggle = (id: string) => {
@@ -353,17 +371,22 @@ export function NavTree({
   };
 
   const isOpen = (id: string) => query.length > 0 || !collapsed.has(id);
-  const awaiting = sessions.filter((session) => session.awaiting).length;
-  const summary = `${sessions.length} session${sessions.length === 1 ? "" : "s"} · ${awaiting} awaiting you`;
+  const awaiting = activeSessions.filter((session) => session.awaiting).length;
+  const summary = `${activeSessions.length} session${activeSessions.length === 1 ? "" : "s"} · ${awaiting} awaiting you`;
 
   const projectSessions = (project: Project): SessionSummary[] =>
-    sessions.filter((session) => {
+    activeSessions.filter((session) => {
       const owner = projectForSession(session, projects);
       return owner?.id === project.id && matches(session, project, query);
     });
 
   const allProjectSessions = (project: Project): SessionSummary[] =>
-    sessions.filter((session) => projectForSession(session, projects)?.id === project.id);
+    activeSessions.filter((session) => projectForSession(session, projects)?.id === project.id);
+
+  const archivedShown = archivedSessions.filter((session) =>
+    matches(session, projectForSession(session, projects), query),
+  );
+  const showArchive = !query || archivedShown.length > 0;
 
   const renderProject = (project: Project) => {
     const all = allProjectSessions(project);
@@ -527,7 +550,11 @@ export function NavTree({
   };
 
   const chatsOpen = isOpen("chats");
-  const noMatches = query && chats.length === 0 && projects.every((project) => projectSessions(project).length === 0);
+  const noMatches =
+    query &&
+    chats.length === 0 &&
+    archivedShown.length === 0 &&
+    projects.every((project) => projectSessions(project).length === 0);
 
   return (
     <aside
@@ -598,6 +625,49 @@ export function NavTree({
           </div>
 
           {projects.map(renderProject)}
+
+          {showArchive ? (
+            <div className="tree-group archive-group">
+              <div className="row-line">
+                <Caret
+                  nodeId="archive"
+                  label="Toggle archive"
+                  expanded={isOpen("archive")}
+                  onToggle={toggle}
+                />
+                <button
+                  className="node-row is-root"
+                  type="button"
+                  aria-expanded={isOpen("archive")}
+                  aria-controls="kids-archive"
+                  onClick={() => toggle("archive")}
+                >
+                  <span className="node-ico">
+                    <Icon name="archive" size="sm" />
+                  </span>
+                  <span className="node-name">Archive</span>
+                  <span className="node-count">{archivedSessions.length}</span>
+                </button>
+              </div>
+              <div className="kids" id="kids-archive" hidden={!isOpen("archive")}>
+                {archivedShown.length ? (
+                  archivedShown.map((session) => (
+                    <SessionRow
+                      key={session.id}
+                      session={session}
+                      active={session.id === activeId}
+                      archived
+                      suffix={projectForSession(session, projects)?.name ?? "Chat"}
+                      onSelect={onSelect}
+                      onMenu={onSessionMenu}
+                    />
+                  ))
+                ) : (
+                  <p className="tree-empty">No archived sessions</p>
+                )}
+              </div>
+            </div>
+          ) : null}
 
           {noMatches ? (
             <p className="tree-empty" style={{ paddingLeft: 4 }}>

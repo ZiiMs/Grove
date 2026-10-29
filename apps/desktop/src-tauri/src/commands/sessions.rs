@@ -126,6 +126,24 @@ pub async fn session_close(state: tauri::State<'_, AppState>, id: String) -> Ipc
     Ok(state.core.sessions.close(&id).await?)
 }
 
+/// Hide a session from the active tree. A running agent is stopped first; the transcript stays.
+#[tauri::command]
+pub async fn session_archive(state: tauri::State<'_, AppState>, id: String) -> IpcResult<Session> {
+    Ok(state.core.sessions.archive(&id).await?)
+}
+
+/// Put an archived session back in the active tree. Its agent stays stopped until the next send.
+#[tauri::command]
+pub async fn session_restore(state: tauri::State<'_, AppState>, id: String) -> IpcResult<Session> {
+    Ok(state.core.sessions.restore(&id).await?)
+}
+
+/// Delete a session permanently, cascading its events, plan, pins and workers.
+#[tauri::command]
+pub async fn session_delete(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    Ok(state.core.sessions.delete(&id).await?)
+}
+
 #[tauri::command]
 pub async fn session_resume(state: tauri::State<'_, AppState>, id: String) -> IpcResult<Session> {
     let session = state.core.sessions.resume(&id).await?;

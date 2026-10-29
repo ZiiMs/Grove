@@ -99,6 +99,13 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M5.1 5.2l.6 7.3h4.6l.6-7.3" />
     </>
   ),
+  archive: (
+    <>
+      <path d="M2.9 4.4h10.2v2.2H2.9z" />
+      <path d="M3.8 6.6v5.6h8.4V6.6" />
+      <path d="M6.4 8.9h3.2" />
+    </>
+  ),
   check: <path d="M3.6 8.4 6.4 11.2 12.4 4.8" />,
   more: (
     <>

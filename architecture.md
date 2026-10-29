@@ -306,7 +306,7 @@ stale project and no service has to be rebuilt. `GROVE_PROJECT_ROOT` (else the p
 SQLite via `rusqlite` (`bundled`, no system dependency), one file at the Tauri app-data dir:
 `%APPDATA%/Grove/grove.db`. Migrations are an ordered `&[&str]` applied under
 `schema_migrations(version)`; later domains append rather than edit an earlier migration, so an
-existing install upgrades in place. Six migrations have shipped:
+existing install upgrades in place. Eight migrations have shipped:
 
 | # | Tables / columns | Feature |
 |---|---|---|
@@ -316,13 +316,15 @@ existing install upgrades in place. Six migrations have shipped:
 | 4 | `pins` | specs pinned to a session |
 | 5 | `projects`, `sessions.project_id`, `sessions.awaiting` | workspace tree and "needs you" |
 | 6 | `sessions.provider` (renamed from `harness`) | providers replace harnesses (ADR 0003) |
+| 7 | `subagents` (+ backfill from `tool_call`/`tool_result`) | durable delegated-worker trace |
+| 8 | `sessions.archived_at`, `sessions_by_archive` | archive, restore and permanent delete |
 
 ```sql
 projects(id TEXT PK, name TEXT UNIQUE, path TEXT UNIQUE, remote TEXT, default_branch TEXT,
          is_git INTEGER, created_at TEXT, updated_at TEXT)
 sessions(id TEXT PK, provider TEXT, cwd TEXT, model TEXT, title TEXT, status TEXT,
          adapter_config TEXT, resume_token TEXT, project_id TEXT REFERENCES projects(id),
-         awaiting INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT)
+         awaiting INTEGER NOT NULL DEFAULT 0, archived_at TEXT, created_at TEXT, updated_at TEXT)
 events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, at TEXT,
        kind TEXT, payload TEXT)                       -- payload = full EventKind JSON
 plans(session_id TEXT PK, markdown TEXT, version INTEGER, mirror_hash TEXT, updated_at TEXT)

@@ -118,6 +118,7 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
   const openSettings = useUiStore((state) => state.openSettings);
   const respondPermission = useSessionStore((state) => state.respondPermission);
   const respondQuestion = useSessionStore((state) => state.respondQuestion);
+  const restoreSession = useSessionStore((state) => state.restore);
   const error = useSessionStore((state) => state.error);
   const applyContext = useSessionStore((state) => state.applyContext);
   const notify = useUiStore((state) => state.notify);
@@ -134,6 +135,17 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
 
   const headerActions = (
     <div className="sh-right">
+      {detail?.archivedAt ? (
+        <button
+          className="btn-ghost sm"
+          type="button"
+          aria-label="Restore session"
+          title="Move this session back to the active tree"
+          onClick={() => void restoreSession(bridge, detail.id)}
+        >
+          Restore
+        </button>
+      ) : null}
       <button
         className="icon-btn"
         type="button"
@@ -161,6 +173,11 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
             <h1 className="sh-title" title={detail.title}>
               {detail.title}
             </h1>
+            {detail.archivedAt ? (
+              <span className="sh-pill archived" title="This session is archived">
+                Archived
+              </span>
+            ) : null}
             <span className="sh-state" data-state={visual}>
               <span className="dot" data-state={visual} aria-hidden="true" />
               <span className="sh-state-label">{SESSION_UI_STATE[visual]}</span>
