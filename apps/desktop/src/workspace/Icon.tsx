@@ -142,6 +142,20 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M12.6 10.8l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5z" />
     </>
   ),
+  brain: (
+    <>
+      <path d="M8 3.4C6.6 2.5 4.9 3.2 4.8 4.6c-1.3.2-2.2 1.4-1.8 2.6-1 .7-1 2.3 0 3.1 0 1.3 1.2 2.2 2.5 2.1.4.8 1.3 1.3 2.3 1.1" />
+      <path
+        d="M8 3.4C6.6 2.5 4.9 3.2 4.8 4.6c-1.3.2-2.2 1.4-1.8 2.6-1 .7-1 2.3 0 3.1 0 1.3 1.2 2.2 2.5 2.1.4.8 1.3 1.3 2.3 1.1"
+        transform="translate(16 0) scale(-1 1)"
+      />
+      <path d="M8 3.4v10.1" />
+      <path d="M5.2 6c.7.1 1.2.6 1.4 1.3" />
+      <path d="M4.3 9c.7.1 1.2.5 1.4 1.2" />
+      <path d="M5.2 6c.7.1 1.2.6 1.4 1.3" transform="translate(16 0) scale(-1 1)" />
+      <path d="M4.3 9c.7.1 1.2.5 1.4 1.2" transform="translate(16 0) scale(-1 1)" />
+    </>
+  ),
 };
 
 export type IconName = keyof typeof PATHS;

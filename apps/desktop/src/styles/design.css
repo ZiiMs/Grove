@@ -442,14 +442,6 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .field .combo-pop{width:100%;min-width:100%}
 .field .combo-list{max-height:240px}
 .combo-dialog .combo-list{max-height:160px}
-.composer-foot .combo{flex:none;max-width:260px}
-.composer-foot .combo-trigger{
-  width:auto;max-width:260px;background:var(--elev);
-  padding:4px 6px 4px 8px;font-size:12px;font-family:var(--mono);color:var(--fg-2);
-}
-.composer-foot .combo-thinking{max-width:190px}
-.composer-foot .combo-pop{width:min(360px,calc(100vw - 32px));min-width:0}
-.composer-foot .combo-thinking .combo-pop{width:190px}
 .btn-send{
   display:inline-flex;align-items:center;gap:6px;
   background:var(--jade);color:var(--jade-ink);font-weight:600;font-size:12.5px;
@@ -1120,7 +1112,6 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .session .composer-box{border-color:transparent;background:transparent;padding:6px 8px;border-radius:var(--r);box-shadow:none;transition:border-color var(--dur) var(--ease),background var(--dur) var(--ease)}
 .session .composer-box:focus-within{border-color:var(--line-2);background:var(--sunken);box-shadow:none}
 .session .composer-box textarea{font-size:14px;line-height:1.6;max-height:96px}
-.session .composer-foot .combo-trigger{font-size:10px;background:transparent;border-color:var(--line-2);color:var(--fg-3);padding:3px 6px}
 .session .empty{border:0;background:transparent;padding:24px 0}
 
 /* The session block sits after the shared responsive section, so its breakpoints live here to win
@@ -1196,3 +1187,27 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .qa .qv b{color:var(--fg);font-weight:600}
 .dismissed-card{display:flex;align-items:center;gap:8px;border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:10px 12px;font-size:11.5px;color:var(--amber);max-width:100%}
 .dismissed-card .btn-ghost{margin-left:auto}
+
+/* ---------- inline composer pickers ---------- */
+.composer-pickers{display:inline-flex;align-items:center;gap:4px}
+.inline-picker{display:inline-flex;align-items:center}
+.inline-picker .combo-trigger{
+  width:auto;background:transparent;border:0;padding:4px 6px;font-size:12px;color:var(--fg-3);
+}
+.inline-picker .combo-trigger:hover{background:var(--hover);color:var(--fg)}
+.inline-picker .combo-trigger[aria-expanded="true"]{background:var(--hover);color:var(--fg);box-shadow:none}
+.inline-picker + .inline-picker::before{content:"·";color:var(--fg-3);margin:0 2px}
+.inline-picker .combo-pop{width:min(340px,calc(100vw - 32px));min-width:0}
+.inline-picker.thinking-picker .combo-pop{width:190px}
+.combo-trigger-icon,.combo-option-icon{display:flex;flex:none;align-items:center;justify-content:center}
+.combo-option-icon{width:16px}
+.provider-glyph{display:block;flex:none}
+.combo-option:disabled{cursor:default;opacity:.45}
+.combo-option:disabled:hover{background:transparent;color:var(--fg-2)}
+.combo-footer{border-top:1px solid var(--line);padding:5px}
+.combo-footer-action{
+  width:100%;display:flex;align-items:center;gap:7px;text-align:left;
+  padding:6px 8px;border-radius:var(--r-sm);font-size:12px;color:var(--fg-2);
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
+}
+.combo-footer-action:hover{background:var(--elev);color:var(--fg)}
