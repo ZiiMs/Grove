@@ -1307,12 +1307,13 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 
 /* ---------- floating session info ---------- */
 /* The card floats, but its footprint is reserved as a third column so the centred chat sits
-   between the tree and the card instead of running underneath it. */
+   between the tree and the card instead of running underneath it. The column is 312px: 16px of
+   padding, the 280px card, 16px of padding. */
 .app[data-info="open"] .workspace{
   grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) 312px;
 }
 .session-info{
-  position:fixed;z-index:34;top:98px;right:32px;bottom:40px;width:280px;
+  position:fixed;z-index:34;top:98px;right:16px;bottom:40px;width:280px;
   display:flex;flex-direction:column;min-height:0;overflow:hidden;
   background:color-mix(in srgb, var(--panel) 86%, transparent);
   -webkit-backdrop-filter:blur(18px) saturate(1.06);backdrop-filter:blur(18px) saturate(1.06);
