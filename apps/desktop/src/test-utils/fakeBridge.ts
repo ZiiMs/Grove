@@ -240,6 +240,7 @@ export function fakeSession(overrides: Partial<Session> = {}): Session {
     status: "idle",
     projectId: null,
     awaiting: false,
+    archivedAt: null,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,
@@ -505,6 +506,41 @@ export function createFakeBridge(
       }
       if (command === "session_close") {
         setStatus((args as { id: string }).id, "exited");
+        return null as CommandMap[K]["result"];
+      }
+      if (command === "session_archive") {
+        const { id } = args as { id: string };
+        const row = sessions.find((session) => session.id === id);
+        const detail = details[id];
+        if (!row || !detail) throw new Error(`FakeBridge has no session: ${id}`);
+        const archivedAt = "2025-01-01T00:01:00.000Z";
+        row.archivedAt = archivedAt;
+        row.status = "exited";
+        row.awaiting = false;
+        detail.archivedAt = archivedAt;
+        detail.status = "exited";
+        detail.awaiting = false;
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return { ...session } as CommandMap[K]["result"];
+      }
+      if (command === "session_restore") {
+        const { id } = args as { id: string };
+        const row = sessions.find((session) => session.id === id);
+        const detail = details[id];
+        if (!row || !detail) throw new Error(`FakeBridge has no session: ${id}`);
+        row.archivedAt = null;
+        detail.archivedAt = null;
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return { ...session } as CommandMap[K]["result"];
+      }
+      if (command === "session_delete") {
+        const { id } = args as { id: string };
+        const index = sessions.findIndex((session) => session.id === id);
+        if (index === -1) throw new Error(`FakeBridge has no session: ${id}`);
+        sessions.splice(index, 1);
+        delete details[id];
+        delete plans[id];
+        delete pins[id];
         return null as CommandMap[K]["result"];
       }
       if (command === "session_resume") {

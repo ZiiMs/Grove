@@ -40,4 +40,10 @@ export interface SessionsCommands {
   session_set_thinking: { args: { id: string; level: ThinkingLevel }; result: SessionDetail };
   session_close: { args: { id: string }; result: null };
   session_resume: { args: { id: string }; result: Session };
+  /** Hide a session from the active tree; a running agent is stopped first. */
+  session_archive: { args: { id: string }; result: Session };
+  /** Put an archived session back in the active tree; its agent stays stopped until the next send. */
+  session_restore: { args: { id: string }; result: Session };
+  /** Remove a session and everything attached to it. Only offered from the Archive section. */
+  session_delete: { args: { id: string }; result: null };
 }
