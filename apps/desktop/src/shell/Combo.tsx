@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import { Icon } from "../workspace/Icon";
 
@@ -13,6 +14,10 @@ export interface ComboOption {
   value: string;
   label?: string;
   hint?: string;
+  /** Listed but unselectable: the keyboard skips it and the row renders dimmed. */
+  disabled?: boolean;
+  /** Leading glyph, hidden from the accessible name; the label still carries the meaning. */
+  icon?: ReactNode;
 }
 
 export interface ComboGroup {
@@ -31,12 +36,37 @@ interface ComboProps {
   disabled?: boolean;
   placement?: "up" | "down";
   className?: string;
+  /** Extra class on the trigger, for a compact or borderless presentation. */
+  triggerClassName?: string;
   title?: string;
   placeholder?: string;
+  /** Leading glyph on the trigger, such as the provider mark or the thinking brain. */
+  triggerIcon?: ReactNode;
+  /** Replaces the plain selected label on the trigger without changing the option text. */
+  renderTriggerValue?: (value: string) => ReactNode;
+  /** The trigger is a value chip, not an obvious dropdown: hide the caret. */
+  hideChevron?: boolean;
+  /** Rendered below the list, for an action such as opening provider settings. */
+  footer?: ReactNode;
 }
 
 function optionLabel(option: ComboOption): string {
   return option.label ?? option.value;
+}
+
+/** The nearest row at or after `from` in `step` direction that can be chosen, or -1. */
+function selectableFrom(options: ComboOption[], from: number, step: 1 | -1): number {
+  for (let index = from; index >= 0 && index < options.length; index += step) {
+    if (!options[index].disabled) return index;
+  }
+  return -1;
+}
+
+/** The active row, moved off a disabled one when the list changes under it. */
+function resolveActive(options: ComboOption[], active: number): number {
+  if (options[active] && !options[active].disabled) return active;
+  const after = selectableFrom(options, active, 1);
+  return after >= 0 ? after : selectableFrom(options, Math.min(active, options.length - 1), -1);
 }
 
 /**
@@ -54,8 +84,13 @@ export function Combo({
   disabled = false,
   placement = "down",
   className,
+  triggerClassName,
   title,
   placeholder = "Choose one",
+  triggerIcon,
+  renderTriggerValue,
+  hideChevron = false,
+  footer,
 }: ComboProps) {
   const generated = useId();
   const triggerId = id ?? `${generated}-trigger`;
@@ -106,8 +141,9 @@ export function Combo({
       .flatMap((group) => group.options)
       .find((option) => option.value === value) ?? null;
   const selectedLabel = selected ? optionLabel(selected) : value || placeholder;
+  const activeIndex = resolveActive(flatOptions, active);
   const activeId =
-    open && flatOptions[active] ? `${triggerId}-option-${active}` : undefined;
+    open && flatOptions[activeIndex] ? `${triggerId}-option-${activeIndex}` : undefined;
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -130,11 +166,10 @@ export function Combo({
   }, [open]);
 
   const openMenu = () => {
-    const current = baseGroups
-      .flatMap((group) => group.options)
-      .findIndex((option) => option.value === value);
+    const all = baseGroups.flatMap((group) => group.options);
+    const current = all.findIndex((option) => option.value === value);
     setSearch("");
-    setActive(current >= 0 ? current : 0);
+    setActive(resolveActive(all, current >= 0 ? current : 0));
     setOpen(true);
   };
 
@@ -152,21 +187,27 @@ export function Combo({
 
   const onMenuKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const typing = event.target instanceof HTMLInputElement;
+    const move = (delta: 1 | -1) => {
+      const next = selectableFrom(flatOptions, activeIndex + delta, delta);
+      if (next >= 0) setActive(next);
+    };
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActive((current) => Math.min(current + 1, Math.max(flatOptions.length - 1, 0)));
+      move(1);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActive((current) => Math.max(current - 1, 0));
+      move(-1);
     } else if (!typing && event.key === "Home") {
       event.preventDefault();
-      setActive(0);
+      const first = selectableFrom(flatOptions, 0, 1);
+      if (first >= 0) setActive(first);
     } else if (!typing && event.key === "End") {
       event.preventDefault();
-      setActive(Math.max(flatOptions.length - 1, 0));
+      const last = selectableFrom(flatOptions, flatOptions.length - 1, -1);
+      if (last >= 0) setActive(last);
     } else if (event.key === "Enter") {
-      const option = flatOptions[active];
-      if (option) {
+      const option = flatOptions[activeIndex];
+      if (option && !option.disabled) {
         event.preventDefault();
         choose(option);
       }
@@ -188,7 +229,7 @@ export function Combo({
     >
       <button
         ref={triggerRef}
-        className="combo-trigger"
+        className={["combo-trigger", triggerClassName ?? ""].filter(Boolean).join(" ")}
         id={triggerId}
         type="button"
         role="combobox"
@@ -214,10 +255,19 @@ export function Combo({
           }
         }}
       >
-        <span className="combo-value">{selectedLabel}</span>
-        <span className="combo-chevron" aria-hidden="true">
-          <Icon name="chevron" size="xs" />
+        {triggerIcon ? (
+          <span className="combo-trigger-icon" aria-hidden="true">
+            {triggerIcon}
+          </span>
+        ) : null}
+        <span className="combo-value">
+          {renderTriggerValue && value ? renderTriggerValue(value) : selectedLabel}
         </span>
+        {hideChevron ? null : (
+          <span className="combo-chevron" aria-hidden="true">
+            <Icon name="chevron" size="xs" />
+          </span>
+        )}
       </button>
 
       {open ? (
@@ -279,10 +329,18 @@ export function Combo({
                         type="button"
                         role="option"
                         aria-selected={selectedOption}
-                        data-active={index === active ? "true" : undefined}
-                        onMouseEnter={() => setActive(index)}
+                        data-active={index === activeIndex ? "true" : undefined}
+                        disabled={option.disabled}
+                        onMouseEnter={() => {
+                          if (!option.disabled) setActive(index);
+                        }}
                         onClick={() => choose(option)}
                       >
+                        {option.icon ? (
+                          <span className="combo-option-icon" aria-hidden="true">
+                            {option.icon}
+                          </span>
+                        ) : null}
                         <span className="combo-option-copy">
                           <span>{optionLabel(option)}</span>
                           {option.hint ? <span className="combo-option-hint">{option.hint}</span> : null}
@@ -295,6 +353,7 @@ export function Combo({
               ))
             )}
           </div>
+          {footer ? <div className="combo-footer">{footer}</div> : null}
         </div>
       ) : null}
     </div>
