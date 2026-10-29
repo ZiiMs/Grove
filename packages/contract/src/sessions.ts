@@ -24,6 +24,9 @@ export type SessionState = z.infer<typeof sessionStateSchema>;
 export const titleSourceSchema = z.enum(["auto", "generated", "manual"]);
 export type TitleSource = z.infer<typeof titleSourceSchema>;
 
+/** The longest title the core accepts and the tree row renders (`SESSION_TITLE_MAX_CHARS`). */
+export const SESSION_TITLE_MAX_CHARS = 80;
+
 export const roleSchema = z.enum(["user", "assistant", "system"]);
 export type Role = z.infer<typeof roleSchema>;
 

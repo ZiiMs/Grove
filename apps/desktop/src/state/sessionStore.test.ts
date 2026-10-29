@@ -229,6 +229,49 @@ describe("session store cross-provider switches", () => {
     expect(useSessionStore.getState().sessions[0].provider).toBe("openai");
   });
 
+  it("keeps a switch queued when the core answers conflict", async () => {
+    const detail = baseSession();
+    const switched = baseSession({ provider: "openai", model: "gpt-5-mini" });
+    const bridge = bridgeFor(detail);
+    let attempts = 0;
+    bridge.on("session_switch_provider", () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Promise.reject({
+          code: "conflict",
+          message: "session s1 is running a turn; switch providers when it is idle",
+        });
+      }
+      return switched;
+    });
+    seed(detail);
+
+    const landed = await useSessionStore
+      .getState()
+      .switchModel(bridge, "openai", "gpt-5-mini");
+
+    // The core refused because the turn was still running: the change must survive for the retry.
+    expect(landed).toBe(false);
+    expect(useSessionStore.getState().pendingModel).toEqual({
+      sessionId: "s1",
+      provider: "openai",
+      model: "gpt-5-mini",
+    });
+    expect(useSessionStore.getState().error).toBeNull();
+
+    useSessionStore.getState().applyEvent("s1", status("idle"));
+    const applied = await useSessionStore.getState().flushPendingModel(bridge);
+
+    expect(applied).toEqual({
+      sessionId: "s1",
+      provider: "openai",
+      model: "gpt-5-mini",
+    });
+    expect(bridge.invocations.filter((name) => name === "session_switch_provider")).toHaveLength(2);
+    expect(useSessionStore.getState().pendingModel).toBeNull();
+    expect(useSessionStore.getState().detail?.provider).toBe("openai");
+  });
+
   it("drops a queued switch when the session exits", async () => {
     const detail = baseSession({ status: "busy" });
     const bridge = bridgeFor(detail);

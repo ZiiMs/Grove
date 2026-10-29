@@ -5,6 +5,7 @@ import type {
   ProviderStatus,
   QuestionAnswer,
   ThinkingLevel,
+  Session,
   SessionContext,
   SessionDetail,
   SessionSummary,
@@ -14,7 +15,7 @@ import type {
 import { create } from "zustand";
 import type { StoreApi } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
-import { errorText } from "../ipc/errors";
+import { errorText, toCommandFailure } from "../ipc/errors";
 import type { ModelThinkingMap } from "../workspace/thinking";
 import { modelLabel } from "../workspace/modelLabel";
 import { providerMeta } from "../workspace/models";
@@ -138,12 +139,10 @@ export interface SessionStore extends SessionStoreData {
   /** Re-send the current pins and plan to the running agent, then show the new snapshot. */
   /** Returns whether the running agent accepted the refreshed snapshot. */
   refreshContext: (bridge: GroveBridge) => Promise<boolean>;
-  /** Re-launch the active session on another registered provider, keeping its transcript. */
-  switchProvider: (bridge: GroveBridge, provider: string, model?: string) => Promise<void>;
   /** Fetch the suggested title model for the providers (and live lists) currently known. */
   suggestTitleModel: (bridge: GroveBridge) => Promise<TitleModel | null>;
   /** Name a session with the global title model; overwrites any title, manual included. */
-  generateTitle: (bridge: GroveBridge, id: string) => Promise<boolean>;
+  generateTitle: (bridge: GroveBridge, id: string, force?: boolean) => Promise<boolean>;
   /**
    * The App session-event trigger: one automatic attempt per auto session per app run. A manual
    * title is never touched, and no model configured means no call at all.
@@ -198,6 +197,22 @@ const initial: SessionStoreData = {
 function summaryOf(detail: SessionDetail): SessionSummary {
   const { events, thinkingLevel: _thinkingLevel, ...session } = detail;
   return { ...session, eventCount: events.length, subagents: [] };
+}
+
+/**
+ * Fold one stored session row into the tree and, when it is the open tab, the header. All four row
+ * commands (archive, restore, rename, generate-title) return the same shape; spreading it keeps every
+ * field the core persisted instead of hand-listing the ones each action happens to change.
+ */
+function applySessionRow(
+  state: Pick<SessionStoreData, "sessions" | "detail">,
+  session: Session,
+): Pick<SessionStoreData, "sessions" | "detail"> {
+  return {
+    sessions: state.sessions.map((row) => (row.id === session.id ? { ...row, ...session } : row)),
+    detail:
+      state.detail?.id === session.id ? { ...state.detail, ...session } : state.detail,
+  };
 }
 
 /**
@@ -297,7 +312,7 @@ async function switchSession(
   bridge: GroveBridge,
   id: string,
   provider: string,
-  model?: string,
+  model: string,
 ): Promise<boolean> {
   set({ busy: true, error: null });
   try {
@@ -317,11 +332,22 @@ async function switchSession(
     }));
     return true;
   } catch (error) {
-    set((state) => ({
-      busy: false,
-      error: errorText(error),
-      pendingModel: state.pendingModel?.sessionId === id ? null : state.pendingModel,
-    }));
+    const failure = toCommandFailure(error);
+    // A conflict means the core refused because a turn is still running: the switch was never
+    // attempted, so keep it queued and let the idle boundary retry it. Any other failure is real.
+    set((state) =>
+      failure.code === "conflict"
+        ? {
+            busy: false,
+            error: null,
+            pendingModel: { sessionId: id, provider, model },
+          }
+        : {
+            busy: false,
+            error: errorText(error),
+            pendingModel: state.pendingModel?.sessionId === id ? null : state.pendingModel,
+          },
+    );
     return false;
   }
 }
@@ -644,11 +670,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const session = await bridge.invoke("session_archive", { id });
       // An archived session will not go idle, so a queued model switch for it can never land.
       get().clearPendingModel(id);
-      set((state) => ({
-        sessions: state.sessions.map((row) => (row.id === id ? { ...row, ...session } : row)),
-        detail:
-          state.detail?.id === id ? { ...state.detail, ...session } : state.detail,
-      }));
+      set((state) => applySessionRow(state, session));
       return true;
     } catch (error) {
       set({ error: errorText(error) });
@@ -660,11 +682,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({ error: null });
     try {
       const session = await bridge.invoke("session_restore", { id });
-      set((state) => ({
-        sessions: state.sessions.map((row) => (row.id === id ? { ...row, ...session } : row)),
-        detail:
-          state.detail?.id === id ? { ...state.detail, ...session } : state.detail,
-      }));
+      set((state) => applySessionRow(state, session));
       useUiStore.getState().notify("Session restored");
       return true;
     } catch (error) {
@@ -727,12 +745,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
-  switchProvider: async (bridge, provider, model) => {
-    const id = get().activeId;
-    if (!id) return;
-    await switchSession(set, bridge, id, provider, model);
-  },
-
   switchModel: async (bridge, provider, model) => {
     const { activeId: id, detail } = get();
     if (!id || !detail) return false;
@@ -784,27 +796,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const session = await bridge.invoke("session_rename", { id, title });
       // The command returns the stored row, so the tree and the open header show exactly what was
       // persisted rather than what was typed (the core may have trimmed it).
-      set((state) => ({
-        sessions: state.sessions.map((row) =>
-          row.id === id
-            ? {
-                ...row,
-                title: session.title,
-                titleSource: session.titleSource,
-                updatedAt: session.updatedAt,
-              }
-            : row,
-        ),
-        detail:
-          state.detail?.id === id
-            ? {
-                ...state.detail,
-                title: session.title,
-                titleSource: session.titleSource,
-                updatedAt: session.updatedAt,
-              }
-            : state.detail,
-      }));
+      set((state) => applySessionRow(state, session));
       return null;
     } catch (error) {
       return errorText(error);
@@ -826,7 +818,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
-  generateTitle: async (bridge, id) => {
+  generateTitle: async (bridge, id, force = true) => {
     if (get().titleJobs.has(id)) return false;
     const explicit = useWorkspaceStore.getState().prefs.titleModel;
     const model =
@@ -841,28 +833,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
     set((state) => ({ titleJobs: new Set(state.titleJobs).add(id) }));
     try {
-      const session = await bridge.invoke("session_generate_title", { id });
-      set((state) => ({
-        sessions: state.sessions.map((row) =>
-          row.id === id
-            ? {
-                ...row,
-                title: session.title,
-                titleSource: session.titleSource,
-                updatedAt: session.updatedAt,
-              }
-            : row,
-        ),
-        detail:
-          state.detail?.id === id
-            ? {
-                ...state.detail,
-                title: session.title,
-                titleSource: session.titleSource,
-                updatedAt: session.updatedAt,
-              }
-            : state.detail,
-      }));
+      const session = await bridge.invoke("session_generate_title", { id, force });
+      set((state) => applySessionRow(state, session));
       return true;
     } catch (error) {
       const provider =
@@ -885,6 +857,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   maybeGenerateTitle: async (bridge, id) => {
+    if (!useWorkspaceStore.getState().prefs.autoTitles) return;
     const row = get().sessions.find((session) => session.id === id);
     if (!row || row.titleSource !== "auto") return;
     if (get().titleAttempts.has(id)) return;
@@ -895,7 +868,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const suggestion = get().titleSuggest ?? (await get().suggestTitleModel(bridge));
       if (!suggestion) return;
     }
-    await get().generateTitle(bridge, id);
+    await get().generateTitle(bridge, id, false);
   },
 
   applyEvent: (sessionId, event) => {

@@ -1234,7 +1234,7 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .ctx-shortcut{flex:none;font-family:var(--mono);font-size:10px;color:var(--fg-3)}
 .ctx-sep{height:1px;margin:4px 6px;background:var(--line)}
 .session-block{position:relative}
-.session-block .session-row{padding-right:26px}
+.session-block .session-row{padding-right:44px}
 .session-actions{
   position:absolute;right:3px;top:3px;display:flex;gap:1px;
   opacity:0;transition:opacity var(--dur) var(--ease);
@@ -1263,6 +1263,14 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 
 /* ---------- archive and permanent delete (ticket C3/C4) ---------- */
 .archive-group{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.session-row .s-model{
+  flex:none;max-width:12ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:9.5px;color:var(--fg-3);opacity:.7;
+}
+.sh-model{
+  flex:none;max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10.5px;color:var(--fg-3);opacity:.8;
+}
 .session-row .s-suffix{
   flex:none;max-width:15ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-family:var(--mono);font-size:9.5px;color:var(--fg-3);opacity:.8;

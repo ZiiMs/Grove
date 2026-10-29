@@ -121,14 +121,16 @@ pub async fn session_set_model(
     Ok(state.core.sessions.set_model(&id, &model, thinking).await?)
 }
 
-/// Name a session with the global title model: one small call outside the agent loop. The stored
-/// title and its `generated` source come back on the row, and `title_changed` patches open views.
+/// Name a session with the global title model: one small call outside the agent loop. `force` is the
+/// explicit menu action; the automatic first-reply trigger passes false so it cannot overwrite a
+/// manual title. The stored title and source come back, and `title_changed` patches open views.
 #[tauri::command]
 pub async fn session_generate_title(
     state: tauri::State<'_, AppState>,
     id: String,
+    force: bool,
 ) -> IpcResult<Session> {
-    Ok(state.core.sessions.generate_title(&id).await?)
+    Ok(state.core.sessions.generate_title(&id, force).await?)
 }
 
 #[tauri::command]

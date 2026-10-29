@@ -41,9 +41,9 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
   const [model, setModel] = useState(prefs.defaultModel);
   const [thinking, setThinking] = useState<ThinkingLevel>(prefs.thinkingLevel);
   const [titleModel, setTitleModel] = useState<TitleModel | null>(prefs.titleModel);
-  // Off is a local view of "no explicit choice": the stored setting becomes null, while the
-  // suggestion keeps driving generation until the user picks a model.
-  const [titleOff, setTitleOff] = useState(false);
+  // Off is its own persisted switch: the title model may be null and still mean "use the
+  // suggestion", so a cleared model cannot express "never name a session".
+  const [titleOff, setTitleOff] = useState(!prefs.autoTitles);
   const [permission, setPermission] = useState<PermissionMode>(prefs.permissionMode);
   const [root, setRoot] = useState(prefs.worktreeRoot);
   const [restore, setRestore] = useState(prefs.restoreSessions);
@@ -54,7 +54,7 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
     setModel(prefs.defaultModel);
     setThinking(prefs.thinkingLevel);
     setTitleModel(prefs.titleModel);
-    if (prefs.titleModel) setTitleOff(false);
+    setTitleOff(!prefs.autoTitles);
     setPermission(prefs.permissionMode);
     setRoot(prefs.worktreeRoot);
     setRestore(prefs.restoreSessions);
@@ -128,7 +128,11 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
         permissionMode: permission,
         worktreeRoot: trimmed,
         restoreSessions: restore,
-        ...(titleChoice ? { titleModel: titleChoice } : { clearTitleModel: true }),
+        ...(titleOff
+          ? { autoTitles: false, clearTitleModel: true }
+          : titleChoice
+            ? { autoTitles: true, titleModel: titleChoice }
+            : { autoTitles: true }),
       });
       notify(`Settings saved — new sessions start on ${model}`);
       onSaved();
@@ -207,9 +211,11 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
             <p className="field-hint">
               {available.length === 0
                 ? "Add a provider key first."
-                : !titleModel && !titleOff && titleSuggest
-                  ? `Suggested: ${modelLabel(titleSuggest.model, titleSuggest.provider)} on ${providerMeta(titleSuggest.provider).name}. Save to make it your choice.`
-                  : "Runs after the first reply to name new sessions. One small call per session."}
+                : titleOff
+                  ? "No automatic names. You can still generate one from a session's menu."
+                  : !titleModel && titleSuggest
+                    ? `Suggested: ${modelLabel(titleSuggest.model, titleSuggest.provider)} on ${providerMeta(titleSuggest.provider).name}. Save to make it your choice.`
+                    : "Runs after the first reply to name new sessions. One small call per session."}
             </p>
           </div>
           <div className="field">

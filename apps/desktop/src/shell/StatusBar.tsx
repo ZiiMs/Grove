@@ -32,7 +32,7 @@ export function StatusBar({
   prefs,
 }: StatusBarProps) {
   const running = sessions.filter((row) => sessionVisual(row) === "running").length;
-  const waiting = sessions.filter((row) => row.awaiting).length;
+  const waiting = sessions.filter((row) => row.awaiting && !row.archivedAt).length;
   const failed = sessions.filter((row) => sessionVisual(row) === "failed").length;
   const bits = [`${running} running`, `${waiting} awaiting you`];
   if (failed) bits.push(`${failed} failed`);

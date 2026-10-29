@@ -56,7 +56,8 @@ import {
   footerIndexes,
   type TranscriptItem,
 } from "../session/transcript";
-import { copyText, revealPath } from "../shell/ContextMenu";
+import { copyText } from "../shell/clipboard";
+import { revealPath } from "../shell/reveal";
 
 const RECENT_MODELS_KEY = "grove.recentModels";
 const RECENT_LIMIT = 5;
@@ -173,6 +174,11 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
             <h1 className="sh-title" title={detail.title}>
               {detail.title}
             </h1>
+            {detail.model ? (
+              <span className="sh-model" title={detail.model}>
+                {modelLabel(detail.model, detail.provider)}
+              </span>
+            ) : null}
             {detail.archivedAt ? (
               <span className="sh-pill archived" title="This session is archived">
                 Archived

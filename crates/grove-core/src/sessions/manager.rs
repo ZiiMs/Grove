@@ -26,7 +26,9 @@ use crate::sessions::event::{
     SessionEvent, SessionState, TitleSource,
 };
 use crate::sessions::pump::{self, InjectedEvent, SessionBus};
-use crate::sessions::title::{sanitize_title, title_prompt, TITLE_MAX_TOKENS, TITLE_SYSTEM_PROMPT};
+use crate::sessions::title::{
+    first_message_title, sanitize_title, title_prompt, TITLE_MAX_TOKENS, TITLE_SYSTEM_PROMPT,
+};
 use crate::settings::{suggest_title_model, SettingsService, TitleModel};
 use crate::store::{Store, StoreError};
 use std::collections::{HashMap, HashSet};
@@ -94,9 +96,6 @@ pub const SESSION_TITLE_MAX_CHARS: usize = 80;
 /// A session created with no title keeps this until its first message arrives. It is deliberately a
 /// real title rather than an empty string: the tree, tabs and window need something to draw.
 pub const TEMPORARY_SESSION_TITLE: &str = "New session";
-
-/// How much of the first message becomes the placeholder title, before the ellipsis.
-pub const PLACEHOLDER_TITLE_MAX_CHARS: usize = 60;
 
 /// Owns every live session and the store they persist into. One instance per application.
 pub struct SessionManager {
@@ -558,7 +557,11 @@ impl SessionManager {
     ///
     /// Only one generation may run per session at a time: the second caller is refused rather than
     /// spending another provider call on the same transcript.
-    pub async fn generate_title(&self, id: &str) -> Result<Session, SessionError> {
+    ///
+    /// `force` separates the explicit "Generate name with AI" action from the automatic first-reply
+    /// trigger. A non-forced call never overwrites a manual title, including one typed while the
+    /// completion was already in flight, and it is silent when automatic naming is off.
+    pub async fn generate_title(&self, id: &str, force: bool) -> Result<Session, SessionError> {
         if self.store.session(id)?.is_none() {
             return Err(SessionError::NotFound(id.to_string()));
         }
@@ -570,13 +573,30 @@ impl SessionManager {
                 ));
             }
         }
-        let result = self.generate_title_inner(id).await;
+        let result = self.generate_title_inner(id, force).await;
         self.title_jobs.lock().await.remove(id);
         result
     }
 
-    async fn generate_title_inner(&self, id: &str) -> Result<Session, SessionError> {
-        let title_model = self.title_model()?;
+    async fn generate_title_inner(&self, id: &str, force: bool) -> Result<Session, SessionError> {
+        let before = self
+            .store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        // Nothing to do for an automatic attempt that meets a user-authored title, or when the user
+        // turned automatic naming off. Both leave the stored row exactly as it is.
+        if !force {
+            if before.title_source == TitleSource::Manual {
+                return Ok(before);
+            }
+            let settings = SettingsService::new(Arc::clone(&self.store))
+                .get()
+                .map_err(|error| SessionError::Invalid(error.to_string()))?;
+            if !settings.auto_titles {
+                return Ok(before);
+            }
+        }
+        let title_model = self.title_model(!force)?;
         let events = self.store.session_events(id)?;
         let user = message_text(&events, Role::User).ok_or_else(|| {
             SessionError::Invalid("session has no user message to name it from".into())
@@ -599,6 +619,15 @@ impl SessionManager {
         let title = sanitize_title(&answer).ok_or_else(|| {
             SessionError::Invalid("the title model returned an empty title".into())
         })?;
+        // The completion may have raced a rename. Re-read the row and leave a manual title alone,
+        // returning what the user just wrote rather than the generated answer.
+        let current = self
+            .store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))?;
+        if !force && current.title_source == TitleSource::Manual {
+            return Ok(current);
+        }
         self.record_title(id, &title, TitleSource::Generated)
             .await?;
         self.store
@@ -608,10 +637,18 @@ impl SessionManager {
 
     /// The explicit title model, else the suggested one. The suggestion is never persisted here:
     /// Settings shows it and the save persists whatever the form shows.
-    fn title_model(&self) -> Result<TitleModel, SessionError> {
+    ///
+    /// `automatic` is false for the explicit menu action: turning automatic names off must not make
+    /// the user's deliberate "Generate name with AI" fail.
+    fn title_model(&self, automatic: bool) -> Result<TitleModel, SessionError> {
         let settings = SettingsService::new(Arc::clone(&self.store))
             .get()
             .map_err(|error| SessionError::Invalid(error.to_string()))?;
+        if automatic && !settings.auto_titles {
+            return Err(SessionError::Invalid(
+                "automatic session names are off in Settings → General".into(),
+            ));
+        }
         if let Some(model) = settings.title_model {
             return Ok(model);
         }
@@ -1169,32 +1206,6 @@ fn trim_to_complete_assistant(history: Vec<Message>) -> Vec<Message> {
     }
 }
 
-/// The placeholder an auto session takes from its first message: one line, capped at
-/// [`PLACEHOLDER_TITLE_MAX_CHARS`] at a word boundary, with an ellipsis when text was left out.
-fn first_message_title(text: &str) -> String {
-    // A message is often several lines; a tree row is one. Collapsing also makes the character count
-    // independent of how the user formatted the message.
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.chars().count() <= PLACEHOLDER_TITLE_MAX_CHARS {
-        return text;
-    }
-    let head: String = text.chars().take(PLACEHOLDER_TITLE_MAX_CHARS).collect();
-    let at_word_boundary = text
-        .chars()
-        .nth(PLACEHOLDER_TITLE_MAX_CHARS)
-        .is_none_or(char::is_whitespace);
-    let cut = if at_word_boundary {
-        head.trim_end()
-    } else {
-        match head.rfind(char::is_whitespace) {
-            // Cut at the last whole word rather than mid-word; a single long word is hard-capped.
-            Some(index) if index > 0 => head[..index].trim_end(),
-            _ => head.trim_end(),
-        }
-    };
-    format!("{cut}…")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1202,6 +1213,7 @@ mod tests {
     use crate::providers::catalog;
     use crate::providers::wire::{Message, MsgBlock};
     use crate::providers::{AuthMethod, Capabilities, Detection, ProviderSpec};
+    use crate::sessions::title::TITLE_MAX_CHARS;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
@@ -1234,6 +1246,9 @@ mod tests {
         /// is deterministic instead of racing a sleep.
         hold: bool,
         gate: Arc<Notify>,
+        /// Park a title completion until the test releases `completion_gate`, so a rename can race it.
+        completion_hold: bool,
+        completion_gate: Arc<Notify>,
     }
 
     #[derive(Clone)]
@@ -1267,6 +1282,8 @@ mod tests {
                 ready: true,
                 hold: false,
                 gate: Arc::new(Notify::new()),
+                completion_hold: false,
+                completion_gate: Arc::new(Notify::new()),
             }
         }
 
@@ -1311,6 +1328,11 @@ mod tests {
             self.hold = true;
             self
         }
+
+        fn holding_completions(mut self) -> Self {
+            self.completion_hold = true;
+            self
+        }
     }
 
     fn lock<T>(value: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -1351,6 +1373,9 @@ mod tests {
             _deps: ProviderDeps,
         ) -> Result<String, ProviderError> {
             lock(&self.completions).push(request);
+            if self.completion_hold {
+                self.completion_gate.notified().await;
+            }
             // A real completion takes a network round trip; the delay lets two callers race so the
             // per-session guard is observable.
             tokio::time::sleep(Duration::from_millis(30)).await;
@@ -2265,7 +2290,7 @@ mod tests {
             "a placeholder stays auto"
         );
         assert!(
-            stored.title.chars().count() <= PLACEHOLDER_TITLE_MAX_CHARS + 1,
+            stored.title.chars().count() <= TITLE_MAX_CHARS + 1,
             "the placeholder is capped: {}",
             stored.title
         );
@@ -2718,7 +2743,7 @@ mod tests {
         let mut bus = manager.subscribe();
 
         let updated = manager
-            .generate_title(&session)
+            .generate_title(&session, true)
             .await
             .expect("the model answered");
 
@@ -2745,7 +2770,7 @@ mod tests {
         exchange(&manager, &session);
         choose_title_model(&manager, "stub", "stub-small");
 
-        manager.generate_title(&session).await.unwrap();
+        manager.generate_title(&session, true).await.unwrap();
 
         let sent = lock(&completions);
         assert_eq!(sent.len(), 1);
@@ -2764,7 +2789,7 @@ mod tests {
         exchange(&manager, &session);
         choose_title_model(&manager, "stub", "stub-small");
 
-        let error = manager.generate_title(&session).await.unwrap_err();
+        let error = manager.generate_title(&session, true).await.unwrap_err();
 
         assert!(
             matches!(&error, SessionError::Provider(ProviderError::Api(message)) if message == "rate limited"),
@@ -2782,7 +2807,7 @@ mod tests {
         );
 
         // The per-session guard is released on failure, so the user can retry.
-        assert!(manager.generate_title(&session).await.is_err());
+        assert!(manager.generate_title(&session, true).await.is_err());
     }
 
     #[tokio::test]
@@ -2792,7 +2817,7 @@ mod tests {
         append_message(&manager, &session, Role::User, "Start here");
         choose_title_model(&manager, "stub", "stub-small");
 
-        let error = manager.generate_title(&session).await.unwrap_err();
+        let error = manager.generate_title(&session, true).await.unwrap_err();
 
         assert!(
             matches!(&error, SessionError::Invalid(message) if message.contains("assistant")),
@@ -2810,12 +2835,86 @@ mod tests {
         let session = create(&manager).await;
         exchange(&manager, &session);
 
-        let error = manager.generate_title(&session).await.unwrap_err();
+        let error = manager.generate_title(&session, true).await.unwrap_err();
 
         assert!(matches!(error, SessionError::Invalid(_)), "{error}");
         assert_eq!(
             manager.get(&session).unwrap().session.title,
             TEMPORARY_SESSION_TITLE
+        );
+    }
+
+    #[tokio::test]
+    async fn automatic_generation_is_silent_when_titles_are_off() {
+        let stub = StubProvider::new();
+        let completions = Arc::clone(&stub.completions);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+        exchange(&manager, &session);
+        choose_title_model(&manager, "stub", "stub-small");
+        crate::settings::SettingsService::new(manager.store())
+            .set(crate::settings::SettingsPatch {
+                auto_titles: Some(false),
+                ..Default::default()
+            })
+            .expect("automatic naming can be turned off");
+
+        let unchanged = manager.generate_title(&session, false).await.unwrap();
+
+        assert_eq!(unchanged.title, TEMPORARY_SESSION_TITLE);
+        assert_eq!(unchanged.title_source, TitleSource::Auto);
+        assert!(
+            lock(&completions).is_empty(),
+            "Off means no completion call at all"
+        );
+
+        // The explicit menu action is a different path: it still names the session.
+        let forced = manager.generate_title(&session, true).await.unwrap();
+        assert_eq!(forced.title, "Fix the login bug");
+        assert_eq!(lock(&completions).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_rename_during_generation_wins_over_the_model_answer() {
+        let stub = StubProvider::new()
+            .with_completion("\"Model title\"")
+            .holding_completions();
+        let completions = Arc::clone(&stub.completions);
+        let gate = Arc::clone(&stub.completion_gate);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+        exchange(&manager, &session);
+        choose_title_model(&manager, "stub", "stub-small");
+        let mut bus = manager.subscribe();
+
+        let generation = manager.generate_title(&session, false);
+        let rename = async {
+            loop {
+                if !lock(&completions).is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            let renamed = manager.rename(&session, "My own title").await.unwrap();
+            gate.notify_one();
+            renamed
+        };
+        let (generated, renamed) = tokio::join!(generation, rename);
+
+        assert_eq!(renamed.title, "My own title");
+        let generated = generated.expect("the completion still returns a row");
+        assert_eq!(
+            generated.title, "My own title",
+            "the in-flight answer must not overwrite what the user typed"
+        );
+        let stored = manager.get(&session).unwrap();
+        assert_eq!(stored.session.title, "My own title");
+        assert_eq!(stored.session.title_source, TitleSource::Manual);
+        assert!(
+            title_changes(&mut bus)
+                .iter()
+                .all(|(_, source)| *source == TitleSource::Manual),
+            "no generated title is announced after the rename"
         );
     }
 
@@ -2839,7 +2938,7 @@ mod tests {
             .id;
         exchange(&manager, &session);
 
-        manager.generate_title(&session).await.unwrap();
+        manager.generate_title(&session, true).await.unwrap();
 
         assert_eq!(
             lock(&completions)[0].model,
@@ -2885,8 +2984,8 @@ mod tests {
         choose_title_model(&manager, "stub", "stub-small");
 
         let (first, second) = tokio::join!(
-            manager.generate_title(&session),
-            manager.generate_title(&session)
+            manager.generate_title(&session, true),
+            manager.generate_title(&session, true)
         );
 
         let results = [&first, &second];

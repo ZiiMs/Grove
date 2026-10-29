@@ -1,5 +1,4 @@
 import type {
-  CreateDirRequest,
   Decision,
   DetectedSkill,
   DirListing,
@@ -140,6 +139,7 @@ export const DEFAULT_PROVIDERS: ProviderSpec[] = [
 export const DEFAULT_SETTINGS: Settings = {
   catalogSources: ["anthropics/skills", "mattpocock/skills"],
   theme: "system",
+  autoTitles: true,
 };
 
 /** A provider row for a UI test: Anthropic with a keychain credential unless overridden. */
@@ -590,10 +590,15 @@ export function createFakeBridge(
         return structuredClone(detail) as CommandMap[K]["result"];
       }
       if (command === "session_generate_title") {
-        const { id } = args as { id: string };
+        const { id, force } = args as { id: string; force: boolean };
         const row = sessions.find((session) => session.id === id);
         const detail = details[id];
         if (!row || !detail) throw new Error(`FakeBridge has no session: ${id}`);
+        if (!force && row.titleSource === "manual") {
+          // An automatic attempt never overwrites a manual title, even when it raced one.
+          const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+          return structuredClone(session) as CommandMap[K]["result"];
+        }
         const replied = detail.events.some(
           (event) => event.kind === "message" && event.role === "assistant",
         );
@@ -805,7 +810,7 @@ export function createFakeBridge(
         } as CommandMap[K]["result"];
       }
       if (command === "fs_create_dir") {
-        const { parent, name } = args as CreateDirRequest;
+        const { parent, name } = args as { parent: string; name: string };
         const trimmed = name.trim();
         if (
           !trimmed ||
@@ -1023,7 +1028,7 @@ export function createFakeBridge(
       }
       if (command === "settings_set") {
         const { patch } = args as { patch: SettingsPatch };
-        const { catalogSources, theme, titleModel, clearTitleModel, ...extras } = patch;
+        const { catalogSources, theme, autoTitles, titleModel, clearTitleModel, ...extras } = patch;
         if (clearTitleModel && titleModel) {
           throw new Error(
             "invalid request: a title model cannot be set and cleared in the same update",
@@ -1031,6 +1036,7 @@ export function createFakeBridge(
         }
         if (catalogSources) settings.catalogSources = [...catalogSources];
         if (theme) settings.theme = theme;
+        if (autoTitles !== undefined) settings.autoTitles = autoTitles;
         if (clearTitleModel) settings.titleModel = null;
         if (titleModel) settings.titleModel = { ...titleModel };
         Object.assign(settings, extras);

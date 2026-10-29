@@ -1,13 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import type { GroveBridge } from "../ipc/bridge";
 import { useBridge } from "../ipc/context";
-import { errorText } from "../ipc/errors";
 import { useMenuStore, type MenuItem, type MenuState } from "../state/menuStore";
 import { useSessionStore } from "../state/sessionStore";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import { Icon } from "../workspace/Icon";
+import { copyText } from "./clipboard";
 
 /**
  * The one context menu in the app.
@@ -23,46 +22,6 @@ const MARGIN = 8;
 function portalTarget(): HTMLElement {
   const dialogs = document.querySelectorAll<HTMLDialogElement>("dialog[open]");
   return dialogs.length > 0 ? dialogs[dialogs.length - 1] : document.body;
-}
-
-/** Copy with the async Clipboard API, falling back to the hidden-textarea trick. */
-export async function copyText(text: string): Promise<boolean> {
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // Permission denied: try the legacy path before reporting failure.
-    }
-  }
-  if (typeof document.execCommand !== "function") return false;
-  const area = document.createElement("textarea");
-  area.value = text;
-  area.setAttribute("readonly", "");
-  area.style.position = "fixed";
-  area.style.opacity = "0";
-  document.body.appendChild(area);
-  area.select();
-  try {
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    area.remove();
-  }
-}
-
-/** Show a path in the platform file manager; a failure is reported, never thrown at the caller. */
-export async function revealPath(
-  bridge: GroveBridge,
-  path: string,
-  notify: (message: string, tone?: "ok" | "error") => void,
-): Promise<void> {
-  try {
-    await bridge.invoke("app_reveal_path", { path });
-  } catch (error) {
-    notify(errorText(error), "error");
-  }
 }
 
 function menuButtons(root: HTMLElement | null): HTMLButtonElement[] {

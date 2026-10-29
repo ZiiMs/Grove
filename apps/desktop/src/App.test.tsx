@@ -12,6 +12,7 @@ import type {
   SessionEvent,
   Project,
   SessionDetail,
+  Settings,
 } from "@grove/contract";
 import fsRootsFixture from "../../../contract/fixtures/fs-roots.json";
 import { BridgeProvider } from "./ipc/context";
@@ -482,6 +483,8 @@ describe("redesigned shell", () => {
 
   it("hot-swaps a same-provider model without relaunching the agent", async () => {
     const bridge = await readyOnAnthropic();
+    expect(document.querySelector(".session-row .s-model")).toHaveTextContent("Sonnet 4.5");
+    expect(document.querySelector(".sh-model")).toHaveTextContent("Sonnet 4.5");
     await userEvent.click(modelTrigger());
     await userEvent.click(screen.getByRole("option", { name: /Opus 4.1/ }));
 
@@ -498,6 +501,9 @@ describe("redesigned shell", () => {
         "Opus 4.1",
       ),
     );
+    // The row and the header follow the persisted model, not just the composer.
+    expect(document.querySelector(".session-row .s-model")).toHaveTextContent("Opus 4.1");
+    expect(document.querySelector(".sh-model")).toHaveTextContent("Opus 4.1");
     expect(JSON.parse(localStorage.getItem("grove.recentModels") ?? "[]")[0]).toBe(
       "claude-opus-4-1",
     );
@@ -882,7 +888,11 @@ describe("redesigned shell", () => {
     const { dialog, address } = await openPicker();
     const list = within(dialog).getByRole("listbox", { name: "Folders" });
 
-    list.focus();
+    // The list is reachable with Tab, not only by calling focus() on a tabIndex=-1 node.
+    for (let press = 0; press < 12 && document.activeElement !== list; press += 1) {
+      await userEvent.tab();
+    }
+    expect(list).toHaveFocus();
     await userEvent.keyboard("{ArrowDown}");
     expect(within(dialog).getByRole("option", { name: "code" })).toHaveAttribute(
       "aria-selected",
@@ -1450,7 +1460,7 @@ describe("archive and delete", () => {
     renderApp(archiveSeed());
     await screen.findByRole("heading", { name: "OAuth device flow" });
 
-    expect(within(nav()).getByRole("button", { name: /Archive/ })).toBeInTheDocument();
+    expect(within(nav()).getByRole("button", { name: /^Archive 1$/ })).toBeInTheDocument();
     expect(within(nav()).getByText("Old spike")).toBeInTheDocument();
     expect(nav().querySelector("#kids-archive .s-suffix")).toHaveTextContent("grove");
     expect(within(nav()).getByText("1 session · 1 awaiting you")).toBeInTheDocument();
@@ -1471,9 +1481,40 @@ describe("archive and delete", () => {
     await userEvent.type(screen.getByLabelText(/Filter projects/), "old");
 
     expect(within(nav()).getByText("Old spike")).toBeInTheDocument();
-    expect(within(nav()).getByRole("button", { name: /Archive/ })).toBeInTheDocument();
+    expect(within(nav()).getByRole("button", { name: /^Archive 1$/ })).toBeInTheDocument();
     expect(within(nav()).queryByText("OAuth device flow")).not.toBeInTheDocument();
     expect(within(nav()).queryByText(/Nothing matches/)).not.toBeInTheDocument();
+  });
+
+  it("archives from the active row's hover trash button without selecting it", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const bridge = await ready();
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+
+    const trash = within(nav).getByRole("button", { name: "Archive session" });
+    expect(trash).toHaveAttribute("title", "Archive");
+    await userEvent.click(trash);
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("OAuth device flow"));
+    await waitFor(() => expect(bridge.invocations).toContain("session_archive"));
+    expect(bridge.calls.find((call) => call.command === "session_archive")?.args).toEqual({
+      id: session.id,
+    });
+    expect(await screen.findByText("Archived")).toBeInTheDocument();
+  });
+
+  it("restores from an archived row's restore icon button", async () => {
+    const bridge = renderApp(archiveSeed());
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+
+    const restore = within(nav).getByRole("button", { name: "Restore session" });
+    expect(restore).toHaveAttribute("title", "Restore");
+    await userEvent.click(restore);
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_restore"));
+    expect(within(nav).getByText("No archived sessions")).toBeInTheDocument();
+    expect(within(nav).queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
   });
 
   it("opens an archived session with a pill and restores it from the header", async () => {
@@ -1482,7 +1523,11 @@ describe("archive and delete", () => {
     await openArchived();
 
     expect(screen.getByText("Archived")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+    await userEvent.click(
+      within(screen.getByRole("main", { name: "Active session" })).getByRole("button", {
+        name: "Restore session",
+      }),
+    );
 
     await waitFor(() => expect(bridge.invocations).toContain("session_restore"));
     await waitFor(() => expect(screen.queryByText("Archived")).not.toBeInTheDocument());
@@ -1583,6 +1628,7 @@ describe("archive and delete", () => {
       screen.queryByRole("button", { name: /awaiting you - open that session/ }),
     ).not.toBeInTheDocument();
     expect(within(nav()).getByText("1 session · 0 awaiting you")).toBeInTheDocument();
+    expect(document.getElementById("status-live")).toHaveTextContent("0 awaiting you");
   });
 });
 
@@ -1836,6 +1882,7 @@ describe("session titles", () => {
     await waitFor(() =>
       expect(bridge.calls.find((call) => call.command === "session_generate_title")?.args).toEqual({
         id: manualSession.id,
+        force: true,
       }),
     );
     await screen.findByRole("heading", { name: "Generated session title" });
@@ -1896,13 +1943,17 @@ describe("session titles", () => {
     await waitFor(() => {
       const saves = bridge.calls.filter((call) => call.command === "settings_set");
       expect(saves[saves.length - 1]?.args).toMatchObject({
-        patch: { titleModel: { provider: "anthropic", model: "claude-haiku-4-5" } },
+        patch: {
+          autoTitles: true,
+          titleModel: { provider: "anthropic", model: "claude-haiku-4-5" },
+        },
       });
     });
   });
 
-  it("clears the title model with Off", async () => {
-    const bridge = await readyOnAnthropic();
+  it("turns automatic naming off, reopens on Off, and makes no title call", async () => {
+    const bridge = renderApp(titleSeed(autoSession));
+    await screen.findByRole("heading", { name: "New session" });
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
 
     const combo = await screen.findByRole("combobox", { name: "Title model" });
@@ -1913,9 +1964,51 @@ describe("session titles", () => {
     await waitFor(() => {
       const saves = bridge.calls.filter((call) => call.command === "settings_set");
       const patch = saves[saves.length - 1]?.args as { patch: Record<string, unknown> };
+      expect(patch.patch.autoTitles).toBe(false);
       expect(patch.patch.clearTitleModel).toBe(true);
       expect(patch.patch.titleModel).toBeUndefined();
     });
+    expect(useWorkspaceStore.getState().prefs.autoTitles).toBe(false);
+
+    // Reopening the pane reads the saved switch, not the presence of a title model.
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const reopened = await screen.findByRole("combobox", { name: "Title model" });
+    expect(reopened).toHaveTextContent("Off");
+    await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
+
+    // A reply arrives after Off: the automatic trigger must not spend a call or change the title.
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: autoSession.id,
+        payload: assistantMessage("A reply that would normally name the session."),
+      });
+    });
+    await tick();
+    expect(bridge.invocations).not.toContain("session_generate_title");
+    expect(useSessionStore.getState().detail?.title).toBe("New session");
+  });
+
+  it("uses the suggested title model when autoTitles has never been written", async () => {
+    const bridge = renderApp({
+      ...titleSeed(autoSession),
+      // An install that predates the switch: the key is absent, and absence means on.
+      settings: { catalogSources: [], theme: "system" } as unknown as Settings,
+    });
+    await screen.findByRole("heading", { name: "New session" });
+
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: autoSession.id,
+        payload: assistantMessage("The first reply."),
+      });
+    });
+
+    await waitFor(() =>
+      expect(
+        bridge.calls.find((call) => call.command === "session_generate_title")?.args,
+      ).toEqual({ id: autoSession.id, force: false }),
+    );
+    await screen.findByRole("heading", { name: "Generated session title" });
   });
 
   it("disables the title model picker when no provider has a key", async () => {
