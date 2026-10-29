@@ -883,6 +883,17 @@ impl AgentSession for AgentSessionImpl {
         Ok(())
     }
 
+    async fn set_model(&mut self, model: String) -> Result<(), ProviderError> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(ProviderError::Other("model is empty".into()));
+        }
+        // `send` clones the model into the spawned turn, so the turn already in flight keeps the
+        // model it started with and only the next one sees this assignment.
+        self.model = model.to_string();
+        Ok(())
+    }
+
     async fn respond_permission(
         &mut self,
         request_id: &str,
@@ -988,6 +999,7 @@ fn is_retryable(error: &ProviderError) -> bool {
             message.contains("rate limited") || message.starts_with("HTTP 5")
         }
         ProviderError::Unavailable(_) => false,
+        ProviderError::Unsupported(_) => false,
         _ => true,
     }
 }
@@ -1322,6 +1334,80 @@ mod tests {
             })
             .collect();
         assert_eq!(deltas, vec!["ok"]);
+    }
+
+    #[tokio::test]
+    async fn changing_the_model_applies_to_the_next_turn_and_keeps_history() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "gpt-5".into(),
+            "system".into(),
+            vec![Message::user("first")],
+            MAX_STEPS,
+            "session-model".into(),
+        );
+        let mut events = session.take_events();
+
+        session.send(UserInput::text("second")).await.unwrap();
+        wait_until_idle(&mut events).await;
+
+        session.set_model("gpt-5-mini".into()).await.unwrap();
+        session.send(UserInput::text("third")).await.unwrap();
+        wait_until_idle(&mut events).await;
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2, "neither turn restarted the session");
+        let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(first["model"], "gpt-5", "the running turn keeps its model");
+        assert_eq!(
+            second["model"], "gpt-5-mini",
+            "the next turn uses the new model"
+        );
+
+        let history = second["messages"].to_string();
+        for text in ["first", "second", "third"] {
+            assert!(
+                history.contains(text),
+                "the history lost {text:?}: {history}"
+            );
+        }
+    }
+
+    /// Drain the event stream until the turn reports it is done.
+    async fn wait_until_idle(events: &mut mpsc::Receiver<SessionEvent>) {
+        while let Some(event) = events.recv().await {
+            if matches!(
+                event.kind,
+                EventKind::Status {
+                    state: SessionState::Idle
+                }
+            ) {
+                return;
+            }
+        }
+        panic!("the turn ended without an idle status");
     }
 
     #[tokio::test]

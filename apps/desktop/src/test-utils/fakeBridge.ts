@@ -525,6 +525,21 @@ export function createFakeBridge(
         const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
         return structuredClone(session) as CommandMap[K]["result"];
       }
+      if (command === "session_set_model") {
+        const { id, model, thinking } = args as {
+          id: string;
+          model: string;
+          thinking: SessionDetail["thinkingLevel"] | null;
+        };
+        const detail = details[id];
+        const row = sessions.find((session) => session.id === id);
+        if (!detail || !row) throw new Error(`FakeBridge has no session: ${id}`);
+        detail.model = model;
+        row.model = model;
+        if (thinking !== null && thinking !== undefined) detail.thinkingLevel = thinking;
+        // A same-provider hot swap adds no transcript event; the toast is the feedback.
+        return structuredClone(detail) as CommandMap[K]["result"];
+      }
       if (command === "session_close") {
         setStatus((args as { id: string }).id, "exited");
         return null as CommandMap[K]["result"];
