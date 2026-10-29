@@ -1294,6 +1294,11 @@ function Composer({
               {pending ? (
                 <span
                   className="pending-switch"
+                  role="status"
+                  aria-label={`Switching to ${modelLabel(
+                    pending.model,
+                    pending.provider,
+                  )} when this turn ends`}
                   title={`Waiting for this turn to finish before switching to ${modelLabel(
                     pending.model,
                     pending.provider,
