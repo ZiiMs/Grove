@@ -144,17 +144,11 @@ export function SessionInfoPanel({
                 value={`${contextPercent}%`}
               />
               <Row label="Pinned specs" value={String(context.pins.length)} />
-              <Row label="Plan" value={context.planVersion ? `v${context.planVersion}` : "none"} />
+              <Row label="Plan" value={plan.total ? `${plan.done} / ${plan.total}` : "none"} />
             </>
           ) : (
             <p className="si-empty">No context snapshot yet.</p>
           )}
-        </section>
-
-        <section className="si-section">
-          <h3 className="si-title">Plan</h3>
-          {plan.total ? <Row label="Checklist" value={`${plan.done} / ${plan.total}`} /> : null}
-          {plan.total ? null : <p className="si-empty">No plan for this session.</p>}
         </section>
 
         <section className="si-section">
@@ -191,10 +185,6 @@ export function SessionInfoPanel({
           ) : (
             <p className="si-empty">No usage recorded yet.</p>
           )}
-        </section>
-
-        <section className="si-section">
-          <h3 className="si-title">Turn stats</h3>
           <Row label="Messages" value={`${turns.user} user · ${turns.assistant} assistant`} />
           <Row label="Tool calls" value={String(turns.tools)} />
           <Row label="Diffs" value={String(turns.diffs)} />

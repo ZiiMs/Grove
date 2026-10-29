@@ -1307,19 +1307,19 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 
 /* ---------- floating session info ---------- */
 .session-info{
-  position:fixed;z-index:34;top:54px;right:12px;bottom:40px;width:320px;
-  display:flex;flex-direction:column;min-height:0;overflow:hidden;
-  background:color-mix(in srgb, var(--panel) 84%, transparent);
+  position:fixed;z-index:34;top:98px;right:12px;bottom:auto;width:280px;
+  display:flex;flex-direction:column;min-height:0;max-height:min(560px,calc(100dvh - 138px));overflow:hidden;
+  background:color-mix(in srgb, var(--panel) 86%, transparent);
   -webkit-backdrop-filter:blur(18px) saturate(1.06);backdrop-filter:blur(18px) saturate(1.06);
   border:1px solid var(--line-2);border-radius:var(--r-lg);
   box-shadow:0 24px 70px rgba(0,0,0,.55);
 }
-.si-head{display:flex;align-items:flex-start;gap:8px;padding:12px 12px 10px 14px;border-bottom:1px solid var(--line);flex:none}
+.si-head{display:flex;align-items:flex-start;gap:8px;padding:10px 10px 9px 12px;border-bottom:1px solid var(--line);flex:none}
 .si-heading{flex:1;min-width:0}
-.si-heading h2{font-size:13px;font-weight:600}
-.si-heading p{font-size:11.5px;color:var(--fg-3);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.si-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 14px 14px}
-.si-section{padding:12px 0;border-top:1px solid var(--line)}
+.si-heading h2{font-size:12.5px;font-weight:600}
+.si-heading p{font-size:11px;color:var(--fg-3);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.si-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 12px 12px}
+.si-section{padding:10px 0;border-top:1px solid var(--line)}
 .si-section:first-child{border-top:0}
 .si-title{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);margin-bottom:7px}
 .si-count{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fg-3)}
@@ -1339,5 +1339,5 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .si-add{color:var(--jade)}
 .si-del{color:var(--red)}
 @media (max-width:899px){
-  .session-info{top:52px;left:12px;right:12px;bottom:38px;width:auto;z-index:39}
+  .session-info{top:138px;left:12px;right:12px;bottom:auto;width:auto;max-height:min(70dvh,calc(100dvh - 176px));z-index:39}
 }

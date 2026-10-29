@@ -183,15 +183,8 @@ export default function App() {
     setInfoOpen(false);
     setContextOpen(true);
   };
-  const infoVisible = infoOpen && !contextOpen;
-  const toggleInfo = () => {
-    if (infoVisible) {
-      setInfoOpen(false);
-      return;
-    }
-    setInfoOpen(true);
-    setContextOpen(false);
-  };
+  const infoVisible = infoOpen;
+  const toggleInfo = () => setInfoOpen(!infoOpen);
 
   const onGit = () => {
     setContextTab("git");
