@@ -373,11 +373,11 @@ describe("redesigned shell", () => {
 
   it("toggles approval mode from the composer and keeps send icon-only", async () => {
     const bridge = await ready();
-    await userEvent.click(
-      screen.getByRole("button", {
-        name: "Approval mode: ask before changes. Switch to full access",
-      }),
-    );
+    const approval = screen.getByRole("button", {
+      name: "Approval mode: ask before changes. Switch to full access",
+    });
+    expect(approval.parentElement).toHaveClass("composer-entry");
+    await userEvent.click(approval);
 
     await waitFor(() => expect(bridge.invocations).toContain("session_set_permission_mode"));
     expect(
@@ -851,7 +851,10 @@ describe("redesigned shell", () => {
     const bridge = await ready();
     const composer = screen.getByLabelText("Message the active session");
     await userEvent.type(composer, "Then update the changelog");
-    await userEvent.click(screen.getByRole("button", { name: "Queue this message for the next turn" }));
+    const queue = screen.getByRole("button", { name: "Queue this message for the next turn" });
+    const stop = screen.getByRole("button", { name: "Stop the running turn" });
+    expect(queue.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.click(queue);
     expect(await screen.findByText("queued")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Approve and run" }));

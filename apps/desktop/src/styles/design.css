@@ -410,7 +410,9 @@ body.nav-resizing{cursor:col-resize;user-select:none}
 .composer-box textarea{width:100%;background:none;border:0;resize:none;padding:2px 0;font-size:13.5px;line-height:1.55;color:var(--fg);max-height:132px}
 .composer-box textarea:focus{outline:none}
 .composer-box textarea::placeholder{color:var(--fg-3)}
-.composer-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.composer-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.composer-entry{display:flex;align-items:flex-start;gap:7px}
+.composer-entry textarea{flex:1;min-width:0;width:auto;margin-top:1px}
 /* ---------- searchable combo ---------- */
 .combo{position:relative;min-width:0}
 .combo-trigger{
@@ -460,7 +462,8 @@ body.nav-resizing{cursor:col-resize;user-select:none}
   width:30px;height:30px;padding:0;border-radius:var(--r);
 }
 .btn-send:hover{background:var(--jade-hi)}
-.foot-actions{margin-left:auto;display:flex;align-items:center;gap:6px}
+.foot-actions{margin-left:0;display:flex;align-items:center;gap:6px}
+.send-stack{display:flex;flex-direction:column;align-items:center;gap:5px}
 .btn-stop{
   display:inline-flex;align-items:center;justify-content:center;
   border:1px solid color-mix(in srgb, var(--t-bad) 46%, var(--line));background:var(--red-soft);color:var(--red);
@@ -1208,8 +1211,9 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .inline-picker .combo-trigger[aria-expanded="true"]{background:var(--hover);color:var(--fg);box-shadow:none}
 .inline-picker + .inline-picker::before{content:"·";color:var(--fg-3);margin:0 2px}
 .approval-picker{
-  background:transparent;border:0;padding:4px 6px;border-radius:var(--r-sm);
-  color:var(--fg-3);cursor:pointer;
+  flex:none;display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;margin-top:1px;border:0;border-radius:var(--r-sm);
+  background:transparent;color:var(--fg-3);cursor:pointer;
 }
 .approval-picker:hover{background:var(--hover);color:var(--fg)}
 .approval-picker[data-mode="full"]{color:var(--jade)}

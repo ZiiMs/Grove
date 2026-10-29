@@ -1235,7 +1235,28 @@ function Composer({
           </div>
         ) : null}
         <div className="composer-box">
-          <label className="sr-only" htmlFor="composer-input">
+          <div className="composer-entry">
+            <button
+              type="button"
+              className="approval-picker"
+              data-mode={permission}
+              title={
+                permission === "ask"
+                  ? "Ask before changes. Click for full access."
+                  : "Full access: no approval prompts. Questions still ask."
+              }
+              aria-label={
+                permission === "ask"
+                  ? "Approval mode: ask before changes. Switch to full access"
+                  : "Approval mode: full access. Switch to ask"
+              }
+              onClick={() =>
+                void setPermissionMode(bridge, permission === "ask" ? "full" : "ask")
+              }
+            >
+              <Icon name={permission === "ask" ? "shield" : "shieldCheck"} size="sm" />
+            </button>
+            <label className="sr-only" htmlFor="composer-input">
             Message the active session
           </label>
           <textarea
@@ -1259,6 +1280,7 @@ function Composer({
               }
             }}
           />
+          </div>
           <div className="composer-foot">
             <div className="composer-pickers">
               <Combo
@@ -1300,26 +1322,6 @@ function Composer({
                 }
                 onChange={(value) => void changeModel(value)}
               />
-              <button
-                type="button"
-                className="inline-picker approval-picker"
-                data-mode={permission}
-                title={
-                  permission === "ask"
-                    ? "Ask before changes. Click for full access."
-                    : "Full access: no approval prompts. Questions still ask."
-                }
-                aria-label={
-                  permission === "ask"
-                    ? "Approval mode: ask before changes. Switch to full access"
-                    : "Approval mode: full access. Switch to ask"
-                }
-                onClick={() =>
-                  void setPermissionMode(bridge, permission === "ask" ? "full" : "ask")
-                }
-              >
-                <Icon name={permission === "ask" ? "shield" : "shieldCheck"} size="sm" />
-              </button>
               {pending ? (
                 <span
                   className="pending-switch"
@@ -1339,27 +1341,29 @@ function Composer({
               ) : null}
             </div>
             <div className="foot-actions">
-              {working ? (
+              <div className="send-stack">
                 <button
-                  className="btn-stop"
+                  className="btn-send"
                   type="button"
-                  title="Stop"
-                  aria-label="Stop the running turn"
-                  onClick={() => void cancel(bridge)}
+                  disabled={!typed || locked}
+                  onClick={() => void submit()}
+                  aria-label={working ? "Queue this message for the next turn" : "Send message"}
+                  title={working && typed ? "Queue for the next turn" : "Send"}
                 >
-                  <Icon name="stop" size="sm" />
+                  <Icon name={working && typed ? "arrowRight" : "send"} size="sm" />
                 </button>
-              ) : null}
-              <button
-                className="btn-send"
-                type="button"
-                disabled={!typed || locked}
-                onClick={() => void submit()}
-                aria-label={working ? "Queue this message for the next turn" : "Send message"}
-                title={working && typed ? "Queue for the next turn" : "Send"}
-              >
-                <Icon name={working && typed ? "arrowRight" : "send"} size="sm" />
-              </button>
+                {working ? (
+                  <button
+                    className="btn-stop"
+                    type="button"
+                    title="Stop"
+                    aria-label="Stop the running turn"
+                    onClick={() => void cancel(bridge)}
+                  >
+                    <Icon name="stop" size="sm" />
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>
