@@ -415,7 +415,7 @@ renders the code beside the message; no panel formats a rejection itself.
 The shipped shell is the three-column workspace from `design-reference/`; ADR 0002 records why the
 seven-panel shell and the spec/plan editors were retired.
 
-- **Shell:** custom titlebar · 300px project tree · always-mounted chat · 304px context column
+- **Shell:** custom titlebar · resizable project tree (300px by default, dragged from its right edge) · always-mounted chat · 304px context column
   (Git · Plan · Spec) · status bar. Below 900px the three columns become Navigation · Session ·
   Context tabs. The centre never swaps for another product surface.
 - **Window chrome:** the native decorations are off. The titlebar's marked drag regions move the

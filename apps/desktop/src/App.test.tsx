@@ -350,6 +350,27 @@ describe("redesigned shell", () => {
     await waitFor(() => expect(trigger).toHaveTextContent("High"));
   });
 
+  it("drags the sidebar wider and remembers the width", async () => {
+    localStorage.removeItem("grove.navWidth");
+    await ready();
+    const handle = screen.getByRole("separator", { name: "Resize the sidebar" });
+    const workspace = handle.parentElement as HTMLElement;
+    expect(workspace.style.getPropertyValue("--nav-user")).toBe("300px");
+
+    fireEvent.pointerDown(handle, { clientX: 300 });
+    fireEvent.pointerMove(window, { clientX: 360 });
+    fireEvent.pointerUp(window);
+    expect(workspace.style.getPropertyValue("--nav-user")).toBe("360px");
+    expect(localStorage.getItem("grove.navWidth")).toBe("360");
+
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(workspace.style.getPropertyValue("--nav-user")).toBe("376px");
+
+    fireEvent.doubleClick(handle);
+    expect(workspace.style.getPropertyValue("--nav-user")).toBe("300px");
+    expect(localStorage.getItem("grove.navWidth")).toBeNull();
+  });
+
   it("toggles approval mode from the composer and keeps send icon-only", async () => {
     const bridge = await ready();
     await userEvent.click(

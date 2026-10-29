@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useBridge } from "./ipc/context";
 import {
   subscribeToGitChanged,
@@ -12,6 +12,7 @@ import { useMenuStore } from "./state/menuStore";
 import { useUiStore } from "./state/uiStore";
 import { useWorkspaceStore } from "./state/workspaceStore";
 import { NavTree } from "./shell/NavTree";
+import { NavResizer, useNavWidth } from "./shell/NavResizer";
 import { ContextMenuHost } from "./shell/ContextMenu";
 import {
   archiveSession,
@@ -38,6 +39,7 @@ import { modelLabel } from "./workspace/modelLabel";
 /** The production shell: titlebar, tree, always-chat centre, context column, status bar. */
 export default function App() {
   const bridge = useBridge();
+  const [navWidth, setNavWidth] = useNavWidth();
   const sessions = useSessionStore((state) => state.sessions);
   const activeId = useSessionStore((state) => state.activeId);
   const detail = useSessionStore((state) => state.detail);
@@ -231,7 +233,10 @@ export default function App() {
         ))}
       </nav>
 
-      <div className="workspace">
+      <div
+        className="workspace"
+        style={{ "--nav-user": `${navWidth}px` } as CSSProperties}
+      >
         <NavTree
           active={view === "nav"}
           filter={filter}
@@ -278,6 +283,8 @@ export default function App() {
             </button>
           </div>
         ) : null}
+
+        <NavResizer width={navWidth} onChange={setNavWidth} />
       </div>
 
       <StatusBar

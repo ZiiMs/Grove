@@ -27,6 +27,19 @@ for (const [name, value] of [
   });
 }
 
+/**
+ * jsdom has no PointerEvent, so `fireEvent.pointerDown` and friends would lose `clientX`/`button`.
+ * MouseEvent carries both, so a thin subclass is enough for the resize handle's drag tests.
+ */
+if (!("PointerEvent" in window)) {
+  class PointerEventStub extends MouseEvent {}
+  Object.defineProperty(window, "PointerEvent", {
+    configurable: true,
+    writable: true,
+    value: PointerEventStub,
+  });
+}
+
 /** jsdom has no matchMedia; the shell uses it only to choose the mobile pane after an action. */
 if (!("matchMedia" in window)) {
   Object.defineProperty(window, "matchMedia", {

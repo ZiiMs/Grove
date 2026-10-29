@@ -203,15 +203,27 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .mobile-nav button[aria-selected="true"]{background:var(--elev);border-color:var(--line-2);color:var(--fg)}
 
 /* ---------- workspace ---------- */
-.workspace{position:relative;display:grid;grid-template-columns:var(--nav) minmax(0,1fr) var(--ctx);min-height:0;height: 100%;}
+.workspace{position:relative;display:grid;grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) var(--ctx);min-height:0;height: 100%;}
 .panel{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel)}
 .nav{border-right:1px solid var(--line)}
+/* Drag the right edge of the tree. The strip is absolute inside the grid so it overlaps neither
+   column's content; the width itself lives on the workspace as --nav-user (see shell/NavResizer). */
+.nav-resizer{position:absolute;top:0;bottom:0;left:calc(var(--nav-user,var(--nav)) - 4px);width:8px;z-index:6;cursor:col-resize;touch-action:none}
+.nav-resizer::after{
+  content:"";position:absolute;top:0;bottom:0;left:3px;width:2px;border-radius:1px;
+  background:transparent;transition:background var(--dur) var(--ease);
+}
+.nav-resizer:hover::after,.nav-resizer[data-dragging="true"]::after,.nav-resizer:focus-visible::after{
+  background:color-mix(in srgb, var(--t-accent) 60%, var(--line));
+}
+.nav-resizer:focus-visible{outline:none}
+body.nav-resizing{cursor:col-resize;user-select:none}
 .session{background:var(--bg)}
 .context{border-left:1px solid var(--line);background:var(--panel)}
 .ctx-stub{position:absolute;top:6px;right:6px;z-index:5;display:flex}
 .ctx-stub .icon-btn{color:var(--fg-3)}
 .ctx-stub .icon-btn:hover{background:var(--elev);color:var(--fg)}
-.app[data-ctx="closed"] .workspace{grid-template-columns:var(--nav) minmax(0,1fr) 0}
+.app[data-ctx="closed"] .workspace{grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) 0}
 .app[data-ctx="closed"] .context{display:none}
 .app[data-ctx="closed"] .session-head{padding-right:54px}
 
@@ -902,6 +914,10 @@ dialog.settings-modal{
 @media (max-width:1279px){
   :root{--nav:248px;--ctx:288px}
   .session-head{padding:0 14px}
+  /* The dragged width is a wide-window preference; the compact layouts keep their own columns. */
+  .workspace{grid-template-columns:var(--nav) minmax(0,1fr) var(--ctx)}
+  .app[data-ctx="closed"] .workspace{grid-template-columns:var(--nav) minmax(0,1fr) 0}
+  .nav-resizer{display:none}
 }
 @media (max-width:1099px){
   :root{--nav:236px;--ctx:272px}
