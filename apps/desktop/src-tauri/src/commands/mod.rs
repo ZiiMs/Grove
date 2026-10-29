@@ -30,6 +30,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
         git::git_stage,
         git::git_open_pr,
         git::git_worktree_create,
+        git::git_worktree_remove,
         mcp::mcp_servers,
         mcp::mcp_probe,
         plan::plan_get,

@@ -28,6 +28,7 @@ import { ContextPanel } from "./context/ContextPanel";
 import { SettingsModal } from "./settings/SettingsModal";
 import { NewSessionDialog } from "./dialogs/NewSessionDialog";
 import { AddProjectDialog } from "./dialogs/AddProjectDialog";
+import { WorktreeRemoveDialog } from "./dialogs/WorktreeRemoveDialog";
 import { DiffModal } from "./dialogs/DiffModal";
 import { PrDialog } from "./dialogs/PrDialog";
 import { Toast } from "./shell/Toast";
@@ -335,6 +336,7 @@ export default function App() {
 
       <NewSessionDialog />
       <AddProjectDialog />
+      <WorktreeRemoveDialog />
       <DiffModal />
       <PrDialog project={activeProject} />
       <SettingsModal />

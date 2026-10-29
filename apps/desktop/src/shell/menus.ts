@@ -172,7 +172,7 @@ export function worktreeMenuItems(
   project: Project,
   worktree: GitWorktree,
 ): MenuItem[] {
-  return [
+  const items: MenuItem[] = [
     {
       kind: "item",
       label: "New session",
@@ -199,4 +199,18 @@ export function worktreeMenuItems(
       onSelect: () => void useWorkspaceStore.getState().refreshProjectGit(bridge, project),
     },
   ];
+  // The main checkout is the repository itself; only linked worktrees can be deleted.
+  if (!worktree.current) {
+    items.push(
+      { kind: "separator" },
+      {
+        kind: "item",
+        label: "Delete worktree",
+        icon: "trash",
+        danger: true,
+        onSelect: () => useUiStore.getState().openWorktreeRemoval(project, worktree),
+      },
+    );
+  }
+  return items;
 }

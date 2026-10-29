@@ -1,7 +1,7 @@
 //! Git panel commands. Behaviour lives in `grove-core::gitops`; these handlers only unwrap command
 //! arguments and keep the blocking `git`/`gh` calls off the async runtime.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::events;
 use crate::state::AppState;
@@ -114,6 +114,29 @@ pub async fn git_worktree_create(
         Ok(core
             .projects
             .create_worktree(&repo_path, &branch, &base, &path)?)
+    })
+    .await
+}
+
+/// Remove a linked worktree, optionally deleting its local branch.
+#[tauri::command]
+pub async fn git_worktree_remove(
+    state: tauri::State<'_, AppState>,
+    repo_path: String,
+    worktree_path: String,
+    delete_branch: bool,
+    force: bool,
+    force_branch: bool,
+) -> IpcResult<()> {
+    let core = state.core.clone();
+    blocking(move || {
+        core.git.remove_worktree(
+            Some(Path::new(&repo_path)),
+            &worktree_path,
+            delete_branch,
+            force,
+            force_branch,
+        )
     })
     .await
 }

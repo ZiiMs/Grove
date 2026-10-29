@@ -1,3 +1,4 @@
+import type { GitWorktree, Project } from "@grove/contract";
 import { create } from "zustand";
 
 /** Shell-only state: which pane is visible, which context tab is open, and which dialog is up. */
@@ -12,8 +13,7 @@ export interface NewSessionTarget {
 }
 
 export interface PullRequestSeed {
-  title: string;
-  body: string;
+  title: string;  body: string;
 }
 
 export interface ToastMessage {
@@ -25,6 +25,12 @@ export interface ToastMessage {
 export interface SubagentSelection {
   sessionId: string;
   callId: string;
+}
+
+/** A linked worktree the user asked to delete; the dialog owns the destructive options. */
+export interface WorktreeRemoval {
+  project: Project;
+  worktree: GitWorktree;
 }
 
 interface UiState {
@@ -53,6 +59,9 @@ interface UiState {
   prSeed: PullRequestSeed | null;
   openPr: (seed?: PullRequestSeed) => void;
   closePr: () => void;
+  worktreeRemoval: WorktreeRemoval | null;
+  openWorktreeRemoval: (project: Project, worktree: GitWorktree) => void;
+  closeWorktreeRemoval: () => void;
   subagent: SubagentSelection | null;
   openSubagent: (sessionId: string, callId: string) => void;
   closeSubagent: () => void;
@@ -97,6 +106,9 @@ export const useUiStore = create<UiState>((set) => ({
   prSeed: null,
   openPr: (prSeed) => set({ prOpen: true, prSeed: prSeed ?? null }),
   closePr: () => set({ prOpen: false, prSeed: null }),
+  worktreeRemoval: null,
+  openWorktreeRemoval: (project, worktree) => set({ worktreeRemoval: { project, worktree } }),
+  closeWorktreeRemoval: () => set({ worktreeRemoval: null }),
   subagent: null,
   openSubagent: (sessionId, callId) => set({ subagent: { sessionId, callId } }),
   closeSubagent: () => set({ subagent: null }),
@@ -118,6 +130,7 @@ export const useUiStore = create<UiState>((set) => ({
       diffPath: null,
       prOpen: false,
       prSeed: null,
+      worktreeRemoval: null,
       subagent: null,
       renamingSession: null,
       toast: null,

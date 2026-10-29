@@ -48,6 +48,17 @@ export interface GitWorktreeCreateArgs {
   path: string;
 }
 
+export interface GitWorktreeRemoveArgs {
+  repoPath: string;
+  worktreePath: string;
+  /** Delete the checked-out local branch after removing the folder. */
+  deleteBranch: boolean;
+  /** Force-remove a checkout with uncommitted changes. */
+  force: boolean;
+  /** Delete the branch even when it has commits not in the main checkout. */
+  forceBranch: boolean;
+}
+
 export interface GitCommands {
   git_status: { args: GitStatusArgs; result: GitStatus };
   git_branches: { args: GitStatusArgs; result: GitBranch[] };
@@ -58,4 +69,6 @@ export interface GitCommands {
   git_open_pr: { args: GitOpenPrArgs; result: PrResult };
   /** Create a branch and a checkout for it, then report the new worktree. */
   git_worktree_create: { args: GitWorktreeCreateArgs; result: GitWorktree };
+  /** Remove a linked worktree, preflighting dirty files and an unmerged branch. */
+  git_worktree_remove: { args: GitWorktreeRemoveArgs; result: null };
 }

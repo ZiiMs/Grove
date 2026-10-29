@@ -931,6 +931,12 @@ export function createFakeBridge(
         worktrees.push(worktree);
         return structuredClone(worktree) as CommandMap[K]["result"];
       }
+      if (command === "git_worktree_remove") {
+        const { worktreePath } = args as { worktreePath: string };
+        const index = worktrees.findIndex((worktree) => worktree.path === worktreePath);
+        if (index >= 0) worktrees.splice(index, 1);
+        return null as CommandMap[K]["result"];
+      }
       if (command === "spec_index") {
         return (
           seed.specGraph

@@ -1422,6 +1422,38 @@ describe("context menu", () => {
     expect(screen.getByText(/joins feat\/ui/)).toBeInTheDocument();
   });
 
+  it("deletes a linked worktree with the chosen options", async () => {
+    const linked = {
+      ...worktree,
+      path: "C:/code/grove-wt/linked",
+      branch: "feat/linked",
+      current: false,
+    };
+    const bridge = renderApp({ worktrees: [worktree, linked] });
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+
+    const linkedLabel = await within(nav).findByText("feat/linked");
+    fireEvent.contextMenu(linkedLabel, { clientX: 40, clientY: 60 });
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Delete worktree" }));
+
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog).getByLabelText(/Delete the local branch/));
+    await userEvent.click(within(dialog).getByLabelText(/Discard uncommitted changes/));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete worktree" }));
+
+    await waitFor(() => expect(bridge.invocations).toContain("git_worktree_remove"));
+    const call = bridge.calls.find((entry) => entry.command === "git_worktree_remove");
+    expect(call?.args).toMatchObject({
+      repoPath: project.path,
+      worktreePath: linked.path,
+      deleteBranch: true,
+      force: true,
+      forceBranch: false,
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("opens the background menu on empty tree space", async () => {
     await ready();
     const nav = document.getElementById("panel-nav") as HTMLElement;

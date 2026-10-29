@@ -189,6 +189,8 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .btn-primary[disabled]{opacity:.5}
 .btn-ghost.danger{color:var(--red);border-color:color-mix(in srgb, var(--t-bad) 38%, var(--line))}
 .btn-ghost.danger:hover{background:var(--red-soft)}
+.btn-primary.danger{background:var(--red);color:var(--bg)}
+.btn-primary.danger:hover{background:color-mix(in srgb, var(--red) 84%, #000)}
 .icon-btn{
   width:30px;height:30px;display:grid;place-items:center;border-radius:var(--r);
   color:var(--fg-2);transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
@@ -708,6 +710,14 @@ dialog.skill-install-dialog{overflow:visible}
 .git-detect-head .od-icon{color:var(--jade)}
 .git-none{font-size:11.5px;color:var(--fg-3);line-height:1.55;margin-top:13px;border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:10px}
 dialog.add-project-dialog{width:min(760px,calc(100vw - 32px))}
+dialog.worktree-delete-dialog{width:min(560px,calc(100vw - 30px))}
+.delete-options{margin-top:12px}
+.delete-opt{display:flex;align-items:flex-start;gap:9px;padding:9px 0;border-top:1px solid var(--line);cursor:pointer}
+.delete-opt:first-child{border-top:0}
+.delete-opt input{margin-top:2px;flex:none;accent-color:var(--red)}
+.delete-opt strong{display:block;font-size:12.5px;font-weight:600;color:var(--fg)}
+.delete-opt .opt{display:block;font-size:11px;color:var(--fg-3);margin-top:2px;line-height:1.4}
+.delete-opt[data-disabled="true"]{opacity:.55;cursor:default}
 .fp-address-row{display:flex;align-items:center;gap:8px;padding:9px 0 7px}
 .fp-address{flex:1;min-width:0;background:var(--sunken);border:1px solid var(--line-2);border-radius:var(--r);padding:7px 9px;font-family:var(--mono);font-size:11.5px;color:var(--fg)}
 .fp-address::placeholder{color:var(--fg-3)}
