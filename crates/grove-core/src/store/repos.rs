@@ -691,6 +691,33 @@ mod tests {
     }
 
     #[test]
+    fn an_archived_session_is_still_archived_after_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+        {
+            let store = Store::open(&path).unwrap();
+            store
+                .insert_session(&session("session-1"), &serde_json::json!({}))
+                .unwrap();
+            store
+                .set_session_archived("session-1", Some("2025-01-02T00:00:00.000Z"))
+                .unwrap();
+        }
+
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .session("session-1")
+                .unwrap()
+                .unwrap()
+                .archived_at
+                .as_deref(),
+            Some("2025-01-02T00:00:00.000Z"),
+            "archive is durable state, not a render-time filter"
+        );
+    }
+
+    #[test]
     fn deleting_a_session_cascades_events_plans_pins_and_subagents() {
         let store = Store::open_in_memory().unwrap();
         store
