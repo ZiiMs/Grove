@@ -256,6 +256,18 @@ impl Store {
         })
     }
 
+    /// Rename a session. `updated_at` moves with the title, so a rename reads as activity in the
+    /// list's `updated_at DESC` order; nothing else on the row changes.
+    pub fn set_session_title(&self, id: &str, title: &str) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET title = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id, title, now()],
+            )?;
+            Ok(())
+        })
+    }
+
     pub fn set_resume_token(&self, id: &str, token: Option<&str>) -> Result<(), StoreError> {
         self.with_conn(|conn| {
             conn.execute(

@@ -38,6 +38,8 @@ export interface SessionsCommands {
   };
   /** Change the reasoning level for the next turn; returns the refreshed session detail. */
   session_set_thinking: { args: { id: string; level: ThinkingLevel }; result: SessionDetail };
+  /** Rename a session; the trimmed title is validated in the core and comes back on the updated row. */
+  session_rename: { args: { id: string; title: string }; result: Session };
   session_close: { args: { id: string }; result: null };
   session_resume: { args: { id: string }; result: Session };
 }

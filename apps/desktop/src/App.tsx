@@ -169,10 +169,16 @@ export default function App() {
   };
 
   /**
-   * Session menu for this slice. Rename, Generate name and Archive land in later slices and prepend
-   * their entries here; the array is the whole surface, so nothing else has to change.
+   * Session menu for this slice. Generate name and Archive land in later slices and prepend their
+   * entries here; the array is the whole surface, so nothing else has to change.
    */
   const sessionMenuItems = (row: SessionSummary): MenuItem[] => [
+    {
+      kind: "item",
+      label: "Rename",
+      icon: "edit",
+      onSelect: () => useUiStore.getState().startRename(row.id),
+    },
     {
       kind: "item",
       label: "Copy working directory",

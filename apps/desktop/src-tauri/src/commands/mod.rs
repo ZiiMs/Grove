@@ -50,6 +50,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
         sessions::session_respond_permission,
         sessions::session_respond_question,
         sessions::session_set_thinking,
+        sessions::session_rename,
         sessions::session_close,
         sessions::session_resume,
         sessions::session_context_get,

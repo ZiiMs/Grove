@@ -53,6 +53,10 @@ interface UiState {
   subagent: SubagentSelection | null;
   openSubagent: (sessionId: string, callId: string) => void;
   closeSubagent: () => void;
+  /** The session whose tree row is in inline-rename mode, if any; the menu starts it. */
+  renamingSession: string | null;
+  startRename: (id: string) => void;
+  endRename: () => void;
   toast: ToastMessage | null;
   notify: (message: string, tone?: "ok" | "error") => void;
   clearToast: () => void;
@@ -91,6 +95,9 @@ export const useUiStore = create<UiState>((set) => ({
   subagent: null,
   openSubagent: (sessionId, callId) => set({ subagent: { sessionId, callId } }),
   closeSubagent: () => set({ subagent: null }),
+  renamingSession: null,
+  startRename: (id) => set({ renamingSession: id }),
+  endRename: () => set({ renamingSession: null }),
   toast: null,
   notify: (message, tone = "ok") => set({ toast: { message, tone } }),
   clearToast: () => set({ toast: null }),
@@ -106,6 +113,7 @@ export const useUiStore = create<UiState>((set) => ({
       prOpen: false,
       prSeed: null,
       subagent: null,
+      renamingSession: null,
       toast: null,
     }),
 }));
