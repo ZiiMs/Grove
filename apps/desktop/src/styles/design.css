@@ -1318,9 +1318,13 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 /* The card floats, but its footprint is reserved as a third column so the centred chat sits
    between the tree and the card instead of running underneath it. The column is 312px: 16px of
    padding, the 280px card, 16px of padding. */
+.app[data-info="open"]{--info-reserve:312px}
 .app[data-info="open"] .workspace{
-  grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) 312px;
+  grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) var(--info-reserve);
 }
+/* The chat header spans the whole window, over the reserved strip; only the transcript and
+   composer are centred between the tree and the card. */
+.app[data-info="open"] .session-head{margin-right:calc(-1 * var(--info-reserve))}
 .session-info{
   position:fixed;z-index:34;top:98px;right:16px;bottom:40px;width:280px;
   display:flex;flex-direction:column;min-height:0;overflow:hidden;
@@ -1357,7 +1361,7 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 @media (max-width:1279px){
   .app[data-info="open"] .workspace,
   .app[data-info="open"][data-ctx="closed"] .workspace{
-    grid-template-columns:var(--nav) minmax(0,1fr) 312px;
+    grid-template-columns:var(--nav) minmax(0,1fr) var(--info-reserve);
   }
 }
 @media (max-width:899px){
@@ -1365,5 +1369,6 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
   .app[data-info="open"][data-ctx="closed"] .workspace{
     grid-template-columns:minmax(0,1fr);
   }
+  .app[data-info="open"] .session-head{margin-right:0}
   .session-info{top:138px;left:12px;right:12px;bottom:38px;width:auto;z-index:39}
 }
