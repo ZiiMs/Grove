@@ -12,7 +12,7 @@ import { thinkingLevelSchema, titleModelSchema } from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 import { errorText } from "../ipc/errors";
-import { applyTheme, findTheme, readBootTheme, type ThemeId, type ThemeMode } from "../workspace/theme";
+import { applyTheme, DEFAULT_THEME_ID, findTheme, readBootTheme, type ThemeId, type ThemeMode } from "../workspace/theme";
 
 export type PermissionMode = "ask" | "accept-edits" | "bypass";
 
@@ -220,7 +220,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setPrefs: (patch) => set((state) => ({ prefs: { ...state.prefs, ...patch } })),
 
   reset: () => {
-    applyTheme("house", "dark");
+    applyTheme(DEFAULT_THEME_ID, "dark");
     set({
       info: null,
       projects: [],
@@ -228,7 +228,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       branches: {},
       gitErrors: {},
       prefs: DEFAULT_PREFS,
-      themeId: "house",
+      themeId: DEFAULT_THEME_ID,
       themeMode: "dark",
       loading: true,
       error: null,
