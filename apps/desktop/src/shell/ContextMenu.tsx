@@ -148,6 +148,7 @@ function selectFieldContents(field: HTMLElement) {
 
 const isMac = typeof navigator !== "undefined" && /mac/i.test(navigator.platform ?? "");
 const shortcut = (key: string) => (isMac ? `⌘${key}` : `Ctrl+${key}`);
+const redoShortcut = isMac ? "⇧⌘Z" : "Ctrl+Y";
 
 /**
  * The native text-field menu. `execCommand` goes first because it preserves the field's own undo
@@ -177,7 +178,7 @@ function editMenuItems(field: HTMLElement, clipboardText: string | null): MenuIt
     {
       kind: "item",
       label: "Redo",
-      shortcut: shortcut("Y"),
+      shortcut: redoShortcut,
       disabled: !exec,
       onSelect: () => {
         field.focus();

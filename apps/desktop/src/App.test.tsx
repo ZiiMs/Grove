@@ -740,6 +740,7 @@ describe("context menu", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     Reflect.deleteProperty(navigator, "clipboard");
   });
 
