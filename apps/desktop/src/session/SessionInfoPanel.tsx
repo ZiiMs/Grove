@@ -1,4 +1,4 @@
-import type { GitWorktree, McpDiscovery, Project, SubagentSummary } from "@grove/contract";
+import type { GitWorktree, McpDiscovery, PlanUsage, Project, SubagentSummary } from "@grove/contract";
 import { useEffect, useMemo, useState } from "react";
 import { useBridge } from "../ipc/context";
 import { useContextStore } from "../state/contextStore";
@@ -37,6 +37,8 @@ export function SessionInfoPanel({
   const git = useContextStore((state) => state.git);
   const gitStats = useContextStore((state) => state.gitStats);
   const [mcp, setMcp] = useState<McpDiscovery | null>(null);
+  const [planUsage, setPlanUsage] = useState<PlanUsage | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
 
   // Discovery reads config files; it does not spawn or probe a server.
   useEffect(() => {
@@ -53,6 +55,29 @@ export function SessionInfoPanel({
       active = false;
     };
   }, [bridge]);
+
+  // Plan usage is a provider endpoint: only OpenCode Go has one in this build, so don't ask others.
+  useEffect(() => {
+    if (detail?.provider !== "opencode-go") {
+      setPlanUsage(null);
+      setPlanError(null);
+      return;
+    }
+    let active = true;
+    setPlanUsage(null);
+    setPlanError(null);
+    void bridge
+      .invoke("plan_usage", { provider: detail.provider })
+      .then((usage) => {
+        if (active) setPlanUsage(usage);
+      })
+      .catch(() => {
+        if (active) setPlanError("Plan usage unavailable");
+      });
+    return () => {
+      active = false;
+    };
+  }, [bridge, detail?.provider]);
 
   const usage = useMemo(
     () =>
@@ -176,13 +201,45 @@ export function SessionInfoPanel({
 
         <section className="si-section">
           <h3 className="si-title">Usage</h3>
+          {detail?.provider === "opencode-go" ? (
+            planUsage ? (
+              <div className="si-plan">
+                {planUsage.windows.map((window) => (
+                  <div className="si-plan-row" key={window.id}>
+                    <div className="si-plan-head">
+                      <span>{window.label}</span>
+                      <span>
+                        {window.status === "rate-limited"
+                          ? "Limit reached"
+                          : `${window.remainingPercent}% left`}
+                      </span>
+                    </div>
+                    <div
+                      className="si-bar"
+                      data-low={window.remainingPercent <= 20 ? "true" : undefined}
+                    >
+                      <span style={{ width: `${window.remainingPercent}%` }} />
+                    </div>
+                    <p className="si-plan-reset">
+                      {window.status === "rate-limited"
+                        ? "No budget left in this window"
+                        : `resets ${resetLabel(window.resetsAt)}`}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="si-empty">{planError ?? "Loading plan usage…"}</p>
+            )
+          ) : null}
+          {planUsage ? <p className="si-subhead">This session</p> : null}
           {usage.input + usage.output > 0 ? (
             <>
               <Row label="Input" value={formatTokens(usage.input)} />
               <Row label="Output" value={formatTokens(usage.output)} />
               <Row label="Total" value={formatTokens(usage.input + usage.output)} />
             </>
-          ) : (
+          ) : planUsage ? null : (
             <p className="si-empty">No usage recorded yet.</p>
           )}
           <Row label="Messages" value={`${turns.user} user · ${turns.assistant} assistant`} />
@@ -278,4 +335,17 @@ function formatDuration(ms: number): string {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return mins ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+function resetLabel(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "soon";
+  const today = new Date();
+  const sameDay = date.toDateString() === today.toDateString();
+  return date.toLocaleString(
+    undefined,
+    sameDay
+      ? { hour: "numeric", minute: "2-digit" }
+      : { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+  );
 }

@@ -8,8 +8,8 @@
 //! is testable headlessly.
 
 use crate::ipc::{
-    CreateSessionRequest, EventEnvelope, IpcError, ProviderStatus, Session, SessionDetail,
-    SessionSummary,
+    CreateSessionRequest, EventEnvelope, IpcError, PlanUsage, ProviderStatus, Session,
+    SessionDetail, SessionSummary,
 };
 use crate::paths::{display_path, AppPaths};
 use crate::providers::agent::registry as provider_registry;
@@ -251,6 +251,11 @@ impl SessionManager {
     /// Credential readiness for every provider, as the settings pane shows it.
     pub fn provider_statuses(&self) -> Vec<ProviderStatus> {
         Credentials::new(Arc::clone(&self.deps.secrets)).statuses()
+    }
+
+    /// The provider's remaining plan usage, or `None` for a provider without a plan endpoint.
+    pub async fn plan_usage(&self, provider: &str) -> Result<Option<PlanUsage>, SessionError> {
+        Ok(crate::providers::usage::plan_usage(provider, &self.deps).await?)
     }
 
     /// The provider a request did not name: the first one with a usable credential, else the first

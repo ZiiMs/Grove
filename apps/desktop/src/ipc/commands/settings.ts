@@ -1,4 +1,5 @@
 import type {
+  PlanUsage,
   ProviderStatus,
   SecretStatusView,
   Settings,
@@ -28,6 +29,8 @@ export interface SettingsCommands {
   secret_delete: { args: { key: string }; result: SecretStatusView };
   /** Every provider's readiness: configured, how it was found, and why it may be unusable. */
   provider_statuses: { args: Record<string, never>; result: ProviderStatus[] };
+  /** The provider's remaining plan usage, or `null` when it has no plan endpoint. */
+  plan_usage: { args: { provider: string }; result: PlanUsage | null };
   /** Store a key. Returns the refreshed row; the value never comes back. */
   provider_key_set: { args: { provider: string; key: string }; result: ProviderStatus };
   /** Remove a stored key. The vendor's environment variable, if set, then applies again. */

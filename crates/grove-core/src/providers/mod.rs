@@ -19,6 +19,7 @@ pub mod offline;
 pub mod openai;
 pub mod probe;
 pub mod tools;
+pub mod usage;
 pub mod wire;
 
 use crate::paths::AppPaths;

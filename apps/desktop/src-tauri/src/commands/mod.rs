@@ -70,6 +70,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
         settings::secret_set,
         settings::secret_delete,
         settings::provider_statuses,
+        settings::plan_usage,
         settings::provider_key_set,
         settings::provider_key_delete,
         settings::provider_models,

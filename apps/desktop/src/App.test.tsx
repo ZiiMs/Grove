@@ -408,6 +408,22 @@ describe("redesigned shell", () => {
     expect(screen.getByRole("button", { name: "Show context panel" })).toBeInTheDocument();
   });
 
+  it("shows the remaining OpenCode Go plan usage in the session panel", async () => {
+    const planSession = { ...session, provider: "opencode-go", model: "deepseek-v4.1-flash" };
+    renderApp({
+      sessions: [fakeSummary(planSession, events.length)],
+      details: {
+        [planSession.id]: { ...detail, provider: "opencode-go", model: "deepseek-v4.1-flash" },
+      },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    expect(await screen.findByText("94% left")).toBeInTheDocument();
+    expect(screen.getByText("71% left")).toBeInTheDocument();
+    expect(screen.getByText("26% left")).toBeInTheDocument();
+    expect(screen.getByText("This session")).toBeInTheDocument();
+  });
+
   it("toggles approval mode from the composer and keeps send icon-only", async () => {
     const bridge = await ready();
     const approval = screen.getByRole("button", {

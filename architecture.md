@@ -386,6 +386,9 @@ Two channels, both typed in `packages/contract`:
 `provider_models` (asks the vendor which models the key can reach). `provider_models` powers both the
 settings pane's "test" button and the picker refresh that runs after boot; `provider_list` remains the
 offline fallback. `session_set_thinking` changes the persisted reasoning level for one session.
+`plan_usage` reports the remaining 5-hour/weekly/monthly budget for a metered provider (OpenCode Go's
+`/zen/go/v1/usage`); it returns `null` for providers without a plan endpoint and never runs on a
+session turn.
 
 **Session titles.** `settings.titleModel` is the one global small model that names sessions, or null
 when the suggested model applies; `settings.autoTitles` is the Off switch, because clearing the model

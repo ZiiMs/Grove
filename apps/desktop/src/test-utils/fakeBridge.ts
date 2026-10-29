@@ -14,6 +14,7 @@ import type {
   ProviderSpec,
   Plan,
   PlanUpdate,
+  PlanUsage,
   Project,
   SecretStatus,
   Session,
@@ -140,6 +141,37 @@ export const DEFAULT_SETTINGS: Settings = {
   catalogSources: ["anthropics/skills", "mattpocock/skills"],
   theme: "system",
   autoTitles: true,
+};
+
+/** What the fake `plan_usage` answers for OpenCode Go: 6/29/74 used, so 94/71/26 left. */
+const DEFAULT_PLAN_USAGE: PlanUsage = {
+  provider: "opencode-go",
+  windows: [
+    {
+      id: "rolling",
+      label: "5-hour",
+      usedPercent: 6,
+      remainingPercent: 94,
+      status: "ok",
+      resetsAt: "2026-10-29T15:50:00.000Z",
+    },
+    {
+      id: "weekly",
+      label: "Weekly",
+      usedPercent: 29,
+      remainingPercent: 71,
+      status: "ok",
+      resetsAt: "2026-11-01T19:00:00.000Z",
+    },
+    {
+      id: "monthly",
+      label: "Monthly",
+      usedPercent: 74,
+      remainingPercent: 26,
+      status: "ok",
+      resetsAt: "2026-11-17T10:18:00.000Z",
+    },
+  ],
 };
 
 /** A provider row for a UI test: Anthropic with a keychain credential unless overridden. */
@@ -1125,6 +1157,10 @@ export function createFakeBridge(
       }
       if (command === "provider_thinking") {
         return structuredClone(seed.modelThinking ?? {}) as CommandMap[K]["result"];
+      }
+      if (command === "plan_usage") {
+        const { provider } = args as { provider: string };
+        return (provider === "opencode-go" ? DEFAULT_PLAN_USAGE : null) as CommandMap[K]["result"];
       }
 
       throw new Error(`FakeBridge has no handler for command: ${command}`);

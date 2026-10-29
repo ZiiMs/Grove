@@ -110,6 +110,31 @@ pub struct SessionDetail {
     pub events: Vec<SessionEvent>,
 }
 
+/// One metered window of a provider plan. Percentages are whole numbers; `remaining` is the inverse
+/// of what the vendor reports, which is what the panel shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanUsageWindow {
+    /// The vendor's window id: `rolling`, `weekly` or `monthly`.
+    pub id: String,
+    pub label: String,
+    pub used_percent: u8,
+    pub remaining_percent: u8,
+    /// `ok` or `rate-limited`.
+    pub status: String,
+    /// RFC3339 instant when the window resets.
+    pub resets_at: String,
+}
+
+/// A provider plan's usage, when the provider exposes one. Empty for providers without a plan
+/// endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanUsage {
+    pub provider: String,
+    pub windows: Vec<PlanUsageWindow>,
+}
+
 /// Arguments to `session_create`. `cwd` falls back to the process directory, then the app data dir.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1350,6 +1350,12 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .si-row > span:last-child{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .si-bar{height:5px;border-radius:99px;background:var(--sunken);overflow:hidden;margin:2px 0 6px}
 .si-bar span{display:block;height:100%;background:var(--jade);border-radius:inherit}
+.si-bar[data-low="true"] span{background:var(--amber)}
+.si-plan{display:flex;flex-direction:column;gap:9px;margin-bottom:9px}
+.si-plan-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:11.8px}
+.si-plan-head span:last-child{font-family:var(--mono);font-size:10.5px;white-space:nowrap}
+.si-plan-reset{font-size:10px;color:var(--fg-3);margin-top:3px}
+.si-subhead{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);margin:8px 0 2px}
 .si-path{font-family:var(--mono);font-size:10.5px;color:var(--fg-3);margin-top:6px;overflow-wrap:anywhere}
 .si-empty{font-size:11.5px;color:var(--fg-3);line-height:1.5}
 .si-sub{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:11.5px;min-width:0}

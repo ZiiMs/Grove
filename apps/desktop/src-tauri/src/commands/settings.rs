@@ -5,7 +5,7 @@
 //! handler logs one.
 
 use crate::state::AppState;
-use grove_core::ipc::{IpcError, IpcResult, ProviderStatus};
+use grove_core::ipc::{IpcError, IpcResult, PlanUsage, ProviderStatus};
 use grove_core::providers::ProviderError;
 use grove_core::secrets::SecretError;
 use grove_core::settings::{SecretStatusView, Settings, SettingsPatch};
@@ -95,6 +95,15 @@ pub async fn provider_statuses(
     state: tauri::State<'_, AppState>,
 ) -> IpcResult<Vec<ProviderStatus>> {
     Ok(state.core.credentials.statuses())
+}
+
+/// The provider's remaining plan usage, or `null` when that provider has no plan endpoint.
+#[tauri::command]
+pub async fn plan_usage(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+) -> IpcResult<Option<PlanUsage>> {
+    Ok(state.core.sessions.plan_usage(&provider).await?)
 }
 
 /// Store an API key for one provider. Returns the refreshed row; the value never comes back.

@@ -3,8 +3,8 @@ use grove_core::gitops::{
 };
 use grove_core::ipc::{
     AppInfo, CreateSessionRequest, DirEntry, DirListing, ErrorCode, EventEnvelope, FsRoot,
-    FsRootKind, FsRoots, IpcError, Project, ProjectDetection, Session, SessionDetail,
-    SessionSummary, SubagentSummary,
+    FsRootKind, FsRoots, IpcError, PlanUsage, PlanUsageWindow, Project, ProjectDetection, Session,
+    SessionDetail, SessionSummary, SubagentSummary,
 };
 use grove_core::plan::{Plan, PlanUpdate};
 use grove_core::providers::{Capabilities, Detection, ThinkingLevel};
@@ -578,6 +578,43 @@ fn session_detail_matches_fixture() {
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("session-detail.json")
+    );
+}
+
+#[test]
+fn plan_usage_matches_fixture() {
+    let sample = PlanUsage {
+        provider: "opencode-go".into(),
+        windows: vec![
+            PlanUsageWindow {
+                id: "rolling".into(),
+                label: "5-hour".into(),
+                used_percent: 6,
+                remaining_percent: 94,
+                status: "ok".into(),
+                resets_at: "2026-10-29T15:50:00.000Z".into(),
+            },
+            PlanUsageWindow {
+                id: "weekly".into(),
+                label: "Weekly".into(),
+                used_percent: 29,
+                remaining_percent: 71,
+                status: "ok".into(),
+                resets_at: "2026-11-01T19:00:00.000Z".into(),
+            },
+            PlanUsageWindow {
+                id: "monthly".into(),
+                label: "Monthly".into(),
+                used_percent: 74,
+                remaining_percent: 26,
+                status: "ok".into(),
+                resets_at: "2026-11-17T10:18:00.000Z".into(),
+            },
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("plan-usage.json")
     );
 }
 
