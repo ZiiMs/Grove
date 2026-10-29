@@ -775,6 +775,7 @@ dialog.settings-modal{
 .sm-form{max-width:540px;margin-top:18px}
 .sm-form .field:first-child{margin-top:0}
 .sm-form .switch-row{margin-top:14px}
+.sm-group-title{margin:22px 0 10px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
 .sm-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 22px;border-top:1px solid var(--line);flex:none}
 
 @media (max-width:700px){

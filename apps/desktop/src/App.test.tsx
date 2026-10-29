@@ -8,6 +8,7 @@ import type {
   GitBranch,
   GitWorktree,
   ProviderSpec,
+  Session,
   SessionEvent,
   Project,
   SessionDetail,
@@ -1695,5 +1696,235 @@ describe("session rename", () => {
 
     expect(opens()).toBe(before);
     expect(screen.getByRole("textbox", { name: "Session title" })).toHaveFocus();
+  });
+});
+
+describe("session titles", () => {
+  const autoSession = {
+    ...session,
+    title: "New session",
+    titleSource: "auto" as const,
+    awaiting: false,
+  };
+  const manualSession = {
+    ...session,
+    title: "OAuth device flow",
+    titleSource: "manual" as const,
+    awaiting: false,
+  };
+  const firstExchange: SessionEvent[] = [
+    {
+      at: "2025-01-01T00:00:01.000Z",
+      kind: "message",
+      role: "user",
+      blocks: [{ type: "text", text: "Wire up the GitHub OAuth device flow." }],
+    },
+    {
+      at: "2025-01-01T00:00:02.000Z",
+      kind: "message",
+      role: "assistant",
+      blocks: [{ type: "text", text: "Reading the session module first." }],
+    },
+  ];
+
+  function titleSeed(row: Session): FakeBridgeSeed {
+    return {
+      providers: PROVIDER_ROSTER,
+      providerStatuses: FAKE_PROVIDER_ROSTER,
+      sessions: [fakeSummary(row, firstExchange.length)],
+      details: { [row.id]: { ...detail, ...row, events: firstExchange } },
+    };
+  }
+
+  function assistantMessage(text: string): SessionEvent {
+    return {
+      at: "2025-01-01T00:00:07.000Z",
+      kind: "message",
+      role: "assistant",
+      blocks: [{ type: "text", text }],
+    };
+  }
+
+  async function tick(ms = 20) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+  }
+
+  it("names an auto session after its first assistant reply", async () => {
+    const bridge = renderApp(titleSeed(autoSession));
+    await screen.findByRole("heading", { name: "New session" });
+
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: autoSession.id,
+        payload: assistantMessage("The device flow starts with a user code."),
+      });
+    });
+
+    await waitFor(() =>
+      expect(bridge.calls.filter((call) => call.command === "session_generate_title")).toHaveLength(1),
+    );
+    await screen.findByRole("heading", { name: "Generated session title" });
+    expect(useSessionStore.getState().detail?.titleSource).toBe("generated");
+  });
+
+  it("makes one attempt per auto session per run and keeps the placeholder on failure", async () => {
+    const bridge = renderApp(titleSeed(autoSession));
+    bridge.on("session_generate_title", () => {
+      throw { code: "invalid", message: "rate limited" };
+    });
+    await screen.findByRole("heading", { name: "New session" });
+
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: autoSession.id,
+        payload: assistantMessage("First reply"),
+      });
+    });
+
+    expect(
+      await screen.findByText(/Couldn't name this session with Haiku 4\.5 on Anthropic: rate limited/),
+    ).toBeInTheDocument();
+    expect(useSessionStore.getState().detail?.title).toBe("New session");
+    expect(useSessionStore.getState().detail?.titleSource).toBe("auto");
+    const calls = () =>
+      bridge.calls.filter((call) => call.command === "session_generate_title").length;
+    expect(calls()).toBe(1);
+
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: autoSession.id,
+        payload: assistantMessage("Second reply"),
+      });
+    });
+    await tick();
+    expect(calls()).toBe(1);
+    expect(screen.getByRole("heading", { name: "New session" })).toBeInTheDocument();
+  });
+
+  it("never auto-names a manual title", async () => {
+    const bridge = renderApp(titleSeed(manualSession));
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: manualSession.id,
+        payload: assistantMessage("First reply"),
+      });
+    });
+    await tick();
+
+    expect(bridge.invocations).not.toContain("session_generate_title");
+    expect(useSessionStore.getState().detail?.title).toBe("OAuth device flow");
+  });
+
+  it("generates a name on demand and overwrites a manual title", async () => {
+    const bridge = renderApp(titleSeed(manualSession));
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+
+    fireEvent.contextMenu(
+      within(nav).getByRole("button", { name: /OAuth device flow/ }),
+      { clientX: 120, clientY: 160 },
+    );
+    const menu = await screen.findByRole("menu");
+    const item = within(menu).getByRole("menuitem", { name: "Generate name with AI" });
+    expect(item).toBeEnabled();
+    await userEvent.click(item);
+
+    await waitFor(() =>
+      expect(bridge.calls.find((call) => call.command === "session_generate_title")?.args).toEqual({
+        id: manualSession.id,
+      }),
+    );
+    await screen.findByRole("heading", { name: "Generated session title" });
+    expect(useSessionStore.getState().detail?.titleSource).toBe("generated");
+  });
+
+  it("offers Generate name with AI on an archived session too", async () => {
+    const archived = {
+      ...manualSession,
+      id: "session-archive",
+      title: "Old spike",
+      archivedAt: "2025-01-02T00:00:00.000Z",
+    };
+    renderApp({
+      providers: PROVIDER_ROSTER,
+      providerStatuses: FAKE_PROVIDER_ROSTER,
+      sessions: [fakeSummary(manualSession, firstExchange.length), fakeSummary(archived, 0)],
+      details: {
+        [manualSession.id]: { ...detail, ...manualSession, events: firstExchange },
+        [archived.id]: { ...detail, ...archived, events: firstExchange },
+      },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+
+    fireEvent.contextMenu(within(nav).getByRole("button", { name: /Old spike/ }), {
+      clientX: 120,
+      clientY: 160,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Generate name with AI" })).toBeEnabled();
+  });
+
+  it("disables the action and says Generating while a name is in flight", async () => {
+    await ready();
+    act(() => {
+      useSessionStore.setState({ titleJobs: new Set([session.id]) });
+    });
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+    fireEvent.contextMenu(within(nav).getByRole("button", { name: /OAuth device flow/ }), {
+      clientX: 120,
+      clientY: 160,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Generating…" })).toBeDisabled();
+  });
+
+  it("preselects and saves the suggested title model", async () => {
+    const bridge = await readyOnAnthropic();
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    const combo = await screen.findByRole("combobox", { name: "Title model" });
+    expect(screen.getByRole("heading", { name: "Session names" })).toBeInTheDocument();
+    await waitFor(() => expect(combo).toHaveTextContent("Haiku 4.5"));
+    expect(screen.getByText(/Suggested: Haiku 4\.5 on Anthropic/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => {
+      const saves = bridge.calls.filter((call) => call.command === "settings_set");
+      expect(saves[saves.length - 1]?.args).toMatchObject({
+        patch: { titleModel: { provider: "anthropic", model: "claude-haiku-4-5" } },
+      });
+    });
+  });
+
+  it("clears the title model with Off", async () => {
+    const bridge = await readyOnAnthropic();
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    const combo = await screen.findByRole("combobox", { name: "Title model" });
+    await userEvent.click(combo);
+    await userEvent.click(screen.getByRole("option", { name: /^Off/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      const saves = bridge.calls.filter((call) => call.command === "settings_set");
+      const patch = saves[saves.length - 1]?.args as { patch: Record<string, unknown> };
+      expect(patch.patch.clearTitleModel).toBe(true);
+      expect(patch.patch.titleModel).toBeUndefined();
+    });
+  });
+
+  it("disables the title model picker when no provider has a key", async () => {
+    renderApp({ providers: [], providerStatuses: [] });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    const combo = await screen.findByRole("combobox", { name: "Title model" });
+    expect(combo).toBeDisabled();
+    expect(screen.getByText("Add a provider key first.")).toBeInTheDocument();
   });
 });

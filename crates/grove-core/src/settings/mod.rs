@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub const DEFAULT_CATALOG_SOURCES: [&str; 2] = ["anthropics/skills", "mattpocock/skills"];
 
 /// The keys this build understands. Everything else is preserved verbatim in [`Settings::extra`].
-const KNOWN_KEYS: [&str; 2] = ["catalogSources", "theme"];
+const KNOWN_KEYS: [&str; 4] = ["catalogSources", "clearTitleModel", "theme", "titleModel"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -27,6 +27,15 @@ pub enum Theme {
     Dark,
 }
 
+/// The one global small model used to name sessions. It is not per provider: a session running on
+/// Anthropic can be named by the cheapest model of whichever provider the user configured first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TitleModel {
+    pub provider: String,
+    pub model: String,
+}
+
 /// The settings document as the UI and the core exchange it. Pinned by
 /// `contract/fixtures/settings.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +44,9 @@ pub struct Settings {
     /// `owner/name` GitHub repositories, in display order.
     pub catalog_sources: Vec<String>,
     pub theme: Theme,
+    /// The explicit title model, or `None` when the user has not chosen one (or chose Off). A `None`
+    /// here means "use the suggested model", not "never name a session".
+    pub title_model: Option<TitleModel>,
     /// Unknown settings keys, preserved verbatim. Never secrets.
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
@@ -48,6 +60,7 @@ impl Default for Settings {
                 .map(|source| source.to_string())
                 .collect(),
             theme: Theme::System,
+            title_model: None,
             extra: BTreeMap::new(),
         }
     }
@@ -74,6 +87,23 @@ impl Settings {
 
         if let Some(theme) = patch.theme {
             self.theme = theme;
+        }
+
+        if patch.clear_title_model && patch.title_model.is_some() {
+            return Err(SettingsError::Invalid(
+                "a title model cannot be set and cleared in the same update".into(),
+            ));
+        }
+        if patch.clear_title_model {
+            self.title_model = None;
+        } else if let Some(title_model) = patch.title_model {
+            let title_model = TitleModel {
+                provider: title_model.provider.trim().to_string(),
+                model: title_model.model.trim().to_string(),
+            };
+            validate_key("title model provider", &title_model.provider)?;
+            validate_key("title model", &title_model.model)?;
+            self.title_model = Some(title_model);
         }
 
         for (key, value) in patch.extra {
@@ -110,6 +140,12 @@ impl Settings {
             serde_json::json!(self.catalog_sources),
         );
         rows.insert("theme".to_string(), serde_json::json!(self.theme));
+        // An explicit null is what "Off" leaves behind; omitting the key would read as "never set"
+        // and let a later build silently resurrect an old model.
+        rows.insert(
+            "titleModel".to_string(),
+            serde_json::json!(self.title_model),
+        );
         for (key, value) in &self.extra {
             rows.insert(key.clone(), value.clone());
         }
@@ -123,6 +159,12 @@ impl Settings {
 pub struct SettingsPatch {
     pub catalog_sources: Option<Vec<String>>,
     pub theme: Option<Theme>,
+    /// A new explicit choice. `None` means "this update does not touch it": JSON null cannot be told
+    /// apart from an omitted key, so clearing has its own flag.
+    pub title_model: Option<TitleModel>,
+    /// Clear the explicit choice back to the suggested model. The UI's Off option sends this.
+    #[serde(default)]
+    pub clear_title_model: bool,
     #[serde(flatten)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
@@ -200,6 +242,57 @@ fn validate_catalog_source(source: &str) -> Result<(), SettingsError> {
         )));
     }
     Ok(())
+}
+
+/// The small model a fresh install should use, or `None` when no provider has a credential.
+///
+/// The first configured provider in catalog order wins, so the answer does not depend on the order
+/// the status rows arrived in. The `openrouter` case has to look at the live list: the preferred
+/// route may not be offered by the account, and the catalog's static list is only a fallback.
+pub fn suggest_title_model(
+    statuses: &[crate::providers::credentials::ProviderStatus],
+    live_models: &BTreeMap<String, Vec<String>>,
+) -> Option<TitleModel> {
+    let live = |provider: &str| -> &[String] {
+        live_models
+            .get(provider)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    };
+    for spec in crate::providers::catalog::builtin() {
+        let configured = statuses
+            .iter()
+            .find(|status| status.id == spec.id)
+            .is_some_and(|status| status.configured);
+        if !configured {
+            continue;
+        }
+        let model = match spec.id.as_str() {
+            "anthropic" => "claude-haiku-4-5".to_string(),
+            "openai" => "gpt-5-mini".to_string(),
+            "google" => "gemini-2.5-flash".to_string(),
+            "opencode-go" => "deepseek-v4.1-flash".to_string(),
+            "openrouter" => {
+                let preferred = "google/gemini-2.5-flash";
+                let models = live(&spec.id);
+                if models.iter().any(|model| model == preferred) {
+                    preferred.to_string()
+                } else {
+                    models
+                        .first()
+                        .cloned()
+                        .or_else(|| spec.models.first().cloned())
+                        .unwrap_or_else(|| spec.default_model.clone())
+                }
+            }
+            _ => spec.default_model.clone(),
+        };
+        return Some(TitleModel {
+            provider: spec.id,
+            model,
+        });
+    }
+    None
 }
 
 /// The settings subsystem: validate a patch and persist the resulting document atomically.
@@ -381,5 +474,169 @@ mod tests {
             })
             .unwrap();
         assert!(matches!(service.get(), Err(SettingsError::Invalid(_))));
+    }
+
+    #[test]
+    fn a_title_model_round_trips_and_clears_explicitly() {
+        let (service, store) = service();
+        let model = TitleModel {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+        };
+        let saved = service
+            .set(patch(serde_json::json!({
+                "titleModel": { "provider": "anthropic", "model": "claude-haiku-4-5" }
+            })))
+            .unwrap();
+        assert_eq!(saved.title_model, Some(model.clone()));
+
+        // "Off" is an explicit clear: the patch's typed `titleModel` cannot express null, so the
+        // update carries `clearTitleModel` instead of quietly keeping the old model.
+        let saved = service
+            .set(patch(serde_json::json!({ "clearTitleModel": true })))
+            .unwrap();
+        assert_eq!(saved.title_model, None);
+        assert_eq!(service.get().unwrap().title_model, None);
+        assert_eq!(
+            store.settings().unwrap().get("titleModel"),
+            Some(&serde_json::Value::Null),
+            "clearing writes an explicit null row, not the old model"
+        );
+
+        // A later patch that never mentions it leaves the choice cleared.
+        let saved = service
+            .set(SettingsPatch {
+                theme: Some(Theme::Light),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(saved.title_model, None);
+        assert_eq!(saved.theme, Theme::Light);
+    }
+
+    #[test]
+    fn setting_and_clearing_a_title_model_at_once_is_rejected() {
+        let (service, _store) = service();
+        let error = service
+            .set(patch(serde_json::json!({
+                "titleModel": { "provider": "openai", "model": "gpt-5-mini" },
+                "clearTitleModel": true
+            })))
+            .unwrap_err();
+        assert!(matches!(error, SettingsError::Invalid(_)), "{error}");
+        assert_eq!(service.get().unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn an_empty_title_model_is_rejected() {
+        let (service, _store) = service();
+        for invalid in [
+            serde_json::json!({ "titleModel": { "provider": "", "model": "gpt-5-mini" } }),
+            serde_json::json!({ "titleModel": { "provider": "openai", "model": "   " } }),
+            serde_json::json!({ "titleModel": { "provider": "open\nai", "model": "gpt-5-mini" } }),
+        ] {
+            assert!(
+                service.set(patch(invalid.clone())).is_err(),
+                "expected {invalid} to be rejected"
+            );
+        }
+        assert_eq!(service.get().unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn the_suggestion_is_the_first_configured_providers_small_model() {
+        let statuses = vec![
+            status("openai", true),
+            status("anthropic", true),
+            status("google", true),
+        ];
+        assert_eq!(
+            suggest_title_model(&statuses, &BTreeMap::new()),
+            Some(TitleModel {
+                provider: "anthropic".into(),
+                model: "claude-haiku-4-5".into()
+            }),
+            "catalog order decides, not the order the rows arrive in"
+        );
+
+        assert_eq!(
+            suggest_title_model(&[status("openai", true)], &BTreeMap::new()),
+            Some(TitleModel {
+                provider: "openai".into(),
+                model: "gpt-5-mini".into()
+            })
+        );
+        assert_eq!(
+            suggest_title_model(&[status("google", true)], &BTreeMap::new()),
+            Some(TitleModel {
+                provider: "google".into(),
+                model: "gemini-2.5-flash".into()
+            })
+        );
+        assert_eq!(
+            suggest_title_model(&[status("opencode-go", true)], &BTreeMap::new()),
+            Some(TitleModel {
+                provider: "opencode-go".into(),
+                model: "deepseek-v4.1-flash".into()
+            })
+        );
+    }
+
+    #[test]
+    fn an_openrouter_suggestion_follows_the_live_model_list() {
+        let mut live = BTreeMap::new();
+        live.insert(
+            "openrouter".to_string(),
+            vec![
+                "anthropic/claude-sonnet-4.5".to_string(),
+                "google/gemini-2.5-flash".to_string(),
+            ],
+        );
+        assert_eq!(
+            suggest_title_model(&[status("openrouter", true)], &live),
+            Some(TitleModel {
+                provider: "openrouter".into(),
+                model: "google/gemini-2.5-flash".into()
+            })
+        );
+
+        let mut without = BTreeMap::new();
+        without.insert(
+            "openrouter".to_string(),
+            vec!["z-ai/glm-5".to_string(), "openai/gpt-5".to_string()],
+        );
+        assert_eq!(
+            suggest_title_model(&[status("openrouter", true)], &without),
+            Some(TitleModel {
+                provider: "openrouter".into(),
+                model: "z-ai/glm-5".into()
+            }),
+            "the live list's first model when the preferred id is absent"
+        );
+    }
+
+    #[test]
+    fn no_configured_provider_suggests_nothing() {
+        let statuses = vec![status("anthropic", false), status("openai", false)];
+        assert_eq!(suggest_title_model(&statuses, &BTreeMap::new()), None);
+        assert_eq!(suggest_title_model(&[], &BTreeMap::new()), None);
+    }
+
+    fn status(id: &str, configured: bool) -> crate::providers::credentials::ProviderStatus {
+        let spec = crate::providers::catalog::find(id).expect("the provider ships");
+        crate::providers::credentials::ProviderStatus {
+            id: spec.id,
+            name: spec.name,
+            short: spec.short,
+            tint: spec.tint,
+            method: spec.auth,
+            key_url: spec.key_url,
+            env_var: spec.env_var,
+            default_model: spec.default_model,
+            models: spec.models,
+            configured,
+            source: None,
+            detail: None,
+        }
     }
 }

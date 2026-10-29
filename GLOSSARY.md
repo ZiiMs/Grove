@@ -110,6 +110,15 @@ still eligible for model generation), `generated` (written by a one-shot title c
 (typed by the user; every title that predates the column). A rename sets `manual` and emits
 `title_changed`, which patches the tree row and the open header without a reload.
 
+## Title model
+
+The one global small model used to name sessions, stored as `titleModel` in settings and resolved
+from a suggested default when unset (`settings::suggest_title_model`). The suggestion is the small
+model of the first configured provider in catalog order; it is never persisted silently. Generative
+naming is one non-streaming `AgentProvider::complete` call with no tools and no history, once per auto
+session per app run or on demand from the session menu. A failure leaves the placeholder and toasts
+the model and provider (ADR 0004).
+
 ## Spec graph
 
 The index of repo `.md` files whose frontmatter carries `id` + `type`, with `parent`, `depends-on`,

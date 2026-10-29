@@ -16,8 +16,8 @@ use crate::providers::agent::registry as provider_registry;
 use crate::providers::credentials::Credentials;
 use crate::providers::wire::{Message, MsgBlock, MsgRole};
 use crate::providers::{
-    AgentProvider, AgentSession, Detection, ProviderDeps, ProviderError, ProviderSpec,
-    StartContext, ThinkingLevel, UserInput,
+    AgentProvider, AgentSession, CompletionRequest, Detection, ProviderDeps, ProviderError,
+    ProviderSpec, StartContext, ThinkingLevel, UserInput,
 };
 use crate::secrets::MemorySecretStore;
 use crate::sessions::context::{render_documents, ContextAssembly, ContextSource};
@@ -26,8 +26,10 @@ use crate::sessions::event::{
     SessionEvent, SessionState, TitleSource,
 };
 use crate::sessions::pump::{self, InjectedEvent, SessionBus};
+use crate::sessions::title::{sanitize_title, title_prompt, TITLE_MAX_TOKENS, TITLE_SYSTEM_PROMPT};
+use crate::settings::{suggest_title_model, SettingsService, TitleModel};
 use crate::store::{Store, StoreError};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
@@ -105,6 +107,9 @@ pub struct SessionManager {
     /// session then starts with an empty context rather than failing.
     context: std::sync::Mutex<Option<Arc<dyn ContextSource>>>,
     live: Mutex<HashMap<String, Arc<LiveSession>>>,
+    /// Sessions with a title completion in flight. A second request is refused instead of spending a
+    /// second provider call on the same conversation.
+    title_jobs: Mutex<HashSet<String>>,
     bus: SessionBus,
 }
 
@@ -121,6 +126,7 @@ impl SessionManager {
             providers,
             context: std::sync::Mutex::new(None),
             live: Mutex::new(HashMap::new()),
+            title_jobs: Mutex::new(HashSet::new()),
             bus,
         }
     }
@@ -541,6 +547,84 @@ impl SessionManager {
         self.store
             .session(id)?
             .ok_or_else(|| SessionError::NotFound(id.to_string()))
+    }
+
+    /// Name a session with one small model call outside the agent loop.
+    ///
+    /// The model is the explicit global choice, else the suggested model of the first configured
+    /// provider. The transcript supplies the first exchange; nothing else from it is sent. A failure
+    /// is reported unchanged and leaves the row exactly as it was, so the placeholder survives for a
+    /// retry or a manual rename.
+    ///
+    /// Only one generation may run per session at a time: the second caller is refused rather than
+    /// spending another provider call on the same transcript.
+    pub async fn generate_title(&self, id: &str) -> Result<Session, SessionError> {
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        {
+            let mut jobs = self.title_jobs.lock().await;
+            if !jobs.insert(id.to_string()) {
+                return Err(SessionError::Invalid(
+                    "a title is already being generated for this session".into(),
+                ));
+            }
+        }
+        let result = self.generate_title_inner(id).await;
+        self.title_jobs.lock().await.remove(id);
+        result
+    }
+
+    async fn generate_title_inner(&self, id: &str) -> Result<Session, SessionError> {
+        let title_model = self.title_model()?;
+        let events = self.store.session_events(id)?;
+        let user = message_text(&events, Role::User).ok_or_else(|| {
+            SessionError::Invalid("session has no user message to name it from".into())
+        })?;
+        let assistant = message_text(&events, Role::Assistant)
+            .ok_or_else(|| SessionError::Invalid("session has no assistant reply yet".into()))?;
+
+        let provider = self.provider(&title_model.provider)?;
+        let answer = provider
+            .complete(
+                CompletionRequest {
+                    model: title_model.model.clone(),
+                    system: TITLE_SYSTEM_PROMPT.to_string(),
+                    prompt: title_prompt(&user, &assistant),
+                    max_tokens: TITLE_MAX_TOKENS,
+                },
+                self.deps.clone(),
+            )
+            .await?;
+        let title = sanitize_title(&answer).ok_or_else(|| {
+            SessionError::Invalid("the title model returned an empty title".into())
+        })?;
+        self.record_title(id, &title, TitleSource::Generated)
+            .await?;
+        self.store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))
+    }
+
+    /// The explicit title model, else the suggested one. The suggestion is never persisted here:
+    /// Settings shows it and the save persists whatever the form shows.
+    fn title_model(&self) -> Result<TitleModel, SessionError> {
+        let settings = SettingsService::new(Arc::clone(&self.store))
+            .get()
+            .map_err(|error| SessionError::Invalid(error.to_string()))?;
+        if let Some(model) = settings.title_model {
+            return Ok(model);
+        }
+        suggest_title_model(
+            &self.provider_statuses(),
+            &std::collections::BTreeMap::new(),
+        )
+        .ok_or_else(|| {
+            SessionError::Invalid(
+                "no provider is configured to name sessions; add a key in Settings → Providers"
+                    .into(),
+            )
+        })
     }
 
     /// Persist a new title and announce it. A live session's pump is the writer, so the event lands in
@@ -1038,6 +1122,33 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// The first non-empty text of a message with `role` in the transcript. Code and thinking blocks are
+/// not what the user or the assistant said, so they do not become title material.
+fn message_text(events: &[SessionEvent], role: Role) -> Option<String> {
+    events.iter().find_map(|event| {
+        let EventKind::Message {
+            role: found,
+            blocks,
+        } = &event.kind
+        else {
+            return None;
+        };
+        if *found != role {
+            return None;
+        }
+        let text = blocks
+            .iter()
+            .filter_map(|block| match block {
+                Block::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let text = text.trim();
+        (!text.is_empty()).then(|| text.to_string())
+    })
+}
+
 /// Cut a conversation at its last complete assistant message before handing it to another provider.
 ///
 /// A message that asks for a tool is not complete: the tool results and the reply they produce are
@@ -1113,12 +1224,28 @@ mod tests {
         /// The outbound event channel of every started session, oldest first, so a test can park a
         /// permission or a question the way a real agent does mid-turn.
         events: Arc<StdMutex<Vec<mpsc::Sender<SessionEvent>>>>,
+        /// One-shot completion requests, in call order.
+        completions: Arc<StdMutex<Vec<CompletionRequest>>>,
+        /// What the one-shot path answers.
+        completion: Arc<StdMutex<StubCompletion>>,
         /// Whether a credential counts as configured (drives `detect`).
         ready: bool,
         /// Park a turn after it reports busy until the test releases `gate`, so a mid-turn switch
         /// is deterministic instead of racing a sleep.
         hold: bool,
         gate: Arc<Notify>,
+    }
+
+    #[derive(Clone)]
+    enum StubCompletion {
+        Text(String),
+        Error(String),
+    }
+
+    impl Default for StubCompletion {
+        fn default() -> Self {
+            StubCompletion::Text("Fix the login bug".into())
+        }
     }
 
     impl StubProvider {
@@ -1135,6 +1262,8 @@ mod tests {
                 models: Arc::new(StdMutex::new(Vec::new())),
                 thinking: Arc::new(StdMutex::new(Vec::new())),
                 events: Arc::new(StdMutex::new(Vec::new())),
+                completions: Arc::new(StdMutex::new(Vec::new())),
+                completion: Arc::new(StdMutex::new(StubCompletion::default())),
                 ready: true,
                 hold: false,
                 gate: Arc::new(Notify::new()),
@@ -1151,6 +1280,30 @@ mod tests {
 
         fn with_ready(mut self, ready: bool) -> Self {
             self.ready = ready;
+            self
+        }
+
+        /// Run under a catalogued provider id, so the credential-driven suggestion can find it.
+        fn for_provider(mut self, id: &str) -> Self {
+            self.spec = catalog::find(id).expect("the provider ships");
+            self
+        }
+
+        fn with_completion(self, reply: &str) -> Self {
+            *self
+                .completion
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                StubCompletion::Text(reply.into());
+            self
+        }
+
+        fn with_failing_completion(self, message: &str) -> Self {
+            *self
+                .completion
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                StubCompletion::Error(message.into());
             self
         }
 
@@ -1189,6 +1342,21 @@ mod tests {
                     self.spec.default_model.clone(),
                     "No API key for Stub.",
                 )
+            }
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+            _deps: ProviderDeps,
+        ) -> Result<String, ProviderError> {
+            lock(&self.completions).push(request);
+            // A real completion takes a network round trip; the delay lets two callers race so the
+            // per-session guard is observable.
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            match lock(&self.completion).clone() {
+                StubCompletion::Text(text) => Ok(text),
+                StubCompletion::Error(message) => Err(ProviderError::Api(message)),
             }
         }
 
@@ -2436,6 +2604,64 @@ mod tests {
         );
     }
 
+    fn append_message(manager: &SessionManager, id: &str, role: Role, text: &str) {
+        manager
+            .store()
+            .append_event(
+                id,
+                &SessionEvent::new(EventKind::Message {
+                    role,
+                    blocks: vec![Block::Text { text: text.into() }],
+                }),
+            )
+            .expect("the event log accepts the message");
+    }
+
+    fn choose_title_model(manager: &SessionManager, provider: &str, model: &str) {
+        crate::settings::SettingsService::new(manager.store())
+            .set(crate::settings::SettingsPatch {
+                title_model: Some(crate::settings::TitleModel {
+                    provider: provider.into(),
+                    model: model.into(),
+                }),
+                ..Default::default()
+            })
+            .expect("the title model saves");
+    }
+
+    fn title_changes(
+        bus: &mut broadcast::Receiver<EventEnvelope<SessionEvent>>,
+    ) -> Vec<(String, TitleSource)> {
+        let mut changes = Vec::new();
+        loop {
+            match bus.try_recv() {
+                Ok(envelope) => {
+                    if let EventKind::TitleChanged { title, source } = envelope.payload.kind {
+                        changes.push((title, source));
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Empty) => return changes,
+                Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(broadcast::error::TryRecvError::Closed) => return changes,
+            }
+        }
+    }
+
+    fn exchange(manager: &SessionManager, session: &str) {
+        append_message(
+            manager,
+            session,
+            Role::User,
+            "Wire up the GitHub OAuth device flow.",
+        );
+        append_message(
+            manager,
+            session,
+            Role::Assistant,
+            "The device flow starts with a short-lived user code.",
+        );
+    }
+
     #[tokio::test]
     async fn switching_hands_the_live_history_to_the_new_provider_without_a_replay() {
         let (manager, from_starts, to_starts) = manager_two();
@@ -2483,6 +2709,150 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generating_a_title_sanitizes_it_and_announces_the_new_source() {
+        let (manager, _contexts) =
+            manager_with(StubProvider::new().with_completion("\"Title: Fix the login bug.\""));
+        let session = create(&manager).await;
+        exchange(&manager, &session);
+        choose_title_model(&manager, "stub", "stub-small");
+        let mut bus = manager.subscribe();
+
+        let updated = manager
+            .generate_title(&session)
+            .await
+            .expect("the model answered");
+
+        assert_eq!(updated.title, "Fix the login bug");
+        assert_eq!(updated.title_source, TitleSource::Generated);
+        let changes = title_changes(&mut bus);
+        assert_eq!(
+            changes,
+            vec![("Fix the login bug".to_string(), TitleSource::Generated)]
+        );
+        let stored = manager.get(&session).unwrap();
+        assert!(stored.events.iter().any(|event| matches!(
+            &event.kind,
+            EventKind::TitleChanged { title, source } if title == "Fix the login bug" && *source == TitleSource::Generated
+        )));
+    }
+
+    #[tokio::test]
+    async fn the_title_call_carries_one_small_prompt_and_nothing_else() {
+        let stub = StubProvider::new();
+        let completions = Arc::clone(&stub.completions);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+        exchange(&manager, &session);
+        choose_title_model(&manager, "stub", "stub-small");
+
+        manager.generate_title(&session).await.unwrap();
+
+        let sent = lock(&completions);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].model, "stub-small");
+        assert_eq!(sent[0].system, crate::sessions::title::TITLE_SYSTEM_PROMPT);
+        assert_eq!(sent[0].max_tokens, 64);
+        assert!(sent[0].prompt.contains("GitHub OAuth device flow"));
+        assert!(sent[0].prompt.contains("short-lived user code"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_completion_keeps_the_placeholder_and_the_auto_source() {
+        let (manager, _contexts) =
+            manager_with(StubProvider::new().with_failing_completion("rate limited"));
+        let session = create(&manager).await;
+        exchange(&manager, &session);
+        choose_title_model(&manager, "stub", "stub-small");
+
+        let error = manager.generate_title(&session).await.unwrap_err();
+
+        assert!(
+            matches!(&error, SessionError::Provider(ProviderError::Api(message)) if message == "rate limited"),
+            "the provider error travels unchanged: {error:?}"
+        );
+        let stored = manager.get(&session).unwrap();
+        assert_eq!(stored.session.title, TEMPORARY_SESSION_TITLE);
+        assert_eq!(stored.session.title_source, TitleSource::Auto);
+        assert!(
+            !stored
+                .events
+                .iter()
+                .any(|event| matches!(event.kind, EventKind::TitleChanged { .. })),
+            "a failure must not announce a title"
+        );
+
+        // The per-session guard is released on failure, so the user can retry.
+        assert!(manager.generate_title(&session).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn generating_a_title_refuses_before_the_first_assistant_reply() {
+        let (manager, _contexts) = manager_with(StubProvider::new());
+        let session = create(&manager).await;
+        append_message(&manager, &session, Role::User, "Start here");
+        choose_title_model(&manager, "stub", "stub-small");
+
+        let error = manager.generate_title(&session).await.unwrap_err();
+
+        assert!(
+            matches!(&error, SessionError::Invalid(message) if message.contains("assistant")),
+            "{error}"
+        );
+        assert_eq!(
+            manager.get(&session).unwrap().session.title,
+            TEMPORARY_SESSION_TITLE
+        );
+    }
+
+    #[tokio::test]
+    async fn generating_a_title_refuses_when_no_model_is_available() {
+        let (manager, _contexts) = manager_with(StubProvider::new());
+        let session = create(&manager).await;
+        exchange(&manager, &session);
+
+        let error = manager.generate_title(&session).await.unwrap_err();
+
+        assert!(matches!(error, SessionError::Invalid(_)), "{error}");
+        assert_eq!(
+            manager.get(&session).unwrap().session.title,
+            TEMPORARY_SESSION_TITLE
+        );
+    }
+
+    #[tokio::test]
+    async fn the_suggested_model_is_used_when_the_setting_is_unset() {
+        let stub = StubProvider::new().for_provider("anthropic");
+        let completions = Arc::clone(&stub.completions);
+        let (manager, _contexts) = manager_with(stub);
+        manager
+            .secrets()
+            .set("provider.anthropic.api_key", "test-key")
+            .unwrap();
+        let session = manager
+            .create(CreateSessionRequest {
+                provider: "anthropic".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .session
+            .id;
+        exchange(&manager, &session);
+
+        manager.generate_title(&session).await.unwrap();
+
+        assert_eq!(
+            lock(&completions)[0].model,
+            "claude-haiku-4-5",
+            "the first configured provider's suggested small model names the session"
+        );
+        assert_eq!(
+            manager.get(&session).unwrap().session.title,
+            "Fix the login bug"
+        );
+    }
+
+    #[tokio::test]
     async fn a_handoff_stops_at_the_last_complete_assistant_message() {
         let (manager, _from_starts, to_starts) = manager_two();
         let session = create_on(&manager, "stub-a").await;
@@ -2504,6 +2874,31 @@ mod tests {
                 }]),
             ],
             "the dangling tool call and its user message are not handed to another provider"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_generations_for_one_session_are_refused() {
+        let (manager, _contexts) = manager_with(StubProvider::new());
+        let session = create(&manager).await;
+        exchange(&manager, &session);
+        choose_title_model(&manager, "stub", "stub-small");
+
+        let (first, second) = tokio::join!(
+            manager.generate_title(&session),
+            manager.generate_title(&session)
+        );
+
+        let results = [&first, &second];
+        let successes = results.iter().filter(|result| result.is_ok()).count();
+        assert_eq!(successes, 1, "only one call may run: {first:?} {second:?}");
+        let refused = results
+            .iter()
+            .find(|result| result.is_err())
+            .expect("the second call is refused");
+        assert!(
+            matches!(refused, Err(SessionError::Invalid(message)) if message.contains("already")),
+            "{refused:?}"
         );
     }
 

@@ -98,6 +98,12 @@ export default function App() {
     };
     void subscribeToSessionEvents(bridge, (sessionId, event) => {
       useSessionStore.getState().applyEvent(sessionId, event);
+      // The first assistant reply is the moment a blank-title session has enough material to be
+      // named. `maybeGenerateTitle` guards one attempt per auto session per app run and never
+      // touches a manual title.
+      if (sessionId && event.kind === "message" && event.role === "assistant") {
+        void useSessionStore.getState().maybeGenerateTitle(bridge, sessionId);
+      }
       if (
         event.kind === "status" &&
         (event.state === "idle" || event.state === "ready" || event.state === "exited")
@@ -192,12 +198,21 @@ export default function App() {
   };
 
   /**
-   * Session menu. Generate name arrives in a later slice and prepends its entry here; the array is
-   * the whole surface, so nothing else has to change. Rename works on both sides of the archive;
-   * permanent delete exists only on an archived row, where Archive's action becomes Restore.
+   * Session menu. Generate name is the first entry on both sides of the archive: it overwrites any
+   * title without confirmation, including a manual one, and is disabled while a generation for this
+   * session is already running. Rename works on both sides too; permanent delete exists only on an
+   * archived row, where Archive's action becomes Restore.
    */
   const sessionMenuItems = (row: SessionSummary): MenuItem[] => {
+    const generating = useSessionStore.getState().titleJobs.has(row.id);
     const items: MenuItem[] = [
+      {
+        kind: "item",
+        label: generating ? "Generating…" : "Generate name with AI",
+        icon: "sparkle",
+        disabled: generating,
+        onSelect: () => void useSessionStore.getState().generateTitle(bridge, row.id),
+      },
       {
         kind: "item",
         label: "Rename",

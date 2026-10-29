@@ -8,8 +8,8 @@
 //! user can never pick "offline" and mistake it for a model.
 
 use super::{
-    AgentProvider, AgentSession, AuthMethod, Capabilities, Detection, ProviderDeps, ProviderError,
-    ProviderSpec, StartContext, UserInput, Wire,
+    AgentProvider, AgentSession, AuthMethod, Capabilities, CompletionRequest, Detection,
+    ProviderDeps, ProviderError, ProviderSpec, StartContext, UserInput, Wire,
 };
 use crate::sessions::event::{
     Block, Decision, EventKind, Role, SessionEvent, SessionState, ToolStatus,
@@ -70,6 +70,15 @@ impl AgentProvider for OfflineProvider {
     /// Always ready: there is no credential to configure.
     fn detect(&self, _deps: &ProviderDeps) -> Detection {
         Detection::ready(AuthMethod::ApiKey, spec().default_model)
+    }
+
+    /// A deterministic title for tests and previews: the same script every time, with no network.
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+        _deps: ProviderDeps,
+    ) -> Result<String, ProviderError> {
+        Ok("Offline session".to_string())
     }
 
     async fn start(
@@ -281,6 +290,28 @@ mod tests {
         let mut session = OfflineSession::new(std::env::temp_dir(), "mock-1".into(), false, 0);
         session.set_model("mock-2".into()).await.unwrap();
         assert_eq!(session.model, "mock-2");
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_completion_is_deterministic() {
+        let provider = OfflineProvider;
+        let answer = provider
+            .complete(
+                CompletionRequest {
+                    model: "mock-1".into(),
+                    system: "system".into(),
+                    prompt: "prompt".into(),
+                    max_tokens: 64,
+                },
+                ProviderDeps {
+                    paths: crate::paths::AppPaths::new(std::env::temp_dir().join("grove-offline")),
+                    http: reqwest::Client::new(),
+                    secrets: Arc::new(crate::secrets::MemorySecretStore::new()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "Offline session");
     }
 
     #[tokio::test]

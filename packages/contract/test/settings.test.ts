@@ -18,7 +18,24 @@ describe("settings contract fixtures", () => {
     const parsed = settingsSchema.parse(fixture("settings.json"));
     expect(parsed.theme).toBe("dark");
     expect(parsed.catalogSources).toEqual(["anthropics/skills", "mattpocock/skills"]);
+    expect(parsed.titleModel).toEqual({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+    });
     expect(parsed.futureFlag).toBe(true);
+  });
+
+  it("reads a cleared title model and keeps clearing explicit", () => {
+    const nulled = settingsSchema.parse({
+      catalogSources: [],
+      theme: "system",
+      titleModel: null,
+    });
+    expect(nulled.titleModel).toBeNull();
+
+    const patch = settingsPatchSchema.parse({ clearTitleModel: true });
+    expect(patch.clearTitleModel).toBe(true);
+    expect(() => settingsPatchSchema.parse({ titleModel: null })).toThrow();
   });
 
   it("rejects a settings document with a missing typed field", () => {

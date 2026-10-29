@@ -149,6 +149,22 @@ pub async fn provider_thinking(
     Ok(state.core.provider_thinking().await)
 }
 
+/// The small model that should name sessions when the user has not chosen one.
+///
+/// The caller passes the live model lists it already holds (`provider_models` refreshed them); the
+/// OpenRouter suggestion depends on whether the account offers the preferred route. Nothing here
+/// persists the suggestion: Settings shows it and a save writes the choice.
+#[tauri::command]
+pub fn title_model_suggest(
+    state: tauri::State<'_, AppState>,
+    live_models: Option<std::collections::BTreeMap<String, Vec<String>>>,
+) -> IpcResult<Option<grove_core::settings::TitleModel>> {
+    Ok(grove_core::settings::suggest_title_model(
+        &state.core.credentials.statuses(),
+        &live_models.unwrap_or_default(),
+    ))
+}
+
 fn provider_error(error: ProviderError) -> IpcError {
     match error {
         ProviderError::Unavailable(message) => IpcError::unavailable(message),

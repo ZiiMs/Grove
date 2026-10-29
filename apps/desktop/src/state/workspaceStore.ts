@@ -6,8 +6,9 @@ import type {
   Project,
   SettingsPatch,
   ThinkingLevel,
+  TitleModel,
 } from "@grove/contract";
-import { thinkingLevelSchema } from "@grove/contract";
+import { thinkingLevelSchema, titleModelSchema } from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 import { errorText } from "../ipc/errors";
@@ -21,6 +22,8 @@ export interface Preferences {
   defaultModel: string;
   /** Default reasoning level for a new session. */
   thinkingLevel: ThinkingLevel;
+  /** The global small model that names sessions; null means the suggested one applies. */
+  titleModel: TitleModel | null;
   permissionMode: PermissionMode;
   /** Absolute folder new worktrees are created under; empty means "next to the project". */
   worktreeRoot: string;
@@ -55,6 +58,7 @@ const DEFAULT_PREFS: Preferences = {
   defaultProvider: "anthropic",
   defaultModel: "claude-sonnet-4-5",
   thinkingLevel: "off",
+  titleModel: null,
   permissionMode: "ask",
   worktreeRoot: "~/code",
   restoreSessions: true,
@@ -74,12 +78,18 @@ function thinkingLevelValue(value: unknown, fallback: ThinkingLevel): ThinkingLe
   return parsed.success ? parsed.data : fallback;
 }
 
+function titleModelValue(value: unknown): TitleModel | null {
+  const parsed = titleModelSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 function prefsFromSettings(settings: Record<string, unknown>): Preferences {
   const mode = settings.permissionMode;
   return {
     defaultProvider: stringValue(settings.defaultProvider, DEFAULT_PREFS.defaultProvider),
     defaultModel: stringValue(settings.defaultModel, DEFAULT_PREFS.defaultModel),
     thinkingLevel: thinkingLevelValue(settings.thinkingLevel, DEFAULT_PREFS.thinkingLevel),
+    titleModel: titleModelValue(settings.titleModel),
     permissionMode:
       mode === "accept-edits" || mode === "bypass" || mode === "ask"
         ? mode

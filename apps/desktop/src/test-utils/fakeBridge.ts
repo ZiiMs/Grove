@@ -589,6 +589,30 @@ export function createFakeBridge(
         // A same-provider hot swap adds no transcript event; the toast is the feedback.
         return structuredClone(detail) as CommandMap[K]["result"];
       }
+      if (command === "session_generate_title") {
+        const { id } = args as { id: string };
+        const row = sessions.find((session) => session.id === id);
+        const detail = details[id];
+        if (!row || !detail) throw new Error(`FakeBridge has no session: ${id}`);
+        const replied = detail.events.some(
+          (event) => event.kind === "message" && event.role === "assistant",
+        );
+        if (!replied) throw new Error("invalid request: session has no assistant reply yet");
+        const at = "2025-01-01T00:00:10.000Z";
+        const title = "Generated session title";
+        row.title = title;
+        row.titleSource = "generated";
+        row.updatedAt = at;
+        detail.title = title;
+        detail.titleSource = "generated";
+        detail.updatedAt = at;
+        const event: SessionEvent = { at, kind: "title_changed", title, source: "generated" };
+        detail.events = [...detail.events, event];
+        row.eventCount = detail.events.length;
+        bridge.emitSessionEvent({ sessionId: id, payload: event });
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return structuredClone(session) as CommandMap[K]["result"];
+      }
       if (command === "session_close") {
         setStatus((args as { id: string }).id, "exited");
         return null as CommandMap[K]["result"];
@@ -999,11 +1023,42 @@ export function createFakeBridge(
       }
       if (command === "settings_set") {
         const { patch } = args as { patch: SettingsPatch };
-        const { catalogSources, theme, ...extras } = patch;
+        const { catalogSources, theme, titleModel, clearTitleModel, ...extras } = patch;
+        if (clearTitleModel && titleModel) {
+          throw new Error(
+            "invalid request: a title model cannot be set and cleared in the same update",
+          );
+        }
         if (catalogSources) settings.catalogSources = [...catalogSources];
         if (theme) settings.theme = theme;
+        if (clearTitleModel) settings.titleModel = null;
+        if (titleModel) settings.titleModel = { ...titleModel };
         Object.assign(settings, extras);
         return structuredClone(settings) as CommandMap[K]["result"];
+      }
+      if (command === "title_model_suggest") {
+        const { liveModels } = (args ?? {}) as { liveModels?: Record<string, string[]> };
+        const rows = seed.providerStatuses ?? DEFAULT_PROVIDER_STATUSES;
+        const order = ["anthropic", "openai", "google", "openrouter", "opencode-go"];
+        const small: Record<string, string> = {
+          anthropic: "claude-haiku-4-5",
+          openai: "gpt-5-mini",
+          google: "gemini-2.5-flash",
+          "opencode-go": "deepseek-v4.1-flash",
+        };
+        for (const id of order) {
+          const row = rows.find((status) => status.id === id);
+          if (!row?.configured) continue;
+          if (id === "openrouter") {
+            const live = liveModels?.openrouter ?? row.models;
+            const model = live.includes("google/gemini-2.5-flash")
+              ? "google/gemini-2.5-flash"
+              : (live[0] ?? row.models[0]);
+            return { provider: id, model } as CommandMap[K]["result"];
+          }
+          return { provider: id, model: small[id] } as CommandMap[K]["result"];
+        }
+        return null as CommandMap[K]["result"];
       }
       if (command === "secret_status") {
         const { key } = args as { key: string };
