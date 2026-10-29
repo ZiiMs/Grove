@@ -732,6 +732,11 @@ describe("redesigned shell", () => {
 
   it("drives the custom window controls", async () => {
     const bridge = await ready();
+    // One deep drag region: empty titlebar space drags the window, buttons still click.
+    expect(document.querySelector(".titlebar")).toHaveAttribute(
+      "data-tauri-drag-region",
+      "deep",
+    );
 
     await userEvent.click(screen.getByRole("button", { name: "Minimize window" }));
     expect(bridge.invocations).toContain("app_window_minimize");

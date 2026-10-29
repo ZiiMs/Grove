@@ -80,12 +80,8 @@ export function Titlebar({
   };
 
   return (
-    <header className="titlebar">
-      <div
-        className="brand"
-        data-tauri-drag-region
-        onDoubleClick={() => void toggleMaximize()}
-      >
+    <header className="titlebar" data-tauri-drag-region="deep">
+      <div className="brand">
         <span className="brand-mark">
           <BrandMark />
         </span>
@@ -114,11 +110,7 @@ export function Titlebar({
         </button>
       ) : null}
 
-      <div
-        className="titlebar-drag"
-        data-tauri-drag-region
-        onDoubleClick={() => void toggleMaximize()}
-      />
+      <div className="titlebar-drag" />
 
       <div className="titlebar-right">
         {awaitingCount > 0 ? (
