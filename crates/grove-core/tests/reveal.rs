@@ -18,6 +18,28 @@ fn windows_selects_a_file_and_opens_a_folder() {
 }
 
 #[test]
+fn windows_converts_display_paths_to_native_separators() {
+    // Grove stores and shows paths with `/`; Explorer's `/select,` opens Documents for those.
+    let file = Path::new("C:/work/grove/src/main.ts");
+    assert_eq!(
+        command_for_platform("windows", file, false).args,
+        vec![r"/select,C:\work\grove\src\main.ts"]
+    );
+
+    let folder = Path::new("C:/work/grove");
+    assert_eq!(
+        command_for_platform("windows", folder, true).args,
+        vec![r"C:\work\grove"]
+    );
+
+    let unc = Path::new("//server/share/grove");
+    assert_eq!(
+        command_for_platform("windows", unc, true).args,
+        vec![r"\\server\share\grove"]
+    );
+}
+
+#[test]
 fn macos_reveals_a_file_and_opens_a_folder() {
     let file = Path::new("/work/grove/src/main.ts");
     let revealed = command_for_platform("macos", file, false);

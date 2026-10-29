@@ -21,32 +21,43 @@ pub struct RevealCommand {
 /// argument so the comma and the path survive the command line intact; macOS uses `open -R`; on
 /// Linux the parent folder is the closest equivalent, because `xdg-open` has no select verb.
 pub fn command_for_platform(platform: &str, path: &Path, is_dir: bool) -> RevealCommand {
-    let shown = path.to_string_lossy().to_string();
     match platform {
-        "windows" => RevealCommand {
-            program: "explorer.exe".into(),
-            args: if is_dir {
-                vec![shown]
-            } else {
-                vec![format!("/select,{shown}")]
-            },
-        },
-        "macos" => RevealCommand {
-            program: "open".into(),
-            args: if is_dir {
-                vec![shown]
-            } else {
-                vec!["-R".into(), shown]
-            },
-        },
-        _ => RevealCommand {
-            program: "xdg-open".into(),
-            args: if is_dir {
-                vec![shown]
-            } else {
-                vec![parent_of(path)]
-            },
-        },
+        "windows" => {
+            // Explorer parses `/select,` with native separators only: a forward-slash path makes it
+            // fall back to Documents/Desktop instead of the target. Display paths elsewhere in Grove
+            // use `/`, so convert here, at the one place that hands a path to Explorer.
+            let shown = path.to_string_lossy().replace('/', r"\");
+            RevealCommand {
+                program: "explorer.exe".into(),
+                args: if is_dir {
+                    vec![shown]
+                } else {
+                    vec![format!("/select,{shown}")]
+                },
+            }
+        }
+        "macos" => {
+            let shown = path.to_string_lossy().to_string();
+            RevealCommand {
+                program: "open".into(),
+                args: if is_dir {
+                    vec![shown]
+                } else {
+                    vec!["-R".into(), shown]
+                },
+            }
+        }
+        _ => {
+            let shown = path.to_string_lossy().to_string();
+            RevealCommand {
+                program: "xdg-open".into(),
+                args: if is_dir {
+                    vec![shown]
+                } else {
+                    vec![parent_of(path)]
+                },
+            }
+        }
     }
 }
 
