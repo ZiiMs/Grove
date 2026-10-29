@@ -9,12 +9,16 @@ import type {
   SessionDetail,
   SessionSummary,
   SubagentSummary,
+  TitleModel,
 } from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 import { errorText } from "../ipc/errors";
 import type { ModelThinkingMap } from "../workspace/thinking";
+import { modelLabel } from "../workspace/modelLabel";
+import { providerMeta } from "../workspace/models";
 import { useUiStore } from "./uiStore";
+import { useWorkspaceStore } from "./workspaceStore";
 
 /**
  * Session domain state: the list, the open tabs, the active transcript, and the commands that move
@@ -60,6 +64,12 @@ interface SessionStoreData {
   queues: Record<string, string[]>;
   /** The active session's knowledge (pins, plan, the documents a start would send). */
   context: SessionContext | null;
+  /** The suggested title model when the setting is null; null when no provider is configured. */
+  titleSuggest: TitleModel | null;
+  /** Auto sessions already attempted this app run: one automatic call per session per run. */
+  titleAttempts: Set<string>;
+  /** Sessions with a title generation in flight, so the menu can disable and say so. */
+  titleJobs: Set<string>;
   loading: boolean;
   busy: boolean;
   error: string | null;
@@ -116,6 +126,15 @@ export interface SessionStore extends SessionStoreData {
   refreshContext: (bridge: GroveBridge) => Promise<boolean>;
   /** Re-launch the active session on another registered provider, keeping its transcript. */
   switchProvider: (bridge: GroveBridge, provider: string, model?: string) => Promise<void>;
+  /** Fetch the suggested title model for the providers (and live lists) currently known. */
+  suggestTitleModel: (bridge: GroveBridge) => Promise<TitleModel | null>;
+  /** Name a session with the global title model; overwrites any title, manual included. */
+  generateTitle: (bridge: GroveBridge, id: string) => Promise<boolean>;
+  /**
+   * The App session-event trigger: one automatic attempt per auto session per app run. A manual
+   * title is never touched, and no model configured means no call at all.
+   */
+  maybeGenerateTitle: (bridge: GroveBridge, id: string) => Promise<void>;
   /**
    * Rename a session. The command trims and validates, so the row may pass what the user typed;
    * returns `null` on success or the message to show beside the field.
@@ -138,6 +157,9 @@ const initial: SessionStoreData = {
   drafts: {},
   queues: {},
   context: null,
+  titleSuggest: null,
+  titleAttempts: new Set<string>(),
+  titleJobs: new Set<string>(),
   loading: true,
   busy: false,
   error: null,
@@ -246,6 +268,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       ]);
       set({ providers, providerStatuses, sessions, loading: false });
       void get().refreshModels(bridge);
+      void get().suggestTitleModel(bridge);
     } catch (error) {
       set({ loading: false, error: errorText(error) });
     }
@@ -295,6 +318,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
     const thinking = await thinkingRequest;
     if (thinking) set({ modelThinking: thinking });
+    void get().suggestTitleModel(bridge);
   },
 
   create: async (bridge, input) => {
@@ -683,6 +707,93 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     } catch (error) {
       return errorText(error);
     }
+  },
+
+  suggestTitleModel: async (bridge) => {
+    // The live lists the shell already fetched decide the OpenRouter route; the core does not keep
+    // them. Nothing is written: the suggestion is a default, not a choice.
+    const liveModels = Object.fromEntries(
+      get().providers.map((provider) => [provider.id, provider.models]),
+    );
+    try {
+      const suggestion = await bridge.invoke("title_model_suggest", { liveModels });
+      set({ titleSuggest: suggestion });
+      return suggestion;
+    } catch {
+      return get().titleSuggest;
+    }
+  },
+
+  generateTitle: async (bridge, id) => {
+    if (get().titleJobs.has(id)) return false;
+    const explicit = useWorkspaceStore.getState().prefs.titleModel;
+    const model =
+      explicit ??
+      get().titleSuggest ??
+      (await get().suggestTitleModel(bridge));
+    if (!model) {
+      useUiStore
+        .getState()
+        .notify("Pick a title model in Settings → General to name sessions.", "error");
+      return false;
+    }
+    set((state) => ({ titleJobs: new Set(state.titleJobs).add(id) }));
+    try {
+      const session = await bridge.invoke("session_generate_title", { id });
+      set((state) => ({
+        sessions: state.sessions.map((row) =>
+          row.id === id
+            ? {
+                ...row,
+                title: session.title,
+                titleSource: session.titleSource,
+                updatedAt: session.updatedAt,
+              }
+            : row,
+        ),
+        detail:
+          state.detail?.id === id
+            ? {
+                ...state.detail,
+                title: session.title,
+                titleSource: session.titleSource,
+                updatedAt: session.updatedAt,
+              }
+            : state.detail,
+      }));
+      return true;
+    } catch (error) {
+      const provider =
+        get().providers.find((spec) => spec.id === model.provider)?.name ??
+        providerMeta(model.provider).name;
+      useUiStore
+        .getState()
+        .notify(
+          `Couldn't name this session with ${modelLabel(model.model, model.provider)} on ${provider}: ${errorText(error)}`,
+          "error",
+        );
+      return false;
+    } finally {
+      set((state) => {
+        const titleJobs = new Set(state.titleJobs);
+        titleJobs.delete(id);
+        return { titleJobs };
+      });
+    }
+  },
+
+  maybeGenerateTitle: async (bridge, id) => {
+    const row = get().sessions.find((session) => session.id === id);
+    if (!row || row.titleSource !== "auto") return;
+    if (get().titleAttempts.has(id)) return;
+    // Claim the one attempt before any await, so two assistant events cannot both fire a call.
+    set((state) => ({ titleAttempts: new Set(state.titleAttempts).add(id) }));
+    const explicit = useWorkspaceStore.getState().prefs.titleModel;
+    if (!explicit) {
+      const suggestion = get().titleSuggest ?? (await get().suggestTitleModel(bridge));
+      if (!suggestion) return;
+    }
+    await get().generateTitle(bridge, id);
   },
 
   applyEvent: (sessionId, event) => {
