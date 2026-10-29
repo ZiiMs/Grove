@@ -386,8 +386,15 @@ describe("redesigned shell", () => {
     expect(document.getElementById("app")).toHaveAttribute("data-info", "open");
     expect(within(panel).getByText("Model")).toBeInTheDocument();
     expect(within(panel).getByText("Context")).toBeInTheDocument();
-    expect(within(panel).getByText("Usage")).toBeInTheDocument();
+    expect(within(panel).getByText("This session")).toBeInTheDocument();
     expect(within(panel).getByText("Ask before changes")).toBeInTheDocument();
+
+    // Every category collapses from its header.
+    const modelHeader = within(panel).getByRole("button", { name: /Model/ });
+    await userEvent.click(modelHeader);
+    expect(modelHeader).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(modelHeader);
+    expect(modelHeader).toHaveAttribute("aria-expanded", "true");
 
     // Opening the context column covers the floating panel; closing it brings the panel back.
     await userEvent.click(screen.getByRole("button", { name: "Show context panel" }));

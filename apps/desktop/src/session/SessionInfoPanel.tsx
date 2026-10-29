@@ -1,5 +1,5 @@
 import type { GitWorktree, McpDiscovery, PlanUsage, Project, SubagentSummary } from "@grove/contract";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useBridge } from "../ipc/context";
 import { useContextStore } from "../state/contextStore";
 import { useSessionStore } from "../state/sessionStore";
@@ -138,8 +138,7 @@ export function SessionInfoPanel({
 
       <div className="si-scroll">
         {detail ? (
-          <section className="si-section">
-            <h3 className="si-title">Model</h3>
+          <Section title="Model">
             <div className="si-model">
               <ProviderGlyph provider={detail.provider} />
               <span className="si-model-name" title={detail.model ?? undefined}>
@@ -154,11 +153,10 @@ export function SessionInfoPanel({
               value={detail.permissionMode === "full" ? "Full access" : "Ask before changes"}
             />
             {detail.model ? <p className="si-path">{detail.model}</p> : null}
-          </section>
+          </Section>
         ) : null}
 
-        <section className="si-section">
-          <h3 className="si-title">Context</h3>
+        <Section title="Context">
           {context ? (
             <>
               <div className="si-bar" aria-hidden="true">
@@ -174,10 +172,9 @@ export function SessionInfoPanel({
           ) : (
             <p className="si-empty">No context snapshot yet.</p>
           )}
-        </section>
+        </Section>
 
-        <section className="si-section">
-          <h3 className="si-title">Project</h3>
+        <Section title="Project">
           {project ? (
             <>
               <Row label="Project" value={project.name} />
@@ -197,12 +194,11 @@ export function SessionInfoPanel({
           ) : (
             <p className="si-empty">This session is not attached to a project.</p>
           )}
-        </section>
+        </Section>
 
-        <section className="si-section">
-          <h3 className="si-title">Usage</h3>
-          {detail?.provider === "opencode-go" ? (
-            planUsage ? (
+        {detail?.provider === "opencode-go" ? (
+          <Section title="Plan usage">
+            {planUsage ? (
               <div className="si-plan">
                 {planUsage.windows.map((window) => (
                   <div className="si-plan-row" key={window.id}>
@@ -230,29 +226,30 @@ export function SessionInfoPanel({
               </div>
             ) : (
               <p className="si-empty">{planError ?? "Loading plan usage…"}</p>
-            )
-          ) : null}
-          {planUsage ? <p className="si-subhead">This session</p> : null}
+            )}
+          </Section>
+        ) : null}
+
+        <Section title="This session">
           {usage.input + usage.output > 0 ? (
             <>
               <Row label="Input" value={formatTokens(usage.input)} />
               <Row label="Output" value={formatTokens(usage.output)} />
               <Row label="Total" value={formatTokens(usage.input + usage.output)} />
             </>
-          ) : planUsage ? null : (
+          ) : (
             <p className="si-empty">No usage recorded yet.</p>
           )}
           <Row label="Messages" value={`${turns.user} user · ${turns.assistant} assistant`} />
           <Row label="Tool calls" value={String(turns.tools)} />
           <Row label="Diffs" value={String(turns.diffs)} />
           <Row label="Elapsed" value={formatDuration(turns.elapsed)} />
-        </section>
+        </Section>
 
-        <section className="si-section">
-          <h3 className="si-title">
-            Subagents
-            <span className="si-count">{subagents.length}</span>
-          </h3>
+        <Section
+          title="Subagents"
+          aside={<span className="si-count">{subagents.length}</span>}
+        >
           {subagents.length ? (
             subagents.map((subagent) => (
               <SubagentRow key={subagent.callId} subagent={subagent} />
@@ -260,13 +257,12 @@ export function SessionInfoPanel({
           ) : (
             <p className="si-empty">No subagents.</p>
           )}
-        </section>
+        </Section>
 
-        <section className="si-section">
-          <h3 className="si-title">
-            MCP
-            <span className="si-count">{mcp ? mcp.servers.length : "…"}</span>
-          </h3>
+        <Section
+          title="MCP"
+          aside={<span className="si-count">{mcp ? mcp.servers.length : "…"}</span>}
+        >
           {mcp ? (
             mcp.servers.length ? (
               mcp.servers.map((server) => (
@@ -282,9 +278,38 @@ export function SessionInfoPanel({
           ) : (
             <p className="si-empty">Reading server configs…</p>
           )}
-        </section>
+        </Section>
       </div>
     </aside>
+  );
+}
+
+function Section({
+  title,
+  aside,
+  children,
+}: {
+  title: string;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section className="si-section">
+      <button
+        className="si-title"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="si-chevron">
+          <Icon name="chevronRight" size="xs" />
+        </span>
+        <span className="si-title-text">{title}</span>
+        {aside}
+      </button>
+      {open ? <div className="si-body">{children}</div> : null}
+    </section>
   );
 }
 

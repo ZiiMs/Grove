@@ -1340,7 +1340,12 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .si-scroll::-webkit-scrollbar{display:none}
 .si-section{padding:10px 0;border-top:1px solid var(--line)}
 .si-section:first-child{border-top:0}
-.si-title{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);margin-bottom:7px}
+.si-title{display:flex;align-items:center;gap:6px;width:100%;background:none;border:0;padding:0;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);margin-bottom:0;text-align:left;cursor:pointer}
+.si-title:hover{color:var(--fg-2)}
+.si-chevron{display:flex;flex:none;color:var(--fg-3);transition:transform var(--dur) var(--ease)}
+.si-title[aria-expanded="true"] .si-chevron{transform:rotate(90deg)}
+.si-title-text{flex:1;min-width:0}
+.si-body{padding-top:7px}
 .si-count{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fg-3)}
 .si-model{display:flex;align-items:center;gap:7px;font-size:12.5px;margin-bottom:7px;min-width:0}
 .si-model-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1355,7 +1360,6 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .si-plan-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:11.8px}
 .si-plan-head span:last-child{font-family:var(--mono);font-size:10.5px;white-space:nowrap}
 .si-plan-reset{font-size:10px;color:var(--fg-3);margin-top:3px}
-.si-subhead{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);margin:8px 0 2px}
 .si-path{font-family:var(--mono);font-size:10.5px;color:var(--fg-3);margin-top:6px;overflow-wrap:anywhere}
 .si-empty{font-size:11.5px;color:var(--fg-3);line-height:1.5}
 .si-sub{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:11.5px;min-width:0}
