@@ -378,6 +378,14 @@ Two channels, both typed in `packages/contract`:
 settings pane's "test" button and the picker refresh that runs after boot; `provider_list` remains the
 offline fallback. `session_set_thinking` changes the persisted reasoning level for one session.
 
+**Session titles.** `settings.titleModel` is the one global small model that names sessions, or null
+when the suggested model applies; `clearTitleModel` is how the patch expresses Off, because a JSON
+null cannot be told apart from an omitted field. `title_model_suggest` answers the suggestion for the
+first configured provider (the shell passes its live model lists so the OpenRouter choice can follow
+the account) and never writes settings. `session_generate_title` runs one non-streaming completion
+with no tools and no history, then stores the title as `generated` and emits `title_changed`. See ADR
+0004.
+
 **Drift control without codegen.** `contract/fixtures/<domain>.<case>.json` holds canonical payloads.
 A Rust test serialises a representative sample per DTO and asserts equality with the file; a TS test in
 `packages/contract` parses the same file with its zod schema. Either side drifting breaks a test on
