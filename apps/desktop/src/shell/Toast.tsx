@@ -9,7 +9,9 @@ export function Toast() {
 
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(clear, 3200);
+    // Long enough for a failure message (such as a title-model error naming the provider) to be
+    // read before the line disappears.
+    const timer = window.setTimeout(clear, 4000);
     return () => window.clearTimeout(timer);
   }, [clear, toast]);
 
