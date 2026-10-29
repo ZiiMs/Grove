@@ -1252,3 +1252,19 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .session-rename-error{
   padding:2px 8px 4px 26px;font-size:10.5px;line-height:1.4;color:var(--red);
 }
+
+/* ---------- archive and permanent delete (ticket C3/C4) ---------- */
+.archive-group{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.session-row .s-suffix{
+  flex:none;max-width:15ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);font-size:9.5px;color:var(--fg-3);opacity:.8;
+}
+.session-block[data-archived="true"] .session-row .s-title{color:var(--fg-2)}
+.session-block[data-archived="true"] .session-row .dot{opacity:.55}
+.sh-pill{
+  display:inline-flex;align-items:center;flex:none;height:18px;padding:0 7px;
+  border:1px solid var(--line-2);border-radius:99px;background:var(--elev);
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--fg-3);white-space:nowrap;
+}
+.sh-pill.archived{color:var(--fg-2)}

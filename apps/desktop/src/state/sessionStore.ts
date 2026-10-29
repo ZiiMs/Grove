@@ -14,6 +14,7 @@ import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 import { errorText } from "../ipc/errors";
 import type { ModelThinkingMap } from "../workspace/thinking";
+import { useUiStore } from "./uiStore";
 
 /**
  * Session domain state: the list, the open tabs, the active transcript, and the commands that move
@@ -102,6 +103,12 @@ export interface SessionStore extends SessionStoreData {
   /** Restart a stopped session; `send` calls this automatically before the next message. */
   resume: (bridge: GroveBridge) => Promise<boolean>;
   close: (bridge: GroveBridge) => Promise<void>;
+  /** Hide a session from the active tree. A running agent is stopped by the core. */
+  archive: (bridge: GroveBridge, id: string) => Promise<boolean>;
+  /** Put an archived session back in the active tree; sends a "Session restored" toast. */
+  restore: (bridge: GroveBridge, id: string) => Promise<boolean>;
+  /** Remove a session permanently; closes its tab and selects the next row, if any. */
+  deleteSession: (bridge: GroveBridge, id: string) => Promise<boolean>;
   /** Adopt a snapshot another panel produced (the Specs panel pins and unpins). */
   applyContext: (context: SessionContext) => void;
   /** Re-send the current pins and plan to the running agent, then show the new snapshot. */
@@ -411,7 +418,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const id = get().activeId;
     const message = text.trim();
     if (!id || !message) return false;
-    const detail = get().detail;
+    let detail = get().detail;
+    if (detail?.archivedAt) {
+      // Sending is a vote to keep going: an archived session comes back first instead of asking the
+      // user to press Restore. The restore action announces itself with a toast.
+      if (!(await get().restore(bridge, id))) return false;
+      detail = get().detail;
+    }
     if (detail?.status === "exited" || detail?.status === "error") {
       // The user asked to continue the conversation; starting the agent is an implementation
       // detail, not a separate action they should have to remember.
@@ -527,6 +540,75 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       await get().select(bridge, id);
     } catch (error) {
       set({ busy: false, error: errorText(error) });
+    }
+  },
+
+  archive: async (bridge, id) => {
+    set({ error: null });
+    try {
+      const session = await bridge.invoke("session_archive", { id });
+      // E3 seam: when a pending model switch exists (ticket E3), archiving must clear it here.
+      set((state) => ({
+        sessions: state.sessions.map((row) => (row.id === id ? { ...row, ...session } : row)),
+        detail:
+          state.detail?.id === id ? { ...state.detail, ...session } : state.detail,
+      }));
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
+  restore: async (bridge, id) => {
+    set({ error: null });
+    try {
+      const session = await bridge.invoke("session_restore", { id });
+      set((state) => ({
+        sessions: state.sessions.map((row) => (row.id === id ? { ...row, ...session } : row)),
+        detail:
+          state.detail?.id === id ? { ...state.detail, ...session } : state.detail,
+      }));
+      useUiStore.getState().notify("Session restored");
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
+  deleteSession: async (bridge, id) => {
+    set({ error: null });
+    try {
+      await bridge.invoke("session_delete", { id });
+      // E3 seam: deleting a session must clear any pending model switch for it once ticket E3 lands.
+      const state = get();
+      const index = state.openIds.indexOf(id);
+      const openIds = state.openIds.filter((openId) => openId !== id);
+      const { [id]: _draft, ...drafts } = state.drafts;
+      const { [id]: _queue, ...queues } = state.queues;
+      const remaining = state.sessions.filter((row) => row.id !== id);
+      if (state.activeId !== id) {
+        set({ sessions: remaining, openIds, drafts, queues });
+        return true;
+      }
+      // The deleted tab's neighbour, else the first row left in the tree, keeps the pane useful.
+      const next = openIds[Math.min(index, openIds.length - 1)] ?? remaining[0]?.id ?? null;
+      set({
+        sessions: remaining,
+        openIds,
+        drafts,
+        queues,
+        activeId: null,
+        detail: null,
+        events: [],
+        context: null,
+      });
+      if (next) await get().select(bridge, next);
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
     }
   },
 

@@ -212,6 +212,8 @@ export const sessionSchema = z.object({
   projectId: z.string().nullable(),
   /** True while a permission request is waiting for the user. */
   awaiting: z.boolean(),
+  /** When the session was archived, or null while it is active. Archive keeps the transcript. */
+  archivedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
