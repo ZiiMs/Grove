@@ -2,13 +2,16 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import App from "./App";
+import { fsRootsSchema } from "@grove/contract";
 import type {
+  DirListing,
   GitBranch,
   GitWorktree,
   SessionEvent,
   Project,
   SessionDetail,
 } from "@grove/contract";
+import fsRootsFixture from "../../../contract/fixtures/fs-roots.json";
 import { BridgeProvider } from "./ipc/context";
 import {
   DEFAULT_PROVIDERS,
@@ -167,6 +170,54 @@ function renderApp(overrides: FakeBridgeSeed = {}) {
     </BridgeProvider>,
   );
   return bridge;
+}
+
+const FS_ROOTS = fsRootsSchema.parse(fsRootsFixture);
+
+function folder(path: string, parent: string | null, names: string[]): DirListing {
+  const base = path.replace(/\/+$/, "");
+  return {
+    path,
+    parent,
+    dirs: names.map((name) => ({ name, path: `${base}/${name}` })),
+  };
+}
+
+/** A picker with a home folder on C: and a project on D:, as a second drive would be. */
+function pickerSeed(): FakeBridgeSeed {
+  return {
+    fsRoots: FS_ROOTS,
+    fsListings: {
+      "C:/Users/ada": folder("C:/Users/ada", "C:/", ["code", "notes"]),
+      "C:/Users/ada/code": folder("C:/Users/ada/code", "C:/Users/ada", ["agent-hub", "grove"]),
+      "C:/Users/ada/code/grove": folder("C:/Users/ada/code/grove", "C:/Users/ada/code", ["src"]),
+      "C:/": folder("C:/", null, ["Users"]),
+      "D:/": folder("D:/", null, ["Dev"]),
+      "D:/Dev": folder("D:/Dev", "D:/", ["grove"]),
+      "D:/Dev/grove": folder("D:/Dev/grove", "D:/Dev", ["docs", "src"]),
+    },
+    detections: {
+      "D:/Dev/grove": {
+        path: "D:/Dev/grove",
+        isGit: true,
+        currentBranch: "main",
+        branches: ["main", "feat/folder-picker"],
+        defaultBranch: "main",
+        remote: "acme/grove",
+      },
+    },
+  };
+}
+
+async function openPicker() {
+  const bridge = renderApp(pickerSeed());
+  await screen.findByRole("heading", { name: "OAuth device flow" });
+  await userEvent.click(screen.getByRole("button", { name: /Add project/ }));
+  const dialog = screen.getByRole("dialog");
+  await userEvent.click(within(dialog).getByRole("button", { name: "Choose folder" }));
+  const address = await within(dialog).findByLabelText("Folder path");
+  await within(dialog).findByRole("option", { name: "code" });
+  return { bridge, dialog, address };
 }
 
 async function ready() {
@@ -465,14 +516,151 @@ describe("redesigned shell", () => {
     await userEvent.click(screen.getByRole("button", { name: /Add project/ }));
     const dialog = screen.getByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "Choose folder" }));
-    await screen.findByText("C:/Users/demo");
-    await userEvent.click(within(dialog).getByRole("button", { name: "Use this folder" }));
+    const address = await within(dialog).findByLabelText("Folder path");
+    await waitFor(() => expect(address).toHaveValue("C:/Users/demo"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Select folder" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add project" }));
 
     await waitFor(() =>
       expect(bridge.calls.some((call) => call.command === "project_add")).toBe(true),
     );
     expect(await screen.findByText("demo")).toBeInTheDocument();
+  });
+
+  it("navigates the folder picker to a path pasted from another drive", async () => {
+    const { bridge, dialog, address } = await openPicker();
+
+    await userEvent.clear(address);
+    await userEvent.type(address, "D:\\Dev\\grove");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(address).toHaveValue("D:/Dev/grove"));
+    expect(await within(dialog).findByRole("option", { name: "docs" })).toBeInTheDocument();
+    expect(
+      bridge.calls.some(
+        (call) =>
+          call.command === "fs_list_dirs" &&
+          (call.args as { path?: string }).path === "D:/Dev/grove",
+      ),
+    ).toBe(true);
+
+    // A forward-slash path navigates the same way, and Escape puts the address back.
+    await userEvent.clear(address);
+    await userEvent.type(address, "D:/Dev{Enter}");
+    await waitFor(() => expect(address).toHaveValue("D:/Dev"));
+    await userEvent.clear(address);
+    await userEvent.type(address, "not a folder{Escape}");
+    expect(address).toHaveValue("D:/Dev");
+  });
+
+  it("keeps the current listing when a pasted path does not exist", async () => {
+    const { dialog, address } = await openPicker();
+
+    await userEvent.clear(address);
+    await userEvent.type(address, "Q:/missing{Enter}");
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/does not exist/);
+    expect(within(dialog).getByRole("option", { name: "code" })).toBeInTheDocument();
+    expect(address).toHaveValue("Q:/missing");
+  });
+
+  it("moves through folders with the keyboard and goes back up", async () => {
+    const { dialog, address } = await openPicker();
+    const list = within(dialog).getByRole("listbox", { name: "Folders" });
+
+    list.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(within(dialog).getByRole("option", { name: "code" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await userEvent.keyboard("{ArrowDown}{ArrowUp}{Enter}");
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code"));
+
+    await userEvent.keyboard("{Backspace}");
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada"));
+    expect(within(dialog).getByRole("option", { name: "notes" })).toBeInTheDocument();
+  });
+
+  it("enters a folder by clicking its row", async () => {
+    const { dialog, address } = await openPicker();
+
+    await userEvent.click(within(dialog).getByRole("option", { name: "code" }));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code"));
+    expect(within(dialog).getByRole("option", { name: "grove" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("option", { name: "notes" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("option", { name: "grove" }));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code/grove"));
+
+    // The breadcrumb is a way back up without retyping the path.
+    await userEvent.click(within(dialog).getByRole("button", { name: "code" }));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code"));
+  });
+
+  it("returns to the project form after Select folder and seeds detection", async () => {
+    const { bridge, dialog, address } = await openPicker();
+
+    await userEvent.clear(address);
+    await userEvent.type(address, "D:/Dev/grove{Enter}");
+    await within(dialog).findByRole("option", { name: "docs" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Select folder" }));
+
+    expect(await within(dialog).findByText("D:/Dev/grove")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("grove");
+    expect(within(dialog).getByLabelText("Default branch")).toHaveValue("main");
+    expect(within(dialog).getByLabelText(/Remote/)).toHaveValue("acme/grove");
+    expect(
+      bridge.calls.some(
+        (call) =>
+          call.command === "project_detect" &&
+          (call.args as { path?: string }).path === "D:/Dev/grove",
+      ),
+    ).toBe(true);
+  });
+
+  it("creates a folder inline and enters it", async () => {
+    const { bridge, dialog, address } = await openPicker();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "New folder" }));
+    const name = within(dialog).getByLabelText("New folder name");
+    await userEvent.type(name, "new-project{Enter}");
+
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/new-project"));
+    const call = bridge.calls.find((entry) => entry.command === "fs_create_dir");
+    expect(call?.args).toEqual({ parent: "C:/Users/ada", name: "new-project" });
+  });
+
+  it("shows an invalid new-folder name inline and stays put", async () => {
+    const { bridge, dialog, address } = await openPicker();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "New folder" }));
+    await userEvent.type(within(dialog).getByLabelText("New folder name"), "bad/name{Enter}");
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(/single path segment/);
+    expect(address).toHaveValue("C:/Users/ada");
+    expect(bridge.invocations).toContain("fs_create_dir");
+  });
+
+  it("renders the drive chips from the contract fixture and jumps by chip", async () => {
+    const { dialog, address } = await openPicker();
+
+    expect(within(dialog).getByRole("button", { name: "Home folder" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(within(dialog).getByRole("button", { name: "C:" })).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "D:" }));
+    await waitFor(() => expect(address).toHaveValue("D:/"));
+    expect(await within(dialog).findByRole("option", { name: "Dev" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "D:" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    expect(within(dialog).getByRole("button", { name: "C:" })).not.toHaveAttribute(
+      "aria-current",
+    );
   });
 
   it("opens a subagent's forwarded transcript from the tree", async () => {
