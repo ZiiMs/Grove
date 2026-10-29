@@ -237,6 +237,7 @@ export function fakeSession(overrides: Partial<Session> = {}): Session {
     cwd: "C:/projects/grove",
     model: null,
     title: "mock session",
+    titleSource: "manual",
     status: "idle",
     projectId: null,
     awaiting: false,
@@ -249,6 +250,22 @@ export function fakeSession(overrides: Partial<Session> = {}): Session {
 
 export function fakeSummary(session: Session = fakeSession(), eventCount = 0): SessionSummary {
   return { ...session, eventCount, subagents: [] };
+}
+
+/** The core's first-message placeholder: one line, 60 chars at a word boundary, with an ellipsis. */
+function placeholderTitle(text: string): string {
+  const collapsed = text.trim().split(/\s+/).join(" ");
+  if ([...collapsed].length <= 60) return collapsed;
+  const chars = [...collapsed];
+  const head = chars.slice(0, 60);
+  const cut =
+    chars[60]?.match(/\s/) || !head.includes(" ")
+      ? head.join("").trimEnd()
+      : (() => {
+          const lastSpace = head.lastIndexOf(" ");
+          return lastSpace > 0 ? head.slice(0, lastSpace).join("").trimEnd() : head.join("").trimEnd();
+        })();
+  return `${cut}…`;
 }
 
 /**
@@ -431,12 +448,14 @@ export function createFakeBridge(
         };
         const at = "2025-01-01T00:00:00.000Z";
         const project = req.projectId ? projects.find((row) => row.id === req.projectId) : null;
+        const typedTitle = req.title?.trim() ?? "";
         const session = fakeSession({
           id: `session-${sessions.length + 1}`,
           provider: req.provider,
           cwd: req.worktreePath ?? project?.path ?? req.cwd ?? "C:/projects/grove",
           model: req.model ?? null,
-          title: req.title ?? `${req.provider} session`,
+          title: typedTitle || "New session",
+          titleSource: typedTitle ? "manual" : "auto",
           status: "starting",
           projectId: project?.id ?? null,
           createdAt: at,
@@ -448,6 +467,24 @@ export function createFakeBridge(
         return detail as CommandMap[K]["result"];
       }
       if (command === "session_send") {
+        const { id, text } = args as { id: string; text: string };
+        const row = sessions.find((session) => session.id === id);
+        const detail = details[id];
+        // Mirror the core's first-message placeholder so a UI flow sees the same title event.
+        if (row && detail && row.titleSource === "auto" && row.title === "New session") {
+          const title = placeholderTitle(text);
+          row.title = title;
+          detail.title = title;
+          const event: SessionEvent = {
+            at: "2025-01-01T00:00:01.000Z",
+            kind: "title_changed",
+            title,
+            source: "auto",
+          };
+          detail.events = [...detail.events, event];
+          row.eventCount = detail.events.length;
+          bridge.emitSessionEvent({ sessionId: id, payload: event });
+        }
         return null as CommandMap[K]["result"];
       }
       if (command === "session_cancel") {
@@ -517,11 +554,22 @@ export function createFakeBridge(
         }
         const at = "2025-01-01T00:00:09.000Z";
         row.title = next;
+        row.titleSource = "manual";
         row.updatedAt = at;
         const detail = details[id];
         if (detail) {
           detail.title = next;
+          detail.titleSource = "manual";
           detail.updatedAt = at;
+          const event: SessionEvent = {
+            at,
+            kind: "title_changed",
+            title: next,
+            source: "manual",
+          };
+          detail.events = [...detail.events, event];
+          row.eventCount = detail.events.length;
+          bridge.emitSessionEvent({ sessionId: id, payload: event });
         }
         const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
         return structuredClone(session) as CommandMap[K]["result"];

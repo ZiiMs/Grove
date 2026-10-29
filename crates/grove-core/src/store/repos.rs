@@ -3,12 +3,12 @@
 
 use super::{Store, StoreError};
 use crate::ipc::{Session, SessionDetail, SessionSummary, SubagentSummary};
-use crate::sessions::event::{now, EventKind, SessionEvent, SessionState};
+use crate::sessions::event::{now, EventKind, SessionEvent, SessionState, TitleSource};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::BTreeMap;
 
 const SESSION_COLUMNS: &str =
-    "s.id, s.provider, s.cwd, s.model, s.title, s.status, s.created_at, s.updated_at, s.project_id, s.awaiting, s.archived_at";
+    "s.id, s.provider, s.cwd, s.model, s.title, s.status, s.created_at, s.updated_at, s.project_id, s.awaiting, s.archived_at, s.title_source";
 
 fn row_to_session(row: &Row<'_>) -> rusqlite::Result<Session> {
     Ok(Session {
@@ -23,6 +23,7 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<Session> {
         project_id: row.get(8)?,
         awaiting: row.get::<_, i64>(9)? != 0,
         archived_at: row.get(10)?,
+        title_source: TitleSource::parse(&row.get::<_, String>(11)?),
     })
 }
 
@@ -35,8 +36,8 @@ impl Store {
         self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO sessions
-                     (id, provider, cwd, model, title, status, adapter_config, resume_token, created_at, updated_at, project_id, awaiting, archived_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11, ?12)",
+                     (id, provider, cwd, model, title, status, adapter_config, resume_token, created_at, updated_at, project_id, awaiting, archived_at, title_source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     &session.id,
                     &session.provider,
@@ -50,6 +51,7 @@ impl Store {
                     session.project_id.as_deref(),
                     i64::from(session.awaiting),
                     session.archived_at.as_deref(),
+                    session.title_source.as_str(),
                 ],
             )?;
             Ok(())
@@ -101,7 +103,7 @@ impl Store {
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], |row| {
-                let event_count: i64 = row.get(11)?;
+                let event_count: i64 = row.get(12)?;
                 let session = row_to_session(row)?;
                 let subagents = by_session.remove(&session.id).unwrap_or_default();
                 Ok(SessionSummary {
@@ -283,13 +285,18 @@ impl Store {
         })
     }
 
-    /// Rename a session. `updated_at` moves with the title, so a rename reads as activity in the
-    /// list's `updated_at DESC` order; nothing else on the row changes.
-    pub fn set_session_title(&self, id: &str, title: &str) -> Result<(), StoreError> {
+    /// Rename a session, recording who wrote the title. `updated_at` moves with the title, so a
+    /// rename reads as activity in the list's `updated_at DESC` order; nothing else on the row moves.
+    pub fn set_session_title(
+        &self,
+        id: &str,
+        title: &str,
+        source: TitleSource,
+    ) -> Result<(), StoreError> {
         self.with_conn(|conn| {
             conn.execute(
-                "UPDATE sessions SET title = ?2, updated_at = ?3 WHERE id = ?1",
-                params![id, title, now()],
+                "UPDATE sessions SET title = ?2, title_source = ?3, updated_at = ?4 WHERE id = ?1",
+                params![id, title, source.as_str(), now()],
             )?;
             Ok(())
         })
@@ -482,7 +489,7 @@ fn read_settings(conn: &Connection) -> Result<BTreeMap<String, serde_json::Value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sessions::event::{Block, Role};
+    use crate::sessions::event::{Block, Role, TitleSource};
 
     fn session(id: &str) -> Session {
         Session {
@@ -495,6 +502,7 @@ mod tests {
             project_id: None,
             awaiting: false,
             archived_at: None,
+            title_source: TitleSource::Manual,
             created_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-01T00:00:00.000Z".into(),
         }

@@ -20,6 +20,10 @@ export const sessionStateSchema = z.enum([
 ]);
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
+/** Who wrote a session's title. Only `auto` still carrying the temporary title may be replaced. */
+export const titleSourceSchema = z.enum(["auto", "generated", "manual"]);
+export type TitleSource = z.infer<typeof titleSourceSchema>;
+
 export const roleSchema = z.enum(["user", "assistant", "system"]);
 export type Role = z.infer<typeof roleSchema>;
 
@@ -182,6 +186,12 @@ export const sessionEventSchema = z.discriminatedUnion("kind", [
   z.object({ at: z.string(), kind: z.literal("status"), state: sessionStateSchema }),
   z.object({
     at: z.string(),
+    kind: z.literal("title_changed"),
+    title: z.string(),
+    source: titleSourceSchema,
+  }),
+  z.object({
+    at: z.string(),
     kind: z.literal("error"),
     message: z.string(),
     retryable: z.boolean(),
@@ -207,6 +217,8 @@ export const sessionSchema = z.object({
   cwd: z.string(),
   model: z.string().nullable(),
   title: z.string(),
+  /** Who wrote the title: the user, the first-message placeholder, or a model. */
+  titleSource: titleSourceSchema,
   status: sessionStateSchema,
   /** The workspace project this session belongs to, or null for a loose chat. */
   projectId: z.string().nullable(),

@@ -144,6 +144,12 @@
     "state": "idle"
   },
   {
+    "at": "2025-01-01T00:00:04.700Z",
+    "kind": "title_changed",
+    "title": "Release notes",
+    "source": "manual"
+  },
+  {
     "at": "2025-01-01T00:00:05.000Z",
     "kind": "error",
     "message": "provider exited",

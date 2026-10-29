@@ -103,6 +103,13 @@ A session whose `sessions.archived_at` is set. It leaves the active tree and app
 Archive section, keeps its transcript, plan, pins and workers, and can be restored at any time. Only an
 archived session can be permanently deleted; archive itself is reversible soft state, never a delete.
 
+## Title source
+
+`sessions.title_source` records who wrote a session's title: `auto` (the first-message placeholder,
+still eligible for model generation), `generated` (written by a one-shot title completion) or `manual`
+(typed by the user; every title that predates the column). A rename sets `manual` and emits
+`title_changed`, which patches the tree row and the open header without a reload.
+
 ## Spec graph
 
 The index of repo `.md` files whose frontmatter carries `id` + `type`, with `parent`, `depends-on`,

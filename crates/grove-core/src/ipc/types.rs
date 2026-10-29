@@ -1,5 +1,5 @@
 use crate::providers::ThinkingLevel;
-use crate::sessions::event::{SessionEvent, SessionState};
+use crate::sessions::event::{SessionEvent, SessionState, TitleSource};
 use serde::{Deserialize, Serialize};
 
 /// Header payload for the shell. Pinned by `contract/fixtures/app-info.json`.
@@ -51,6 +51,10 @@ pub struct Session {
     pub cwd: String,
     pub model: Option<String>,
     pub title: String,
+    /// Who wrote the title: the user (`manual`), the first-message placeholder (`auto`) or a model
+    /// (`generated`). Only an `auto` session still carrying the temporary title is eligible for
+    /// automatic replacement.
+    pub title_source: TitleSource,
     pub status: SessionState,
     /// The workspace project this session belongs to, or `None` for a loose chat.
     pub project_id: Option<String>,
