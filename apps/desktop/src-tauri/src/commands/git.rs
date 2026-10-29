@@ -118,7 +118,8 @@ pub async fn git_worktree_create(
     .await
 }
 
-/// Remove a linked worktree, optionally deleting its local branch.
+/// Remove a linked worktree, optionally deleting its local branch, and archive the sessions that ran
+/// in it. Returns how many sessions were archived.
 #[tauri::command]
 pub async fn git_worktree_remove(
     state: tauri::State<'_, AppState>,
@@ -127,18 +128,21 @@ pub async fn git_worktree_remove(
     delete_branch: bool,
     force: bool,
     force_branch: bool,
-) -> IpcResult<()> {
+) -> IpcResult<usize> {
     let core = state.core.clone();
+    let remove_core = core.clone();
+    let remove_path = worktree_path.clone();
     blocking(move || {
-        core.git.remove_worktree(
+        remove_core.git.remove_worktree(
             Some(Path::new(&repo_path)),
-            &worktree_path,
+            &remove_path,
             delete_branch,
             force,
             force_branch,
         )
     })
-    .await
+    .await?;
+    Ok(core.sessions.archive_for_worktree(&worktree_path).await?)
 }
 
 #[tauri::command]

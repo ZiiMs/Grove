@@ -766,6 +766,28 @@ impl SessionManager {
             .ok_or_else(|| SessionError::NotFound(id.to_string()))
     }
 
+    /// Archive every live or active session that ran in `path` or one of its subdirectories. Used when
+    /// a worktree is deleted: the transcripts survive, but the checkout they pointed at does not.
+    pub async fn archive_for_worktree(&self, path: &str) -> Result<usize, SessionError> {
+        let scope = worktree_scope(path);
+        if scope.is_empty() {
+            return Ok(0);
+        }
+        let prefix = format!("{scope}/");
+        let mut archived = 0;
+        for summary in self.store.list_sessions()? {
+            if summary.session.archived_at.is_some() {
+                continue;
+            }
+            let cwd = worktree_scope(&summary.session.cwd);
+            if cwd == scope || cwd.starts_with(&prefix) {
+                self.archive(&summary.session.id).await?;
+                archived += 1;
+            }
+        }
+        Ok(archived)
+    }
+
     /// Put an archived session back in the active tree. The agent stays stopped; the next send (or
     /// an explicit resume) starts it, exactly like any other stopped session.
     pub async fn restore(&self, id: &str) -> Result<Session, SessionError> {
@@ -1232,6 +1254,16 @@ fn trim_to_complete_assistant(history: Vec<Message>) -> Vec<Message> {
     match end {
         Some(index) => history.into_iter().take(index + 1).collect(),
         None => Vec::new(),
+    }
+}
+
+fn worktree_scope(path: &str) -> String {
+    let normal = path.trim().replace('\\', "/");
+    let trimmed = normal.trim_end_matches('/');
+    if cfg!(windows) {
+        trimmed.to_lowercase()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -1923,6 +1955,35 @@ mod tests {
             ),
             "an archived session has no live agent to send to"
         );
+    }
+
+    #[tokio::test]
+    async fn archiving_a_worktree_archives_its_sessions_and_leaves_the_rest() {
+        let manager = manager();
+        let root = tempfile::tempdir().expect("temp dir");
+        let inside = root.path().join("feature");
+        let nested = inside.join("src");
+        let outside = root.path().join("other");
+        std::fs::create_dir_all(&nested).expect("inside dirs");
+        std::fs::create_dir_all(&outside).expect("outside dir");
+
+        let make = |cwd: &std::path::Path| CreateSessionRequest {
+            provider: "stub".into(),
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let one = manager.create(make(&inside)).await.unwrap().session.id;
+        let two = manager.create(make(&nested)).await.unwrap().session.id;
+        let other = manager.create(make(&outside)).await.unwrap().session.id;
+
+        let archived = manager
+            .archive_for_worktree(inside.to_str().expect("utf-8 path"))
+            .await
+            .expect("archive worktree sessions");
+        assert_eq!(archived, 2);
+        assert!(manager.get(&one).unwrap().session.archived_at.is_some());
+        assert!(manager.get(&two).unwrap().session.archived_at.is_some());
+        assert!(manager.get(&other).unwrap().session.archived_at.is_none());
     }
 
     #[tokio::test]

@@ -935,7 +935,7 @@ export function createFakeBridge(
         const { worktreePath } = args as { worktreePath: string };
         const index = worktrees.findIndex((worktree) => worktree.path === worktreePath);
         if (index >= 0) worktrees.splice(index, 1);
-        return null as CommandMap[K]["result"];
+        return 0 as CommandMap[K]["result"];
       }
       if (command === "spec_index") {
         return (

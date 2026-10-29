@@ -69,6 +69,7 @@ export interface GitCommands {
   git_open_pr: { args: GitOpenPrArgs; result: PrResult };
   /** Create a branch and a checkout for it, then report the new worktree. */
   git_worktree_create: { args: GitWorktreeCreateArgs; result: GitWorktree };
-  /** Remove a linked worktree, preflighting dirty files and an unmerged branch. */
-  git_worktree_remove: { args: GitWorktreeRemoveArgs; result: null };
+  /** Remove a linked worktree, preflighting dirty files and an unmerged branch. Returns how many
+   * sessions that ran in it were archived. */
+  git_worktree_remove: { args: GitWorktreeRemoveArgs; result: number };
 }

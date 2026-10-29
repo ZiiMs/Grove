@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useBridge } from "../ipc/context";
 import { errorText } from "../ipc/errors";
 import { useUiStore } from "../state/uiStore";
+import { useSessionStore } from "../state/sessionStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import { Icon } from "../workspace/Icon";
 import { Dialog } from "./Dialog";
@@ -57,7 +58,7 @@ export function WorktreeRemoveDialog() {
     setWorking(true);
     setError(null);
     try {
-      await bridge.invoke("git_worktree_remove", {
+      const archived = await bridge.invoke("git_worktree_remove", {
         repoPath: removal.project.path,
         worktreePath: removal.worktree.path,
         deleteBranch,
@@ -65,7 +66,12 @@ export function WorktreeRemoveDialog() {
         forceBranch: deleteBranch && forceBranch,
       });
       await refreshProjectGit(bridge, removal.project);
-      notify(`Deleted worktree ${branch ?? removal.worktree.path}`);
+      // The core archived the sessions in that checkout; reload the tree rows to move them.
+      await useSessionStore.getState().load(bridge);
+      const suffix = archived
+        ? ` · archived ${archived} session${archived === 1 ? "" : "s"}`
+        : "";
+      notify(`Deleted worktree ${branch ?? removal.worktree.path}${suffix}`);
       close();
     } catch (err) {
       setError(errorText(err));
