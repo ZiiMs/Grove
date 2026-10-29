@@ -773,6 +773,9 @@ button.fp-crumb:hover{background:var(--sunken);color:var(--fg)}
 .fp-row .chev{display:flex;color:var(--fg-3)}
 .fp-empty{padding:24px 8px;font-size:12px;color:var(--fg-3);text-align:center}
 .field-label{display:block;font-size:12px;font-weight:600;color:var(--fg-2);margin-bottom:6px}
+.field-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.field-label-row label{font-size:12px;font-weight:600;color:var(--fg-2)}
+.field-tight input[readonly]{color:var(--fg-2)}
 .wt-block{margin-top:13px;display:flex;flex-direction:column;gap:9px}
 .switch-row{
   display:flex;align-items:flex-start;gap:10px;padding:10px;

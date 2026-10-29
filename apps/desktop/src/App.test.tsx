@@ -894,25 +894,63 @@ describe("redesigned shell", () => {
     expect(await screen.findByText("0007-provider-registry")).toBeInTheDocument();
   });
 
-  it("creates a worktree and starts the session in it", async () => {
+  it("generates a random worktree branch and keeps it independent of the session title", async () => {
     const bridge = await ready();
     await userEvent.click(screen.getByRole("button", { name: "New session in grove" }));
+
+    const branchInput = screen.getByLabelText("Worktree branch") as HTMLInputElement;
+    const branch = branchInput.value;
+    expect(branch).toMatch(/^grove\/[a-z]+-[a-z]+$/);
+
     await userEvent.type(
       screen.getByLabelText("What should this session work on?"),
       "Add session tabs",
     );
-    expect(screen.getByDisplayValue("grove/add-session-tabs")).toBeInTheDocument();
+    expect(branchInput).toHaveValue(branch);
+
     await userEvent.click(screen.getByRole("button", { name: "Start session" }));
 
     await screen.findByRole("heading", { name: "Add session tabs" });
     const worktreeCall = bridge.calls.find((call) => call.command === "git_worktree_create");
     expect(worktreeCall?.args).toMatchObject({
       repoPath: project.path,
-      branch: "grove/add-session-tabs",
+      branch,
       base: "feat/ui",
     });
+    expect((worktreeCall?.args as { path: string }).path.replace(/\\/g, "/")).toMatch(
+      new RegExp(`/grove-wt/${branch.split("/").pop()}$`),
+    );
     const createCall = bridge.calls.find((call) => call.command === "session_create");
     expect(createCall?.args).toMatchObject({ req: { projectId: project.id } });
+  });
+
+  it("can reroll the generated worktree name", async () => {
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "New session in grove" }));
+
+    const branchInput = screen.getByLabelText("Worktree branch") as HTMLInputElement;
+    const first = branchInput.value;
+    await userEvent.click(screen.getByRole("button", { name: "Generate another worktree name" }));
+
+    expect(branchInput.value).not.toBe(first);
+    expect(branchInput.value).toMatch(/^grove\/[a-z]+-[a-z]+$/);
+  });
+
+  it("avoids an existing branch when generating a worktree name", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      renderApp({
+        branches: [{ ...branch, name: "grove/quiet-cedar", current: false }],
+      });
+      await screen.findByRole("heading", { name: "OAuth device flow" });
+      await userEvent.click(screen.getByRole("button", { name: "New session in grove" }));
+
+      const branchInput = screen.getByLabelText("Worktree branch") as HTMLInputElement;
+      expect(branchInput.value).not.toBe("grove/quiet-cedar");
+      expect(branchInput.value).toMatch(/^grove\/[a-z]+-[a-z]+$/);
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it("queues a message while a turn runs and sends it when the session goes idle", async () => {
