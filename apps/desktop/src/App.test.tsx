@@ -844,7 +844,7 @@ describe("redesigned shell", () => {
     await waitFor(() =>
       expect(bridge.calls.some((call) => call.command === "project_add")).toBe(true),
     );
-    expect(await screen.findByText("demo")).toBeInTheDocument();
+    expect(await screen.findByText("Demo")).toBeInTheDocument();
   });
 
   it("navigates the folder picker to a path pasted from another drive", async () => {
@@ -931,7 +931,7 @@ describe("redesigned shell", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Select folder" }));
 
     expect(await within(dialog).findByText("D:/Dev/grove")).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Name")).toHaveValue("grove");
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("Grove");
     expect(within(dialog).getByLabelText("Default branch")).toHaveValue("main");
     expect(within(dialog).getByLabelText(/Remote/)).toHaveValue("acme/grove");
     expect(
@@ -941,6 +941,21 @@ describe("redesigned shell", () => {
           (call.args as { path?: string }).path === "D:/Dev/grove",
       ),
     ).toBe(true);
+  });
+
+  it("keeps a name typed before choosing a folder", async () => {
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: /Add project/ }));
+    const dialog = screen.getByRole("dialog");
+    const name = within(dialog).getByLabelText("Name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "My repo");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Choose folder" }));
+    const address = await within(dialog).findByLabelText("Folder path");
+    await waitFor(() => expect(address).toHaveValue("C:/Users/demo"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Select folder" }));
+
+    expect(within(dialog).getByLabelText("Name")).toHaveValue("My repo");
   });
 
   it("creates a folder inline and enters it", async () => {

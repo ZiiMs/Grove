@@ -6,6 +6,7 @@ import {
   normalizeFolderPath,
   normalizePath,
   projectForSession,
+  projectNameFromPath,
   worktreeForSession,
 } from "./tree";
 import { fakeSession, fakeSummary } from "../test-utils/fakeBridge";
@@ -51,6 +52,13 @@ describe("tree mapping", () => {
     expect(basename("C:\\code\\grove\\session.rs")).toBe("session.rs");
     expect(dirname("C:/code/grove/session.rs")).toBe("C:/code/grove");
     expect(dirname("session.rs")).toBe("");
+  });
+
+  it("prettifies a folder name for the project default", () => {
+    expect(projectNameFromPath("D:/Dev/grove")).toBe("Grove");
+    expect(projectNameFromPath("D:\\Dev\\my-project")).toBe("My Project");
+    expect(projectNameFromPath("C:/code/API_client")).toBe("API Client");
+    expect(projectNameFromPath("C:/code/Grove")).toBe("Grove");
   });
 
   it("normalises a pasted folder path for the picker", () => {

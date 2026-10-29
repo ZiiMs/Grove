@@ -5,7 +5,7 @@ import { errorText } from "../ipc/errors";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import { Icon } from "../workspace/Icon";
-import { basename, normalizeFolderPath } from "../workspace/tree";
+import { normalizeFolderPath, projectNameFromPath } from "../workspace/tree";
 import { Dialog } from "./Dialog";
 
 /** Add a folder as a project: pick it, detect git, name it, save. */
@@ -163,7 +163,7 @@ export function AddProjectDialog() {
     try {
       const next = await bridge.invoke("project_detect", { path: folder });
       setDetection(next);
-      if (!nameDirty) setName(basename(next.path));
+      if (!nameDirty) setName(projectNameFromPath(next.path));
       setBranch(next.defaultBranch ?? "");
       setRemote(next.remote ?? "");
     } catch (err) {

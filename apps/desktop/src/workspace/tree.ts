@@ -70,6 +70,18 @@ export function basename(path: string): string {
   return clean.split("/").pop() || clean;
 }
 
+/** A human default for a new project: `grove` → `Grove`, `my-project` → `My Project`. */
+export function projectNameFromPath(path: string): string {
+  const folder = basename(path);
+  const pretty = folder
+    .replace(/[-_]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+  return pretty || folder;
+}
+
 export function dirname(path: string): string {
   const clean = path.replace(/\\/g, "/");
   const index = clean.lastIndexOf("/");
