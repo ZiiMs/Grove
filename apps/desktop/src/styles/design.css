@@ -1307,8 +1307,8 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 
 /* ---------- floating session info ---------- */
 .session-info{
-  position:fixed;z-index:34;top:98px;right:12px;bottom:auto;width:280px;
-  display:flex;flex-direction:column;min-height:0;max-height:min(560px,calc(100dvh - 138px));overflow:hidden;
+  position:fixed;z-index:34;top:98px;right:12px;bottom:40px;width:280px;
+  display:flex;flex-direction:column;min-height:0;overflow:hidden;
   background:color-mix(in srgb, var(--panel) 86%, transparent);
   -webkit-backdrop-filter:blur(18px) saturate(1.06);backdrop-filter:blur(18px) saturate(1.06);
   border:1px solid var(--line-2);border-radius:var(--r-lg);
@@ -1339,5 +1339,5 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .si-add{color:var(--jade)}
 .si-del{color:var(--red)}
 @media (max-width:899px){
-  .session-info{top:138px;left:12px;right:12px;bottom:auto;width:auto;max-height:min(70dvh,calc(100dvh - 176px));z-index:39}
+  .session-info{top:138px;left:12px;right:12px;bottom:38px;width:auto;z-index:39}
 }
