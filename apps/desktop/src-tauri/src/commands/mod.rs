@@ -17,6 +17,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
     tauri::generate_handler![
         app::app_info,
         app::app_set_project_root,
+        app::app_reveal_path,
         app::app_window_minimize,
         app::app_window_toggle_maximize,
         app::app_window_is_maximized,
@@ -36,6 +37,7 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
         projects::project_list,
         projects::project_detect,
         projects::project_add,
+        projects::project_remove,
         projects::fs_list_dirs,
         sessions::provider_list,
         sessions::session_list,

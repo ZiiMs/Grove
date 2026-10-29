@@ -12,6 +12,8 @@ export interface AppCommands {
    * discovery and the project-local skills target all follow. Returns the root now in force.
    */
   app_set_project_root: { args: { path: string }; result: string };
+  /** Show a file or folder in the platform file manager. The path must exist. */
+  app_reveal_path: { args: { path: string }; result: null };
   /** Custom window chrome: the native frame is removed, so the titlebar drives these. */
   app_window_minimize: { args: Record<string, never>; result: null };
   app_window_toggle_maximize: { args: Record<string, never>; result: boolean };

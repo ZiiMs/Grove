@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { GitWorktree, Project, SessionSummary } from "@grove/contract";
 import { useBridge } from "./ipc/context";
 import {
   subscribeToGitChanged,
@@ -6,11 +7,15 @@ import {
   subscribeToPlanChanged,
   subscribeToSpecChanged,
 } from "./ipc/events";
+import { errorText } from "./ipc/errors";
 import { useSessionStore } from "./state/sessionStore";
 import { useContextStore } from "./state/contextStore";
+import type { MenuItem } from "./state/menuStore";
+import { useMenuStore } from "./state/menuStore";
 import { useUiStore } from "./state/uiStore";
 import { useWorkspaceStore } from "./state/workspaceStore";
 import { NavTree } from "./shell/NavTree";
+import { ContextMenuHost, copyText, revealPath } from "./shell/ContextMenu";
 import { StatusBar } from "./shell/StatusBar";
 import { Titlebar } from "./shell/Titlebar";
 import { SessionSurface } from "./session/SessionSurface";
@@ -41,9 +46,13 @@ export default function App() {
   const info = useWorkspaceStore((state) => state.info);
   const prefs = useWorkspaceStore((state) => state.prefs);
   const loadWorkspace = useWorkspaceStore((state) => state.load);
+  const refreshProjects = useWorkspaceStore((state) => state.refreshProjects);
+  const removeProject = useWorkspaceStore((state) => state.removeProject);
   const refreshProjectGit = useWorkspaceStore((state) => state.refreshProjectGit);
   const view = useUiStore((state) => state.view);
   const setView = useUiStore((state) => state.setView);
+  const notify = useUiStore((state) => state.notify);
+  const openMenu = useMenuStore((state) => state.openMenu);
   const contextOpen = useUiStore((state) => state.contextOpen);
   const setContextOpen = useUiStore((state) => state.setContextOpen);
   const setContextTab = useUiStore((state) => state.setContextTab);
@@ -154,6 +163,106 @@ export default function App() {
     openNewSession({ projectId, worktreePath });
   };
 
+  const copyWithToast = async (text: string, message: string) => {
+    if (await copyText(text)) notify(message);
+    else notify("Clipboard is unavailable", "error");
+  };
+
+  /**
+   * Session menu for this slice. Rename, Generate name and Archive land in later slices and prepend
+   * their entries here; the array is the whole surface, so nothing else has to change.
+   */
+  const sessionMenuItems = (row: SessionSummary): MenuItem[] => [
+    {
+      kind: "item",
+      label: "Copy working directory",
+      icon: "copy",
+      onSelect: () => void copyWithToast(row.cwd, "Working directory copied"),
+    },
+    {
+      kind: "item",
+      label: "Reveal in Explorer",
+      icon: "folder",
+      onSelect: () => void revealPath(bridge, row.cwd, notify),
+    },
+  ];
+
+  const projectMenuItems = (project: Project): MenuItem[] => [
+    {
+      kind: "item",
+      label: "New session",
+      icon: "plus",
+      onSelect: () => newSessionFor(project.id, null),
+    },
+    {
+      kind: "item",
+      label: "Copy path",
+      icon: "copy",
+      onSelect: () => void copyWithToast(project.path, "Path copied"),
+    },
+    {
+      kind: "item",
+      label: "Reveal in Explorer",
+      icon: "folder",
+      onSelect: () => void revealPath(bridge, project.path, notify),
+    },
+    {
+      kind: "item",
+      label: "Refresh",
+      icon: "refresh",
+      onSelect: () => void refreshProjects(bridge),
+    },
+    { kind: "separator" },
+    {
+      kind: "item",
+      label: "Remove project",
+      icon: "trash",
+      danger: true,
+      onSelect: () => {
+        const confirmed = window.confirm(
+          `Remove ${project.name} from Grove? Its sessions become chats, and the folder is left on disk.`,
+        );
+        if (!confirmed) return;
+        void (async () => {
+          try {
+            await removeProject(bridge, project.id);
+            await useSessionStore.getState().load(bridge);
+            notify(`Removed ${project.name}`);
+          } catch (error) {
+            notify(errorText(error), "error");
+          }
+        })();
+      },
+    },
+  ];
+
+  const worktreeMenuItems = (project: Project, worktree: GitWorktree): MenuItem[] => [
+    {
+      kind: "item",
+      label: "New session",
+      icon: "plus",
+      onSelect: () => newSessionFor(project.id, worktree.path),
+    },
+    {
+      kind: "item",
+      label: "Copy path",
+      icon: "copy",
+      onSelect: () => void copyWithToast(worktree.path, "Path copied"),
+    },
+    {
+      kind: "item",
+      label: "Reveal in Explorer",
+      icon: "folder",
+      onSelect: () => void revealPath(bridge, worktree.path, notify),
+    },
+    {
+      kind: "item",
+      label: "Refresh",
+      icon: "refresh",
+      onSelect: () => void refreshProjectGit(bridge, project),
+    },
+  ];
+
   const mobileTabs = useMemo(
     () => [
       { id: "nav" as const, label: "Navigation" },
@@ -206,6 +315,15 @@ export default function App() {
           onNewChat={() => newSessionFor(null, null)}
           onAddProject={openAddProject}
           onSettings={() => openSettings("general")}
+          onSessionMenu={(row, anchor) =>
+            openMenu({ ...anchor, items: sessionMenuItems(row) })
+          }
+          onProjectMenu={(project, anchor) =>
+            openMenu({ ...anchor, items: projectMenuItems(project) })
+          }
+          onWorktreeMenu={(project, worktree, anchor) =>
+            openMenu({ ...anchor, items: worktreeMenuItems(project, worktree) })
+          }
         />
 
         <SessionSurface active={view === "session"} />
@@ -249,6 +367,7 @@ export default function App() {
       <DiffModal />
       <PrDialog project={activeProject} />
       <SettingsModal />
+      <ContextMenuHost />
       <Toast />
     </div>
   );

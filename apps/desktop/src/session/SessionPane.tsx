@@ -1,4 +1,5 @@
 import type {
+  Block,
   Decision,
   Project,
   QuestionAnswer,
@@ -6,7 +7,14 @@ import type {
   SessionSummary,
   ThinkingLevel,
 } from "@grove/contract";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 
 const EMPTY_QUEUE: string[] = [];
 
@@ -14,6 +22,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBridge } from "../ipc/context";
 import { errorText } from "../ipc/errors";
 import { useSessionStore } from "../state/sessionStore";
+import type { MenuItem } from "../state/menuStore";
+import { useMenuStore } from "../state/menuStore";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import {
@@ -41,6 +51,7 @@ import {
   footerIndexes,
   type TranscriptItem,
 } from "../session/transcript";
+import { copyText, revealPath } from "../shell/ContextMenu";
 
 interface SessionPaneProps {
   active: boolean;
@@ -298,6 +309,48 @@ function AssistantFoot({
   );
 }
 
+function fullText(blocks: Block[]): string {
+  return blocks.map((block) => block.text).join("\n");
+}
+
+function markdownOf(blocks: Block[]): string {
+  return blocks
+    .map((block) =>
+      block.type === "code" ? `\`\`\`${block.language}\n${block.text}\n\`\`\`` : block.text,
+    )
+    .join("\n\n");
+}
+
+function codeOf(blocks: Block[]): string | null {
+  const code = blocks.filter(
+    (block): block is Extract<Block, { type: "code" }> => block.type === "code",
+  );
+  return code.length > 0 ? code.map((block) => block.text).join("\n\n") : null;
+}
+
+/**
+ * The file a tool row points at, if its target looks like one. Absolute paths stand alone; a relative
+ * one is resolved against the session's cwd so Reveal has a real path to hand the core.
+ */
+function resolveToolPath(title: string, cwd: string | null): string | null {
+  const raw = title.trim();
+  if (!raw) return null;
+  if (/^(?:[a-zA-Z]:[\\/]|[/\\]|~[\\/])/.test(raw)) return raw;
+  if (!/[\\/]/.test(raw) && !/\.[a-z0-9]{1,8}$/i.test(raw)) return null;
+  if (!cwd) return null;
+  return `${cwd.replace(/[\\/]+$/, "")}/${raw.replace(/\\/g, "/")}`;
+}
+
+function openAt(event: ReactMouseEvent<HTMLElement>, items: MenuItem[]) {
+  event.preventDefault();
+  useMenuStore.getState().openMenu({
+    x: event.clientX,
+    y: event.clientY,
+    returnFocus: event.currentTarget,
+    items,
+  });
+}
+
 export function TranscriptRow({
   item,
   footer,
@@ -313,9 +366,63 @@ export function TranscriptRow({
   onDecide: (requestId: string, decision: Decision) => void;
   onAnswer: (requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
 }) {
+  const bridge = useBridge();
   const [answered, setAnswered] = useState<Decision | null>(null);
   const detail = useSessionStore((state) => state.detail);
   const provider = detail?.provider ?? "mock";
+  const notify = useUiStore((state) => state.notify);
+
+  const copy = (text: string) => {
+    void copyText(text).then((ok) => {
+      if (!ok) notify("Clipboard is unavailable", "error");
+    });
+  };
+
+  const openMessageMenu = (event: ReactMouseEvent<HTMLElement>, blocks: Block[]) => {
+    const text = fullText(blocks);
+    const items: MenuItem[] = [
+      { kind: "item", label: "Copy", icon: "copy", onSelect: () => copy(text) },
+      {
+        kind: "item",
+        label: "Copy as Markdown",
+        icon: "file",
+        onSelect: () => copy(markdownOf(blocks)),
+      },
+    ];
+    const code = codeOf(blocks);
+    if (code) {
+      items.push({
+        kind: "item",
+        label: "Copy code",
+        icon: "terminal",
+        onSelect: () => copy(code),
+      });
+    }
+    openAt(event, items);
+  };
+
+  const openTargetMenu = (event: ReactMouseEvent<HTMLElement>, target: string) => {
+    const path = resolveToolPath(target, detail?.cwd ?? null);
+    const items: MenuItem[] = [];
+    if (path) {
+      items.push({ kind: "item", label: "Copy path", icon: "copy", onSelect: () => copy(path) });
+      items.push({
+        kind: "item",
+        label: "Reveal in Explorer",
+        icon: "folder",
+        onSelect: () => void revealPath(bridge, path, notify),
+      });
+    } else if (target.trim()) {
+      items.push({
+        kind: "item",
+        label: "Copy",
+        icon: "copy",
+        onSelect: () => copy(target.trim()),
+      });
+    }
+    if (items.length === 0) return;
+    openAt(event, items);
+  };
 
   switch (item.kind) {
     case "message": {
@@ -325,7 +432,10 @@ export function TranscriptRow({
           .map((block) => block.text)
           .join("\n");
         return (
-          <div className="turn turn-user">
+          <div
+            className="turn turn-user"
+            onContextMenu={(event) => openMessageMenu(event, item.blocks)}
+          >
             <div className="bubble">
               <p>{text}</p>
             </div>
@@ -333,7 +443,7 @@ export function TranscriptRow({
         );
       }
       return (
-        <div className="turn">
+        <div className="turn" onContextMenu={(event) => openMessageMenu(event, item.blocks)}>
           {item.blocks.map((block, index) => {
             if (block.type === "code") {
               return (
@@ -361,7 +471,12 @@ export function TranscriptRow({
       // Whitespace-only deltas would otherwise leave a bare, blinking row behind tool cards.
       if (!item.text.trim()) return null;
       return (
-        <div className="turn">
+        <div
+          className="turn"
+          onContextMenu={(event) =>
+            openMessageMenu(event, [{ type: "text", text: item.text }])
+          }
+        >
           <p>{item.text}</p>
           {footer ? <AssistantFoot provider={provider} at={item.at} /> : null}
         </div>
@@ -377,7 +492,11 @@ export function TranscriptRow({
               : "terminal";
       return (
         <div className="turn">
-          <div className="tool" data-status={item.status ?? "running"}>
+          <div
+            className="tool"
+            data-status={item.status ?? "running"}
+            onContextMenu={(event) => openTargetMenu(event, item.title)}
+          >
             <button
               className="tool-head"
               type="button"
@@ -411,7 +530,11 @@ export function TranscriptRow({
     case "diff":
       return (
         <div className="turn">
-          <div className="tool" data-status="ok">
+          <div
+            className="tool"
+            data-status="ok"
+            onContextMenu={(event) => openTargetMenu(event, item.path)}
+          >
             <button className="tool-head" type="button" aria-expanded={open} onClick={onToggle}>
               <span className="tool-ico">
                 <Icon name="diff" size="sm" />
