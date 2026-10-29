@@ -283,6 +283,63 @@ impl Store {
         })
     }
 
+    /// Rename a session. `updated_at` moves with the title, so a rename reads as activity in the
+    /// list's `updated_at DESC` order; nothing else on the row changes.
+    pub fn set_session_title(&self, id: &str, title: &str) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET title = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id, title, now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Change the model a session runs, and optionally the reasoning level that goes with it, in one
+    /// row update. A model swap is not a provider swap: the resume token stays valid.
+    pub fn set_session_model(
+        &self,
+        id: &str,
+        model: &str,
+        thinking: Option<crate::providers::ThinkingLevel>,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            let updated_at = now();
+            match thinking {
+                Some(level) => {
+                    let raw: Option<String> = conn
+                        .query_row(
+                            "SELECT adapter_config FROM sessions WHERE id = ?1",
+                            params![id],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    let Some(raw) = raw else {
+                        return Ok(());
+                    };
+                    let mut config: serde_json::Value =
+                        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+                    if !config.is_object() {
+                        config = serde_json::json!({});
+                    }
+                    config["thinkingLevel"] = serde_json::json!(level.as_str());
+                    conn.execute(
+                        "UPDATE sessions SET model = ?2, adapter_config = ?3, updated_at = ?4
+                         WHERE id = ?1",
+                        params![id, model, config.to_string(), updated_at],
+                    )?;
+                }
+                None => {
+                    conn.execute(
+                        "UPDATE sessions SET model = ?2, updated_at = ?3 WHERE id = ?1",
+                        params![id, model, updated_at],
+                    )?;
+                }
+            }
+            Ok(())
+        })
+    }
+
     pub fn set_resume_token(&self, id: &str, token: Option<&str>) -> Result<(), StoreError> {
         self.with_conn(|conn| {
             conn.execute(
@@ -524,6 +581,47 @@ mod tests {
         assert_eq!(
             store.session("session-1").unwrap().unwrap().status,
             SessionState::Idle
+        );
+    }
+
+    #[test]
+    fn setting_the_model_persists_it_with_an_optional_thinking_level() {
+        use crate::providers::ThinkingLevel;
+
+        let store = Store::open_in_memory().unwrap();
+        let row = session("session-1");
+        store.insert_session(&row, &serde_json::json!({})).unwrap();
+
+        store
+            .set_session_model("session-1", "mock-2", Some(ThinkingLevel::High))
+            .unwrap();
+        let updated = store.session("session-1").unwrap().unwrap();
+        assert_eq!(updated.model.as_deref(), Some("mock-2"));
+        assert!(
+            updated.updated_at >= row.updated_at,
+            "the row's sort order follows the change"
+        );
+        assert_eq!(
+            store
+                .session_detail("session-1")
+                .unwrap()
+                .unwrap()
+                .thinking_level,
+            ThinkingLevel::High,
+            "the model and the level land together"
+        );
+
+        // A model-only change keeps the chosen level: the caller leaves it alone.
+        store
+            .set_session_model("session-1", "mock-3", None)
+            .unwrap();
+        assert_eq!(
+            store
+                .session_detail("session-1")
+                .unwrap()
+                .unwrap()
+                .thinking_level,
+            ThinkingLevel::High
         );
     }
 

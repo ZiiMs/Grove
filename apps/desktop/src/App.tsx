@@ -176,12 +176,19 @@ export default function App() {
   };
 
   /**
-   * Session menu. Rename and Generate name arrive in later slices and prepend their entries here; the
-   * array is the whole surface, so nothing else has to change. Permanent delete exists only on an
-   * archived row — an active session has Archive instead, which is reversible.
+   * Session menu. Generate name arrives in a later slice and prepends its entry here; the array is
+   * the whole surface, so nothing else has to change. Rename works on both sides of the archive;
+   * permanent delete exists only on an archived row, where Archive's action becomes Restore.
    */
   const sessionMenuItems = (row: SessionSummary): MenuItem[] => {
-    const items: MenuItem[] = [];
+    const items: MenuItem[] = [
+      {
+        kind: "item",
+        label: "Rename",
+        icon: "edit",
+        onSelect: () => useUiStore.getState().startRename(row.id),
+      },
+    ];
     if (row.archivedAt) {
       items.push({
         kind: "item",

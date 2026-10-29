@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEvent } from "@grove/contract";
+import type { SessionDetail, SessionEvent } from "@grove/contract";
 import {
   DEFAULT_PROVIDERS,
   createFakeBridge,
@@ -71,8 +71,52 @@ describe("session store model refresh", () => {
   });
 });
 
-describe("session store subagents", () => {
-  const start: SessionEvent = {
+describe("session store model changes", () => {
+  it("hot-swaps the active session's model without touching its transcript", async () => {
+    useSessionStore.getState().reset();
+    const detail: SessionDetail = {
+      ...fakeSession({
+        id: "s1",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+      }),
+      thinkingLevel: "off",
+      events: [],
+    };
+    const bridge = createFakeBridge(
+      {},
+      {
+        sessions: [fakeSummary(detail)],
+        details: { [detail.id]: detail },
+      },
+    );
+    useSessionStore.setState({
+      activeId: detail.id,
+      detail,
+      events: [],
+      sessions: [fakeSummary(detail)],
+    });
+
+    const changed = await useSessionStore
+      .getState()
+      .setModel(bridge, "claude-opus-4-1", "high");
+
+    expect(changed).toBe(true);
+    expect(useSessionStore.getState().detail?.model).toBe("claude-opus-4-1");
+    expect(useSessionStore.getState().detail?.thinkingLevel).toBe("high");
+    expect(useSessionStore.getState().sessions[0].model).toBe("claude-opus-4-1");
+    expect(useSessionStore.getState().events).toEqual([]);
+    expect(bridge.invocations).toContain("session_set_model");
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+    expect(bridge.calls.find((call) => call.command === "session_set_model")?.args).toEqual({
+      id: "s1",
+      model: "claude-opus-4-1",
+      thinking: "high",
+    });
+  });
+});
+
+describe("session store subagents", () => {  const start: SessionEvent = {
     at: "2025-01-01T00:00:00.000Z",
     kind: "tool_call",
     call_id: "call-1",

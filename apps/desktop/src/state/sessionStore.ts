@@ -91,6 +91,15 @@ export interface SessionStore extends SessionStoreData {
   respondPermission: (bridge: GroveBridge, requestId: string, decision: Decision) => Promise<void>;
   respondQuestion: (bridge: GroveBridge, requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
   setThinking: (bridge: GroveBridge, level: ThinkingLevel) => Promise<boolean>;
+  /**
+   * Change the active session's model in place (same provider). Returns whether the core accepted
+   * it; the transcript is untouched and the resulting detail carries the persisted model.
+   */
+  setModel: (
+    bridge: GroveBridge,
+    model: string,
+    thinking?: ThinkingLevel | null,
+  ) => Promise<boolean>;
   /** Restart a stopped session; `send` calls this automatically before the next message. */
   resume: (bridge: GroveBridge) => Promise<boolean>;
   close: (bridge: GroveBridge) => Promise<void>;
@@ -107,6 +116,11 @@ export interface SessionStore extends SessionStoreData {
   refreshContext: (bridge: GroveBridge) => Promise<boolean>;
   /** Re-launch the active session on another registered provider, keeping its transcript. */
   switchProvider: (bridge: GroveBridge, provider: string, model?: string) => Promise<void>;
+  /**
+   * Rename a session. The command trims and validates, so the row may pass what the user typed;
+   * returns `null` on success or the message to show beside the field.
+   */
+  rename: (bridge: GroveBridge, id: string, title: string) => Promise<string | null>;
   /** Fold one live `grove://session-event` into the list and, when it belongs to the open session, the transcript. */
   applyEvent: (sessionId: string | null, event: SessionEvent) => void;
   reset: () => void;
@@ -475,6 +489,31 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
+  setModel: async (bridge, model, thinking) => {
+    const id = get().activeId;
+    if (!id) return false;
+    set({ error: null });
+    try {
+      const detail = await bridge.invoke("session_set_model", {
+        id,
+        model,
+        thinking: thinking ?? null,
+      });
+      // A hot swap does not touch the transcript, so keep the live event list rather than replacing
+      // it with the snapshot the command returned.
+      set((state) => ({
+        detail,
+        sessions: state.sessions.map((row) =>
+          row.id === id ? { ...row, model: detail.model, updatedAt: detail.updatedAt } : row,
+        ),
+      }));
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
   resume: async (bridge) => {
     const id = get().activeId;
     if (!id) return false;
@@ -611,6 +650,26 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       }));
     } catch (error) {
       set({ busy: false, error: errorText(error) });
+    }
+  },
+
+  rename: async (bridge, id, title) => {
+    try {
+      const session = await bridge.invoke("session_rename", { id, title });
+      // The command returns the stored row, so the tree and the open header show exactly what was
+      // persisted rather than what was typed (the core may have trimmed it).
+      set((state) => ({
+        sessions: state.sessions.map((row) =>
+          row.id === id ? { ...row, title: session.title, updatedAt: session.updatedAt } : row,
+        ),
+        detail:
+          state.detail?.id === id
+            ? { ...state.detail, title: session.title, updatedAt: session.updatedAt }
+            : state.detail,
+      }));
+      return null;
+    } catch (error) {
+      return errorText(error);
     }
   },
 

@@ -1025,6 +1025,7 @@ function Composer({
   const cancel = useSessionStore((state) => state.cancel);
   const switchProvider = useSessionStore((state) => state.switchProvider);
   const setThinking = useSessionStore((state) => state.setThinking);
+  const setModel = useSessionStore((state) => state.setModel);
   const busy = useSessionStore((state) => state.busy);
   const prefs = useWorkspaceStore((state) => state.prefs);
   const registered = useSessionStore((state) => state.providers);
@@ -1150,19 +1151,31 @@ function Composer({
 
   const changeModel = async (value: string) => {
     if (!detail || value === currentModel) return;
-    const owner = catalog.owners.get(value);
+    // `catalog.owners` is keyed by model id alone and first-wins, so a provider that also lists the
+    // id would win over the session's own. Prefer the session's provider when it offers the id.
+    const ownModels = modelsByProvider[detail.provider] ?? providerMeta(detail.provider).models;
+    const owner = ownModels.includes(value)
+      ? {
+          id: detail.provider,
+          meta: providerMeta(detail.provider),
+          ready: available.includes(detail.provider),
+        }
+      : catalog.owners.get(value);
     if (!owner?.ready) return;
-    try {
-      // Same-provider hot swap arrives in the next slice; every choice still goes through the
-      // provider switch the session already supports.
+    if (owner.id === detail.provider) {
+      // A same-provider change is a hot swap: keep the agent, its turn and its transcript. Compute
+      // the nearest level the new model accepts from the capability map; with no entry, leave the
+      // level exactly as the user had it.
+      const levels = knownThinkingLevels(owner.id, value, modelThinking);
+      const thinking = levels ? nearestThinkingLevel(currentThinking, levels) : null;
+      if (!(await setModel(bridge, value, thinking))) return;
+    } else {
       await switchProvider(bridge, owner.id, value);
-      notify(`Session now runs on ${owner.meta.name} · ${modelLabel(value, owner.id)}`);
-      setRecentModels((current) =>
-        [value, ...current.filter((id) => id !== value)].slice(0, RECENT_LIMIT),
-      );
-    } catch {
-      // The store already carries the error message.
     }
+    notify(`Session now runs on ${owner.meta.name} · ${modelLabel(value, owner.id)}`);
+    setRecentModels((current) =>
+      [value, ...current.filter((id) => id !== value)].slice(0, RECENT_LIMIT),
+    );
   };
 
   const isStopped = !live;

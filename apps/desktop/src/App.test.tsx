@@ -450,6 +450,54 @@ describe("redesigned shell", () => {
     );
   });
 
+  it("hot-swaps a same-provider model without relaunching the agent", async () => {
+    const bridge = await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /Opus 4.1/ }));
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_set_model"));
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+    expect(bridge.calls.find((call) => call.command === "session_set_model")?.args).toEqual({
+      id: "session-1",
+      model: "claude-opus-4-1",
+      thinking: null,
+    });
+    expect(await screen.findByText("Session now runs on Anthropic · Opus 4.1")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model for this session" })).toHaveTextContent(
+        "Opus 4.1",
+      ),
+    );
+    expect(JSON.parse(localStorage.getItem("grove.recentModels") ?? "[]")[0]).toBe(
+      "claude-opus-4-1",
+    );
+  });
+
+  it("clamps the thinking level when the new model has a different ladder", async () => {
+    const bridge = renderApp({
+      providers: PROVIDER_ROSTER,
+      providerStatuses: FAKE_PROVIDER_ROSTER,
+      sessions: [fakeSummary(anthropicSession, events.length)],
+      details: { [anthropicSession.id]: anthropicDetail },
+      modelThinking: { anthropic: { "claude-opus-4-1": ["low", "medium"] } },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /Opus 4.1/ }));
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_set_model"));
+    expect(bridge.calls.find((call) => call.command === "session_set_model")?.args).toEqual({
+      id: "session-1",
+      model: "claude-opus-4-1",
+      thinking: "low",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Thinking level for this session" })).toHaveTextContent(
+        "Low",
+      ),
+    );
+  });
+
   it("switches provider through the existing path, remembers the choice and toasts the label", async () => {
     const bridge = await readyOnAnthropic();
     await userEvent.click(modelTrigger());
@@ -946,7 +994,9 @@ describe("context menu", () => {
     const menu = await screen.findByRole("menu");
     await waitFor(() => expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus());
 
-    await userEvent.keyboard("{End}{Enter}");
+    // Focus the item by name: the menu gains items over time, so its position is not the contract.
+    within(menu).getByRole("menuitem", { name: "Reveal in Explorer" }).focus();
+    await userEvent.keyboard("{Enter}");
     await waitFor(() =>
       expect(
         bridge.calls.some(
@@ -1400,5 +1450,114 @@ describe("archive and delete", () => {
       screen.queryByRole("button", { name: /awaiting you - open that session/ }),
     ).not.toBeInTheDocument();
     expect(within(nav()).getByText("1 session · 0 awaiting you")).toBeInTheDocument();
+  });
+});
+
+describe("session rename", () => {
+  const nav = () => document.getElementById("panel-nav") as HTMLElement;
+
+  function row(name: RegExp): HTMLElement {
+    return within(nav()).getByRole("button", { name });
+  }
+
+  /** Right-click the active session, choose Rename, and return the inline field. */
+  async function startRename() {
+    const bridge = await ready();
+    fireEvent.contextMenu(row(/OAuth device flow/), { clientX: 120, clientY: 160 });
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Rename" }));
+    const input = (await screen.findByRole("textbox", {
+      name: "Session title",
+    })) as HTMLInputElement;
+    return { bridge, input };
+  }
+
+  function renames(bridge: Awaited<ReturnType<typeof ready>>) {
+    return bridge.calls.filter((call) => call.command === "session_rename");
+  }
+
+  it("renames inline from the menu and shows the stored title on the row and header", async () => {
+    const { bridge, input } = await startRename();
+
+    expect(input).toHaveValue("OAuth device flow");
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("OAuth device flow".length);
+
+    await userEvent.clear(input);
+    await userEvent.type(input, "  Release notes  ");
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() => expect(renames(bridge)).toHaveLength(1));
+    expect(renames(bridge)[0].args).toEqual({ id: session.id, title: "Release notes" });
+    await waitFor(() =>
+      expect(row(/Release notes/)).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+    expect(screen.getByRole("heading", { name: "Release notes" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Session title" })).not.toBeInTheDocument();
+  });
+
+  it("commits the edit on blur", async () => {
+    const { bridge, input } = await startRename();
+
+    await userEvent.clear(input);
+    await userEvent.type(input, "Blurred title");
+    await userEvent.click(screen.getByRole("searchbox", { name: /Filter projects/ }));
+
+    await waitFor(() => expect(renames(bridge)).toHaveLength(1));
+    expect(renames(bridge)[0].args).toEqual({ id: session.id, title: "Blurred title" });
+    await waitFor(() => expect(row(/Blurred title/)).toBeInTheDocument());
+  });
+
+  it("cancels on Escape without calling the core", async () => {
+    const { bridge, input } = await startRename();
+
+    await userEvent.clear(input);
+    await userEvent.type(input, "Discard me");
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Session title" })).not.toBeInTheDocument(),
+    );
+    expect(renames(bridge)).toHaveLength(0);
+    expect(row(/OAuth device flow/)).toBeInTheDocument();
+  });
+
+  it("cancels when the title is emptied", async () => {
+    const { bridge, input } = await startRename();
+
+    await userEvent.clear(input);
+    await userEvent.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "Session title" })).not.toBeInTheDocument(),
+    );
+    expect(renames(bridge)).toHaveLength(0);
+    expect(row(/OAuth device flow/)).toBeInTheDocument();
+  });
+
+  it("keeps the field open with an inline error when the title is too long", async () => {
+    const { bridge, input } = await startRename();
+
+    await userEvent.clear(input);
+    fireEvent.change(input, { target: { value: "x".repeat(81) } });
+    await userEvent.keyboard("{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("80");
+    expect(screen.getByRole("textbox", { name: "Session title" })).toBeInTheDocument();
+    expect(renames(bridge)).toHaveLength(0);
+  });
+
+  it("does not open the session while its row is being edited", async () => {
+    const { bridge, input } = await startRename();
+    const opens = () => bridge.calls.filter((call) => call.command === "session_get").length;
+    const before = opens();
+
+    expect(within(nav()).queryByRole("button", { name: /OAuth device flow/ })).not.toBeInTheDocument();
+    await userEvent.click(input);
+
+    expect(opens()).toBe(before);
+    expect(screen.getByRole("textbox", { name: "Session title" })).toHaveFocus();
   });
 });

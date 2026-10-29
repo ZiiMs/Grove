@@ -1,5 +1,12 @@
 import type { GitWorktree, Project, SessionSummary, SubagentSummary } from "@grove/contract";
-import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
+import { useBridge } from "../ipc/context";
 import { useSessionStore } from "../state/sessionStore";
 import type { MenuAnchor } from "../state/menuStore";
 import { useUiStore } from "../state/uiStore";
@@ -98,6 +105,100 @@ function SubagentRow({
   );
 }
 
+/** The core refuses titles longer than this; the field checks first so the message lands inline. */
+const MAX_SESSION_TITLE_CHARS = 80;
+
+/**
+ * The tree row while it is being renamed: an input in place of the row button, so a click cannot
+ * open the session underneath. Enter and blur commit, Escape and an empty value cancel.
+ */
+function SessionTitleEditor({ session, active }: { session: SessionSummary; active: boolean }) {
+  const bridge = useBridge();
+  const rename = useSessionStore((state) => state.rename);
+  const endRename = useUiStore((state) => state.endRename);
+  const field = useRef<HTMLInputElement>(null);
+  /** Set once the edit has settled, so the unmount blur cannot commit a cancelled edit. */
+  const settled = useRef(false);
+  const [value, setValue] = useState(session.title);
+  const [error, setError] = useState<string | null>(null);
+  const visual = sessionVisual(session);
+
+  useEffect(() => {
+    field.current?.focus();
+    field.current?.select();
+  }, []);
+
+  const close = () => {
+    settled.current = true;
+    endRename();
+  };
+
+  const commit = async () => {
+    if (settled.current) return;
+    const title = value.trim();
+    if (!title) {
+      close();
+      return;
+    }
+    if (title.length > MAX_SESSION_TITLE_CHARS) {
+      setError(`Titles are capped at ${MAX_SESSION_TITLE_CHARS} characters.`);
+      return;
+    }
+    settled.current = true;
+    const failure = await rename(bridge, session.id, title);
+    if (failure) {
+      settled.current = false;
+      setError(failure);
+      return;
+    }
+    endRename();
+  };
+
+  return (
+    <>
+      <div
+        className="session-row is-editing"
+        data-state={visual}
+        aria-current={active ? "true" : undefined}
+      >
+        <span className="dot" data-state={visual} aria-hidden="true" />
+        <input
+          ref={field}
+          className="session-rename"
+          type="text"
+          aria-label="Session title"
+          aria-invalid={error ? true : undefined}
+          autoComplete="off"
+          spellCheck={false}
+          value={value}
+          onChange={(event) => {
+            setValue(event.target.value);
+            setError(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.stopPropagation();
+              void commit();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              close();
+            }
+          }}
+          onBlur={() => void commit()}
+        />
+        <ProviderMark provider={session.provider} small />
+      </div>
+      {error ? (
+        <p className="session-rename-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 function SessionRow({
   session,
   active,
@@ -115,42 +216,47 @@ function SessionRow({
   onMenu?: (session: SessionSummary, anchor: MenuAnchor) => void;
 }) {
   const closeSubagent = useUiStore((state) => state.closeSubagent);
+  const editing = useUiStore((state) => state.renamingSession === session.id);
   const visual = sessionVisual(session);
   const subagents = session.subagents ?? [];
   return (
     <div className="session-block" data-archived={archived ? "true" : undefined}>
-      <button
-        className="session-row"
-        type="button"
-        data-state={visual}
-        data-archived={archived ? "true" : undefined}
-        aria-current={active ? "true" : undefined}
-        onClick={() => {
-          closeSubagent();
-          onSelect(session.id);
-        }}
-        onContextMenu={(event) => {
-          if (!onMenu) return;
-          event.preventDefault();
-          onMenu(session, anchorOf(event));
-        }}
-        title={session.title}
-      >
-        <span className="dot" data-state={visual} aria-hidden="true" />
-        <span className="s-title">{session.title}</span>
-        {suffix ? <span className="s-suffix">{suffix}</span> : null}
-        {subagents.length ? (
-          <span
-            className="subagent-count"
-            title={`${subagents.length} subagent${subagents.length === 1 ? "" : "s"}`}
-          >
-            {subagents.length}
-          </span>
-        ) : null}
-        <span className="sr-only">{visual}</span>
-        <ProviderMark provider={session.provider} small />
-      </button>
-      {onMenu ? (
+      {editing ? (
+        <SessionTitleEditor session={session} active={active} />
+      ) : (
+        <button
+          className="session-row"
+          type="button"
+          data-state={visual}
+          data-archived={archived ? "true" : undefined}
+          aria-current={active ? "true" : undefined}
+          onClick={() => {
+            closeSubagent();
+            onSelect(session.id);
+          }}
+          onContextMenu={(event) => {
+            if (!onMenu) return;
+            event.preventDefault();
+            onMenu(session, anchorOf(event));
+          }}
+          title={session.title}
+        >
+          <span className="dot" data-state={visual} aria-hidden="true" />
+          <span className="s-title">{session.title}</span>
+          {suffix ? <span className="s-suffix">{suffix}</span> : null}
+          {subagents.length ? (
+            <span
+              className="subagent-count"
+              title={`${subagents.length} subagent${subagents.length === 1 ? "" : "s"}`}
+            >
+              {subagents.length}
+            </span>
+          ) : null}
+          <span className="sr-only">{visual}</span>
+          <ProviderMark provider={session.provider} small />
+        </button>
+      )}
+      {!editing && onMenu ? (
         <div className="session-actions">
           <button
             className="icon-btn sm"

@@ -504,6 +504,43 @@ export function createFakeBridge(
         detail.thinkingLevel = level;
         return detail as CommandMap[K]["result"];
       }
+      if (command === "session_rename") {
+        // The core trims, validates and bumps the timestamp; the fake applies the same rules so a UI
+        // flow meets the real behaviour instead of a permissive shortcut.
+        const { id, title } = args as { id: string; title: string };
+        const row = sessions.find((session) => session.id === id);
+        if (!row) throw new Error(`FakeBridge has no session: ${id}`);
+        const next = title.trim();
+        if (!next) throw new Error("invalid request: title is empty");
+        if ([...next].length > 80) {
+          throw new Error("invalid request: title is longer than 80 characters");
+        }
+        const at = "2025-01-01T00:00:09.000Z";
+        row.title = next;
+        row.updatedAt = at;
+        const detail = details[id];
+        if (detail) {
+          detail.title = next;
+          detail.updatedAt = at;
+        }
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return structuredClone(session) as CommandMap[K]["result"];
+      }
+      if (command === "session_set_model") {
+        const { id, model, thinking } = args as {
+          id: string;
+          model: string;
+          thinking: SessionDetail["thinkingLevel"] | null;
+        };
+        const detail = details[id];
+        const row = sessions.find((session) => session.id === id);
+        if (!detail || !row) throw new Error(`FakeBridge has no session: ${id}`);
+        detail.model = model;
+        row.model = model;
+        if (thinking !== null && thinking !== undefined) detail.thinkingLevel = thinking;
+        // A same-provider hot swap adds no transcript event; the toast is the feedback.
+        return structuredClone(detail) as CommandMap[K]["result"];
+      }
       if (command === "session_close") {
         setStatus((args as { id: string }).id, "exited");
         return null as CommandMap[K]["result"];
