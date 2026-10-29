@@ -1006,9 +1006,10 @@ function Composer({
   const enqueue = useSessionStore((state) => state.enqueue);
   const dequeue = useSessionStore((state) => state.dequeue);
   const cancel = useSessionStore((state) => state.cancel);
-  const switchProvider = useSessionStore((state) => state.switchProvider);
   const setThinking = useSessionStore((state) => state.setThinking);
   const setModel = useSessionStore((state) => state.setModel);
+  const switchModel = useSessionStore((state) => state.switchModel);
+  const pendingModel = useSessionStore((state) => state.pendingModel);
   const busy = useSessionStore((state) => state.busy);
   const prefs = useWorkspaceStore((state) => state.prefs);
   const registered = useSessionStore((state) => state.providers);
@@ -1031,6 +1032,7 @@ function Composer({
   const currentProvider = detail?.provider ?? fallbackProvider;
   const currentModel = model ?? defaultModelFor(currentProvider, modelsByProvider[currentProvider]);
   const currentThinking = detail?.thinkingLevel ?? "off";
+  const pending = pendingModel?.sessionId === sessionId ? pendingModel : null;
   const knownLevels = useMemo(
     () => knownThinkingLevels(currentProvider, currentModel, modelThinking),
     [currentModel, currentProvider, modelThinking],
@@ -1145,6 +1147,7 @@ function Composer({
         }
       : catalog.owners.get(value);
     if (!owner?.ready) return;
+    let landed = true;
     if (owner.id === detail.provider) {
       // A same-provider change is a hot swap: keep the agent, its turn and its transcript. Compute
       // the nearest level the new model accepts from the capability map; with no entry, leave the
@@ -1153,12 +1156,17 @@ function Composer({
       const thinking = levels ? nearestThinkingLevel(currentThinking, levels) : null;
       if (!(await setModel(bridge, value, thinking))) return;
     } else {
-      await switchProvider(bridge, owner.id, value);
+      // A cross-provider change relaunches on the new wire client. While the session is busy or
+      // waiting for an answer the store queues it and the shell applies it at idle, so there is no
+      // toast yet: the composer shows the waiting dot and App toasts when it lands.
+      landed = await switchModel(bridge, owner.id, value);
     }
-    notify(`Session now runs on ${owner.meta.name} · ${modelLabel(value, owner.id)}`);
     setRecentModels((current) =>
       [value, ...current.filter((id) => id !== value)].slice(0, RECENT_LIMIT),
     );
+    if (landed) {
+      notify(`Session now runs on ${owner.meta.name} · ${modelLabel(value, owner.id)}`);
+    }
   };
 
   const isStopped = !live;
@@ -1266,6 +1274,18 @@ function Composer({
                 }
                 onChange={(value) => void changeModel(value)}
               />
+              {pending ? (
+                <span
+                  className="pending-switch"
+                  title={`Waiting for this turn to finish before switching to ${modelLabel(
+                    pending.model,
+                    pending.provider,
+                  )}`}
+                >
+                  <span className="dot" data-state="waiting" aria-hidden="true" />
+                  {modelLabel(pending.model, pending.provider)}
+                </span>
+              ) : null}
             </div>
             <div className="foot-actions">
               {working ? (
