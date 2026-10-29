@@ -248,6 +248,28 @@ pub fn authorize(
     request
 }
 
+/// Send one already-built JSON request and decode its body.
+///
+/// The one-shot completion path in every vendor shares this envelope: send, turn a non-2xx into the
+/// vendor's actionable error, then parse the JSON. Only the body and the text extraction are the
+/// vendor's own, so those stay in `anthropic.rs`, `openai.rs` and `google.rs`.
+pub async fn send_json(
+    request: reqwest::RequestBuilder,
+    provider: &str,
+) -> Result<serde_json::Value, ProviderError> {
+    let response = request
+        .send()
+        .await
+        .map_err(|error| ProviderError::Api(format!("cannot reach {provider}: {error}")))?;
+    let status = response.status();
+    let raw = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(api_error(status.as_u16(), &raw));
+    }
+    serde_json::from_str(&raw)
+        .map_err(|error| ProviderError::Protocol(format!("{provider} completion: {error}")))
+}
+
 /// A vendor's error body, reduced to one line a user can act on.
 pub fn api_error(status: u16, body: &str) -> ProviderError {
     let parsed: Option<serde_json::Value> = serde_json::from_str(body).ok();

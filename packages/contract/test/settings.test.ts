@@ -22,6 +22,7 @@ describe("settings contract fixtures", () => {
       provider: "anthropic",
       model: "claude-haiku-4-5",
     });
+    expect(parsed.autoTitles).toBe(false);
     expect(parsed.futureFlag).toBe(true);
   });
 
@@ -29,6 +30,7 @@ describe("settings contract fixtures", () => {
     const nulled = settingsSchema.parse({
       catalogSources: [],
       theme: "system",
+      autoTitles: true,
       titleModel: null,
     });
     expect(nulled.titleModel).toBeNull();

@@ -40,7 +40,6 @@ export function AddProjectDialog() {
   const addressRef = useRef<HTMLInputElement>(null);
   const newFolderRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -144,12 +143,10 @@ export function AddProjectDialog() {
       event.preventDefault();
       const next = Math.min(activeIndex + 1, dirs.length - 1);
       setActiveIndex(next);
-      rowRefs.current[next]?.focus();
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       const next = Math.max(activeIndex - 1, 0);
       setActiveIndex(next);
-      rowRefs.current[next]?.focus();
     } else if (event.key === "Enter" && activeIndex >= 0) {
       event.preventDefault();
       void loadDirs(dirs[activeIndex].path, "list");
@@ -475,7 +472,10 @@ export function AddProjectDialog() {
             className="fp-list"
             role="listbox"
             aria-label="Folders"
-            tabIndex={-1}
+            aria-activedescendant={
+              activeIndex >= 0 ? `fp-option-${activeIndex}` : undefined
+            }
+            tabIndex={0}
             ref={listRef}
             onKeyDown={handleListKeyDown}
           >
@@ -484,16 +484,14 @@ export function AddProjectDialog() {
             ) : listing?.dirs.length ? (
               listing.dirs.map((dir, index) => (
                 <button
-                  ref={(node) => {
-                    rowRefs.current[index] = node;
-                  }}
+                  id={`fp-option-${index}`}
                   className="fp-row"
                   type="button"
                   role="option"
                   aria-selected={index === activeIndex}
-                  tabIndex={index === activeIndex ? 0 : -1}
+                  tabIndex={-1}
                   key={dir.path}
-                  onFocus={() => setActiveIndex(index)}
+                  onMouseDown={() => setActiveIndex(index)}
                   onClick={() => void loadDirs(dir.path, "list")}
                 >
                   <Icon name="folder" size="sm" />

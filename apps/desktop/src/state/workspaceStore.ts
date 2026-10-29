@@ -24,6 +24,8 @@ export interface Preferences {
   thinkingLevel: ThinkingLevel;
   /** The global small model that names sessions; null means the suggested one applies. */
   titleModel: TitleModel | null;
+  /** Whether an auto-titled session may be named automatically after its first reply. */
+  autoTitles: boolean;
   permissionMode: PermissionMode;
   /** Absolute folder new worktrees are created under; empty means "next to the project". */
   worktreeRoot: string;
@@ -59,6 +61,7 @@ const DEFAULT_PREFS: Preferences = {
   defaultModel: "claude-sonnet-4-5",
   thinkingLevel: "off",
   titleModel: null,
+  autoTitles: true,
   permissionMode: "ask",
   worktreeRoot: "~/code",
   restoreSessions: true,
@@ -90,6 +93,7 @@ function prefsFromSettings(settings: Record<string, unknown>): Preferences {
     defaultModel: stringValue(settings.defaultModel, DEFAULT_PREFS.defaultModel),
     thinkingLevel: thinkingLevelValue(settings.thinkingLevel, DEFAULT_PREFS.thinkingLevel),
     titleModel: titleModelValue(settings.titleModel),
+    autoTitles: booleanValue(settings.autoTitles, true),
     permissionMode:
       mode === "accept-edits" || mode === "bypass" || mode === "ask"
         ? mode

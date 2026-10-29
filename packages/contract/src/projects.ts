@@ -79,10 +79,3 @@ export const fsRootsSchema = z.object({
   roots: z.array(fsRootSchema),
 });
 export type FsRoots = z.infer<typeof fsRootsSchema>;
-
-/** Arguments to `fs_create_dir`: one new folder under an existing parent. */
-export const createDirRequestSchema = z.object({
-  parent: z.string(),
-  name: z.string(),
-});
-export type CreateDirRequest = z.infer<typeof createDirRequestSchema>;

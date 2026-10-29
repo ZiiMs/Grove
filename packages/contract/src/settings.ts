@@ -28,6 +28,8 @@ export const settingsSchema = z
     /** `owner/name` GitHub repositories, in display order. */
     catalogSources: z.array(z.string()),
     theme: themeSchema,
+    /** Whether an auto-titled session may be named by a model after its first reply. */
+    autoTitles: z.boolean(),
     /** Default reasoning level for a new session. */
     thinkingLevel: thinkingLevelSchema.optional(),
     /** The explicit title model, or null when the suggested one applies. */
@@ -47,6 +49,7 @@ export const settingsPatchSchema = z
   .object({
     catalogSources: z.array(z.string()).optional(),
     theme: themeSchema.optional(),
+    autoTitles: z.boolean().optional(),
     thinkingLevel: thinkingLevelSchema.optional(),
     titleModel: titleModelSchema.optional(),
     clearTitleModel: z.boolean().optional(),

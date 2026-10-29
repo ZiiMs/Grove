@@ -17,8 +17,35 @@ pub const TITLE_PROMPT_MAX_CHARS: usize = 2_000;
 /// letting it answer with a paragraph.
 pub const TITLE_MAX_TOKENS: u32 = 64;
 
-/// The longest title the tree row and the header can show.
+/// The longest title the tree row and the header can show. Generated titles and the first-message
+/// placeholder share it, so both truncate at the same visible width.
 pub const TITLE_MAX_CHARS: usize = 60;
+
+/// The placeholder an auto session takes from its first message: one line, capped at
+/// [`TITLE_MAX_CHARS`] at a word boundary, with an ellipsis when text was left out.
+pub fn first_message_title(text: &str) -> String {
+    // A message is often several lines; a tree row is one. Collapsing also makes the character count
+    // independent of how the user formatted the message.
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= TITLE_MAX_CHARS {
+        return text;
+    }
+    let head: String = text.chars().take(TITLE_MAX_CHARS).collect();
+    let at_word_boundary = text
+        .chars()
+        .nth(TITLE_MAX_CHARS)
+        .is_none_or(char::is_whitespace);
+    let cut = if at_word_boundary {
+        head.trim_end()
+    } else {
+        match head.rfind(char::is_whitespace) {
+            // Cut at the last whole word rather than mid-word; a single long word is hard-capped.
+            Some(index) if index > 0 => head[..index].trim_end(),
+            _ => head.trim_end(),
+        }
+    };
+    format!("{cut}…")
+}
 
 /// The user content for the title request: the first exchange, each side capped on a character
 /// boundary.
@@ -130,5 +157,21 @@ mod tests {
         assert!(prompt.contains(&"a".repeat(TITLE_PROMPT_MAX_CHARS)));
         assert!(!prompt.contains(&"u".repeat(TITLE_PROMPT_MAX_CHARS + 1)));
         assert!(!prompt.contains(&"a".repeat(TITLE_PROMPT_MAX_CHARS + 1)));
+    }
+
+    #[test]
+    fn the_first_message_placeholder_uses_the_same_cap() {
+        let short = "Wire up the picker";
+        assert_eq!(first_message_title(short), short);
+
+        let long = "word ".repeat(40);
+        let title = first_message_title(&long);
+        assert!(title.ends_with('…'));
+        assert!(title.chars().count() <= TITLE_MAX_CHARS + 1);
+
+        // A single long word is hard-capped instead of overflowing the row.
+        let word = "x".repeat(TITLE_MAX_CHARS + 20);
+        let title = first_message_title(&word);
+        assert_eq!(title.chars().count(), TITLE_MAX_CHARS + 1);
     }
 }

@@ -6,7 +6,7 @@
 
 use super::tools::ToolSpec;
 use super::wire::{
-    api_error, authorize, Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent,
+    authorize, send_json, Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent,
 };
 use super::{CompletionRequest, ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
@@ -121,18 +121,11 @@ pub async fn complete(
         "max_tokens": request.max_tokens,
         "stream": false,
     });
-    let response = authorize(http.post(endpoint(spec)), super::Wire::OpenAi, key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| ProviderError::Api(format!("cannot reach {}: {error}", spec.name)))?;
-    let status = response.status();
-    let raw = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(api_error(status.as_u16(), &raw));
-    }
-    let value: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|error| ProviderError::Protocol(format!("{} completion: {error}", spec.name)))?;
+    let value = send_json(
+        authorize(http.post(endpoint(spec)), super::Wire::OpenAi, key).json(&body),
+        &spec.name,
+    )
+    .await?;
     value
         .get("choices")
         .and_then(|choices| choices.get(0))

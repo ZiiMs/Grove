@@ -16,7 +16,13 @@ use std::sync::Arc;
 pub const DEFAULT_CATALOG_SOURCES: [&str; 2] = ["anthropics/skills", "mattpocock/skills"];
 
 /// The keys this build understands. Everything else is preserved verbatim in [`Settings::extra`].
-const KNOWN_KEYS: [&str; 4] = ["catalogSources", "clearTitleModel", "theme", "titleModel"];
+const KNOWN_KEYS: [&str; 5] = [
+    "autoTitles",
+    "catalogSources",
+    "clearTitleModel",
+    "theme",
+    "titleModel",
+];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -44,6 +50,9 @@ pub struct Settings {
     /// `owner/name` GitHub repositories, in display order.
     pub catalog_sources: Vec<String>,
     pub theme: Theme,
+    /// Whether an auto-titled session may be named by a model after its first reply. Off is stored
+    /// here, not as a null title model: null still means "use the suggested model".
+    pub auto_titles: bool,
     /// The explicit title model, or `None` when the user has not chosen one (or chose Off). A `None`
     /// here means "use the suggested model", not "never name a session".
     pub title_model: Option<TitleModel>,
@@ -60,6 +69,7 @@ impl Default for Settings {
                 .map(|source| source.to_string())
                 .collect(),
             theme: Theme::System,
+            auto_titles: true,
             title_model: None,
             extra: BTreeMap::new(),
         }
@@ -87,6 +97,10 @@ impl Settings {
 
         if let Some(theme) = patch.theme {
             self.theme = theme;
+        }
+
+        if let Some(auto_titles) = patch.auto_titles {
+            self.auto_titles = auto_titles;
         }
 
         if patch.clear_title_model && patch.title_model.is_some() {
@@ -140,6 +154,10 @@ impl Settings {
             serde_json::json!(self.catalog_sources),
         );
         rows.insert("theme".to_string(), serde_json::json!(self.theme));
+        rows.insert(
+            "autoTitles".to_string(),
+            serde_json::json!(self.auto_titles),
+        );
         // An explicit null is what "Off" leaves behind; omitting the key would read as "never set"
         // and let a later build silently resurrect an old model.
         rows.insert(
@@ -159,6 +177,8 @@ impl Settings {
 pub struct SettingsPatch {
     pub catalog_sources: Option<Vec<String>>,
     pub theme: Option<Theme>,
+    /// Turn automatic naming on or off. Omitted leaves the stored value alone.
+    pub auto_titles: Option<bool>,
     /// A new explicit choice. `None` means "this update does not touch it": JSON null cannot be told
     /// apart from an omitted key, so clearing has its own flag.
     pub title_model: Option<TitleModel>,
@@ -358,6 +378,29 @@ mod tests {
             .map(|source| source.repo.clone())
             .collect();
         assert_eq!(Settings::default().catalog_sources, expected);
+    }
+
+    #[test]
+    fn automatic_titles_default_on_and_off_persists() {
+        let (service, store) = service();
+        assert!(service.get().unwrap().auto_titles);
+
+        let saved = service
+            .set(patch(serde_json::json!({ "autoTitles": false })))
+            .unwrap();
+        assert!(!saved.auto_titles);
+        assert!(!service.get().unwrap().auto_titles);
+
+        // The row is written explicitly so a later build cannot read "absent" as "on".
+        assert_eq!(
+            store.settings().unwrap().get("autoTitles"),
+            Some(&serde_json::json!(false))
+        );
+
+        let saved = service
+            .set(patch(serde_json::json!({ "autoTitles": true })))
+            .unwrap();
+        assert!(saved.auto_titles);
     }
 
     #[test]

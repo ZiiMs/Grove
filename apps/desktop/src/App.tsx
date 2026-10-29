@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { GitWorktree, Project, SessionSummary } from "@grove/contract";
 import { useBridge } from "./ipc/context";
 import {
   subscribeToGitChanged,
@@ -7,15 +6,19 @@ import {
   subscribeToPlanChanged,
   subscribeToSpecChanged,
 } from "./ipc/events";
-import { errorText } from "./ipc/errors";
 import { useSessionStore } from "./state/sessionStore";
 import { useContextStore } from "./state/contextStore";
-import type { MenuItem } from "./state/menuStore";
 import { useMenuStore } from "./state/menuStore";
 import { useUiStore } from "./state/uiStore";
 import { useWorkspaceStore } from "./state/workspaceStore";
 import { NavTree } from "./shell/NavTree";
-import { ContextMenuHost, copyText, revealPath } from "./shell/ContextMenu";
+import { ContextMenuHost } from "./shell/ContextMenu";
+import {
+  archiveSession,
+  projectMenuItems,
+  sessionMenuItems,
+  worktreeMenuItems,
+} from "./shell/menus";
 import { StatusBar } from "./shell/StatusBar";
 import { Titlebar } from "./shell/Titlebar";
 import { SessionSurface } from "./session/SessionSurface";
@@ -42,17 +45,12 @@ export default function App() {
   const loading = useSessionStore((state) => state.loading);
   const load = useSessionStore((state) => state.load);
   const select = useSessionStore((state) => state.select);
-  const archiveSession = useSessionStore((state) => state.archive);
-  const restoreSession = useSessionStore((state) => state.restore);
-  const deleteSession = useSessionStore((state) => state.deleteSession);
   const projects = useWorkspaceStore((state) => state.projects);
   const worktrees = useWorkspaceStore((state) => state.worktrees);
   const branchesByProject = useWorkspaceStore((state) => state.branches);
   const info = useWorkspaceStore((state) => state.info);
   const prefs = useWorkspaceStore((state) => state.prefs);
   const loadWorkspace = useWorkspaceStore((state) => state.load);
-  const refreshProjects = useWorkspaceStore((state) => state.refreshProjects);
-  const removeProject = useWorkspaceStore((state) => state.removeProject);
   const refreshProjectGit = useWorkspaceStore((state) => state.refreshProjectGit);
   const view = useUiStore((state) => state.view);
   const setView = useUiStore((state) => state.setView);
@@ -192,173 +190,6 @@ export default function App() {
     openNewSession({ projectId, worktreePath });
   };
 
-  const copyWithToast = async (text: string, message: string) => {
-    if (await copyText(text)) notify(message);
-    else notify("Clipboard is unavailable", "error");
-  };
-
-  /**
-   * Session menu. Generate name is the first entry on both sides of the archive: it overwrites any
-   * title without confirmation, including a manual one, and is disabled while a generation for this
-   * session is already running. Rename works on both sides too; permanent delete exists only on an
-   * archived row, where Archive's action becomes Restore.
-   */
-  const sessionMenuItems = (row: SessionSummary): MenuItem[] => {
-    const generating = useSessionStore.getState().titleJobs.has(row.id);
-    const items: MenuItem[] = [
-      {
-        kind: "item",
-        label: generating ? "Generating…" : "Generate name with AI",
-        icon: "sparkle",
-        disabled: generating,
-        onSelect: () => void useSessionStore.getState().generateTitle(bridge, row.id),
-      },
-      {
-        kind: "item",
-        label: "Rename",
-        icon: "edit",
-        onSelect: () => useUiStore.getState().startRename(row.id),
-      },
-    ];
-    if (row.archivedAt) {
-      items.push({
-        kind: "item",
-        label: "Restore",
-        icon: "restore",
-        onSelect: () => void restoreSession(bridge, row.id),
-      });
-    } else {
-      items.push({
-        kind: "item",
-        label: "Archive",
-        icon: "archive",
-        onSelect: () => {
-          const running = row.status !== "exited" && row.status !== "error";
-          const confirmed =
-            !running ||
-            window.confirm(
-              `Stop and archive "${row.title}"? The agent stops and the session moves to Archive.`,
-            );
-          if (!confirmed) return;
-          void archiveSession(bridge, row.id).then((ok) => {
-            if (ok) notify(`Archived ${row.title}`);
-          });
-        },
-      });
-    }
-    items.push(
-      {
-        kind: "item",
-        label: "Copy working directory",
-        icon: "copy",
-        onSelect: () => void copyWithToast(row.cwd, "Working directory copied"),
-      },
-      {
-        kind: "item",
-        label: "Reveal in Explorer",
-        icon: "folder",
-        onSelect: () => void revealPath(bridge, row.cwd, notify),
-      },
-    );
-    if (row.archivedAt) {
-      items.push(
-        { kind: "separator" },
-        {
-          kind: "item",
-          label: "Delete permanently",
-          icon: "trash",
-          danger: true,
-          onSelect: () => {
-            const confirmed = window.confirm(
-              `Delete "${row.title}" permanently? Its transcript, plan, pins and subagents are removed. This cannot be undone.`,
-            );
-            if (!confirmed) return;
-            void deleteSession(bridge, row.id).then((ok) => {
-              if (ok) notify(`Deleted ${row.title}`);
-            });
-          },
-        },
-      );
-    }
-    return items;
-  };
-
-  const projectMenuItems = (project: Project): MenuItem[] => [
-    {
-      kind: "item",
-      label: "New session",
-      icon: "plus",
-      onSelect: () => newSessionFor(project.id, null),
-    },
-    {
-      kind: "item",
-      label: "Copy path",
-      icon: "copy",
-      onSelect: () => void copyWithToast(project.path, "Path copied"),
-    },
-    {
-      kind: "item",
-      label: "Reveal in Explorer",
-      icon: "folder",
-      onSelect: () => void revealPath(bridge, project.path, notify),
-    },
-    {
-      kind: "item",
-      label: "Refresh",
-      icon: "refresh",
-      onSelect: () => void refreshProjects(bridge),
-    },
-    { kind: "separator" },
-    {
-      kind: "item",
-      label: "Remove project",
-      icon: "trash",
-      danger: true,
-      onSelect: () => {
-        const confirmed = window.confirm(
-          `Remove ${project.name} from Grove? Its sessions become chats, and the folder is left on disk.`,
-        );
-        if (!confirmed) return;
-        void (async () => {
-          try {
-            await removeProject(bridge, project.id);
-            await useSessionStore.getState().load(bridge);
-            notify(`Removed ${project.name}`);
-          } catch (error) {
-            notify(errorText(error), "error");
-          }
-        })();
-      },
-    },
-  ];
-
-  const worktreeMenuItems = (project: Project, worktree: GitWorktree): MenuItem[] => [
-    {
-      kind: "item",
-      label: "New session",
-      icon: "plus",
-      onSelect: () => newSessionFor(project.id, worktree.path),
-    },
-    {
-      kind: "item",
-      label: "Copy path",
-      icon: "copy",
-      onSelect: () => void copyWithToast(worktree.path, "Path copied"),
-    },
-    {
-      kind: "item",
-      label: "Reveal in Explorer",
-      icon: "folder",
-      onSelect: () => void revealPath(bridge, worktree.path, notify),
-    },
-    {
-      kind: "item",
-      label: "Refresh",
-      icon: "refresh",
-      onSelect: () => void refreshProjectGit(bridge, project),
-    },
-  ];
-
   const mobileTabs = useMemo(
     () => [
       { id: "nav" as const, label: "Navigation" },
@@ -412,14 +243,16 @@ export default function App() {
           onAddProject={openAddProject}
           onSettings={() => openSettings("general")}
           onSessionMenu={(row, anchor) =>
-            openMenu({ ...anchor, items: sessionMenuItems(row) })
+            openMenu({ ...anchor, items: sessionMenuItems(bridge, row) })
           }
           onProjectMenu={(project, anchor) =>
-            openMenu({ ...anchor, items: projectMenuItems(project) })
+            openMenu({ ...anchor, items: projectMenuItems(bridge, project) })
           }
           onWorktreeMenu={(project, worktree, anchor) =>
-            openMenu({ ...anchor, items: worktreeMenuItems(project, worktree) })
+            openMenu({ ...anchor, items: worktreeMenuItems(bridge, project, worktree) })
           }
+          onArchiveSession={(row) => void archiveSession(bridge, row)}
+          onRestoreSession={(id) => void useSessionStore.getState().restore(bridge, id)}
         />
 
         <SessionSurface active={view === "session"} />

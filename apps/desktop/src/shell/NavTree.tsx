@@ -1,4 +1,5 @@
 import type { GitWorktree, Project, SessionSummary, SubagentSummary } from "@grove/contract";
+import { SESSION_TITLE_MAX_CHARS } from "@grove/contract";
 import {
   useEffect,
   useMemo,
@@ -12,6 +13,7 @@ import type { MenuAnchor } from "../state/menuStore";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import { providerMeta, sessionVisual } from "../workspace/models";
+import { modelLabel } from "../workspace/modelLabel";
 import { Icon } from "../workspace/Icon";
 import { basename, normalizePath, projectForSession, worktreeForSession } from "../workspace/tree";
 
@@ -29,6 +31,9 @@ interface NavTreeProps {
   onSessionMenu?: (session: SessionSummary, anchor: MenuAnchor) => void;
   onProjectMenu?: (project: Project, anchor: MenuAnchor) => void;
   onWorktreeMenu?: (project: Project, worktree: GitWorktree, anchor: MenuAnchor) => void;
+  /** The row-level hover actions; the shell owns the bridge and the confirmation. */
+  onArchiveSession?: (session: SessionSummary) => void;
+  onRestoreSession?: (id: string) => void;
 }
 
 function anchorOf(event: ReactMouseEvent<HTMLElement>): MenuAnchor {
@@ -105,9 +110,6 @@ function SubagentRow({
   );
 }
 
-/** The core refuses titles longer than this; the field checks first so the message lands inline. */
-const MAX_SESSION_TITLE_CHARS = 80;
-
 /**
  * The tree row while it is being renamed: an input in place of the row button, so a click cannot
  * open the session underneath. Enter and blur commit, Escape and an empty value cancel.
@@ -140,8 +142,8 @@ function SessionTitleEditor({ session, active }: { session: SessionSummary; acti
       close();
       return;
     }
-    if (title.length > MAX_SESSION_TITLE_CHARS) {
-      setError(`Titles are capped at ${MAX_SESSION_TITLE_CHARS} characters.`);
+    if (title.length > SESSION_TITLE_MAX_CHARS) {
+      setError(`Titles are capped at ${SESSION_TITLE_MAX_CHARS} characters.`);
       return;
     }
     settled.current = true;
@@ -206,6 +208,8 @@ function SessionRow({
   suffix,
   onSelect,
   onMenu,
+  onArchive,
+  onRestore,
 }: {
   session: SessionSummary;
   active: boolean;
@@ -214,6 +218,8 @@ function SessionRow({
   suffix?: string | null;
   onSelect: (id: string) => void;
   onMenu?: (session: SessionSummary, anchor: MenuAnchor) => void;
+  onArchive?: (session: SessionSummary) => void;
+  onRestore?: (id: string) => void;
 }) {
   const closeSubagent = useUiStore((state) => state.closeSubagent);
   const editing = useUiStore((state) => state.renamingSession === session.id);
@@ -243,6 +249,11 @@ function SessionRow({
         >
           <span className="dot" data-state={visual} aria-hidden="true" />
           <span className="s-title">{session.title}</span>
+          {session.model ? (
+            <span className="s-model" title={session.model}>
+              {modelLabel(session.model, session.provider)}
+            </span>
+          ) : null}
           {suffix ? <span className="s-suffix">{suffix}</span> : null}
           {subagents.length ? (
             <span
@@ -256,29 +267,59 @@ function SessionRow({
           <ProviderMark provider={session.provider} small />
         </button>
       )}
-      {!editing && onMenu ? (
+      {!editing ? (
         <div className="session-actions">
-          <button
-            className="icon-btn sm"
-            type="button"
-            aria-label="Session actions"
-            title="Session actions"
-            onClick={(event) => {
-              event.stopPropagation();
-              const box = event.currentTarget.getBoundingClientRect();
-              onMenu(session, {
-                x: box.left,
-                y: box.bottom + 2,
-                returnFocus: event.currentTarget,
-              });
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              onMenu(session, anchorOf(event));
-            }}
-          >
-            <Icon name="more" size="sm" />
-          </button>
+          {archived && onRestore ? (
+            <button
+              className="icon-btn sm"
+              type="button"
+              aria-label="Restore session"
+              title="Restore"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRestore(session.id);
+              }}
+            >
+              <Icon name="restore" size="sm" />
+            </button>
+          ) : null}
+          {!archived && onArchive ? (
+            <button
+              className="icon-btn sm"
+              type="button"
+              aria-label="Archive session"
+              title="Archive"
+              onClick={(event) => {
+                event.stopPropagation();
+                onArchive(session);
+              }}
+            >
+              <Icon name="trash" size="sm" />
+            </button>
+          ) : null}
+          {onMenu ? (
+            <button
+              className="icon-btn sm"
+              type="button"
+              aria-label="Session actions"
+              title="Session actions"
+              onClick={(event) => {
+                event.stopPropagation();
+                const box = event.currentTarget.getBoundingClientRect();
+                onMenu(session, {
+                  x: box.left,
+                  y: box.bottom + 2,
+                  returnFocus: event.currentTarget,
+                });
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                onMenu(session, anchorOf(event));
+              }}
+            >
+              <Icon name="more" size="sm" />
+            </button>
+          ) : null}
         </div>
       ) : null}
       {subagents.length ? (
@@ -334,6 +375,8 @@ export function NavTree({
   onSessionMenu,
   onProjectMenu,
   onWorktreeMenu,
+  onArchiveSession,
+  onRestoreSession,
 }: NavTreeProps) {
   const sessions = useSessionStore((state) => state.sessions);
   const projects = useWorkspaceStore((state) => state.projects);
@@ -518,6 +561,8 @@ export function NavTree({
                             active={session.id === activeId}
                             onSelect={onSelect}
                             onMenu={onSessionMenu}
+                            onArchive={onArchiveSession}
+                            onRestore={onRestoreSession}
                           />
                         ))
                       ) : (
@@ -536,6 +581,8 @@ export function NavTree({
                 active={session.id === activeId}
                 onSelect={onSelect}
                 onMenu={onSessionMenu}
+                onArchive={onArchiveSession}
+                onRestore={onRestoreSession}
               />
             ))
           ) : project.isGit ? null : (
@@ -616,6 +663,8 @@ export function NavTree({
                     active={session.id === activeId}
                     onSelect={onSelect}
                     onMenu={onSessionMenu}
+                    onArchive={onArchiveSession}
+                    onRestore={onRestoreSession}
                   />
                 ))
               ) : (
@@ -660,6 +709,8 @@ export function NavTree({
                       suffix={projectForSession(session, projects)?.name ?? "Chat"}
                       onSelect={onSelect}
                       onMenu={onSessionMenu}
+                      onArchive={onArchiveSession}
+                      onRestore={onRestoreSession}
                     />
                   ))
                 ) : (

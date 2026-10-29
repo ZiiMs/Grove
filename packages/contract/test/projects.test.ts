@@ -3,7 +3,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   addProjectRequestSchema,
-  createDirRequestSchema,
   dirEntrySchema,
   dirListingSchema,
   fsRootsSchema,
@@ -43,11 +42,7 @@ describe("workspace contract fixtures", () => {
     expect(parsed.roots.map((root) => root.kind)).toEqual(["home", "drive", "drive"]);
   });
 
-  it("create-dir takes a parent and one segment and returns the folder", () => {
-    const request = createDirRequestSchema.parse({ parent: "D:/Dev", name: "grove" });
-    expect(request).toEqual({ parent: "D:/Dev", name: "grove" });
-    expect(() => createDirRequestSchema.parse({ parent: "D:/Dev" })).toThrow();
-
+  it("create-dir returns the folder behind the typed parent and segment", () => {
     const entry = dirEntrySchema.parse(fixture("fs-create-dir.json"));
     expect(entry).toEqual({ name: "grove", path: "D:/Dev/grove" });
   });

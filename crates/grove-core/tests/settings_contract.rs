@@ -22,6 +22,7 @@ fn settings_matches_fixture() {
             "mattpocock/skills".to_string(),
         ],
         theme: Theme::Dark,
+        auto_titles: false,
         title_model: Some(TitleModel {
             provider: "anthropic".into(),
             model: "claude-haiku-4-5".into(),

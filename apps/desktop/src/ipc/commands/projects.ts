@@ -1,6 +1,5 @@
 import type {
   AddProjectRequest,
-  CreateDirRequest,
   DirEntry,
   DirListing,
   FsRoots,
@@ -27,5 +26,5 @@ export interface ProjectsCommands {
   /** Every root the picker offers: home first, then mounted drives or the filesystem root. */
   fs_list_roots: { args: Record<string, never>; result: FsRoots };
   /** Create one folder under an existing parent. The name must be a single path segment. */
-  fs_create_dir: { args: CreateDirRequest; result: DirEntry };
+  fs_create_dir: { args: { parent: string; name: string }; result: DirEntry };
 }
