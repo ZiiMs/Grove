@@ -1,19 +1,27 @@
 import type {
   Decision,
+  PermissionMode,
   SessionEvent,
   ProviderSpec,
   ProviderStatus,
   QuestionAnswer,
   ThinkingLevel,
+  Session,
   SessionContext,
   SessionDetail,
   SessionSummary,
   SubagentSummary,
+  TitleModel,
 } from "@grove/contract";
 import { create } from "zustand";
+import type { StoreApi } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
-import { errorText } from "../ipc/errors";
+import { errorText, toCommandFailure } from "../ipc/errors";
 import type { ModelThinkingMap } from "../workspace/thinking";
+import { modelLabel } from "../workspace/modelLabel";
+import { providerMeta } from "../workspace/models";
+import { useUiStore } from "./uiStore";
+import { useWorkspaceStore } from "./workspaceStore";
 
 /**
  * Session domain state: the list, the open tabs, the active transcript, and the commands that move
@@ -41,6 +49,17 @@ export interface CreateSessionInput {
   config?: unknown;
 }
 
+/**
+ * A cross-provider model change waiting for the active session to finish its turn. The session id is
+ * part of the record on purpose: the user can open another tab while the switch is queued, and the
+ * change must still land on the conversation they picked it for.
+ */
+export interface PendingModelSwitch {
+  sessionId: string;
+  provider: string;
+  model: string;
+}
+
 interface SessionStoreData {
   providers: ProviderSpec[];
   /** Credential readiness for the registered providers; drives which models a session may use. */
@@ -57,8 +76,16 @@ interface SessionStoreData {
   drafts: Record<string, string>;
   /** Messages typed while a turn is running, sent one at a time as the session goes idle. */
   queues: Record<string, string[]>;
+  /** A cross-provider model change queued behind the current turn, if any. */
+  pendingModel: PendingModelSwitch | null;
   /** The active session's knowledge (pins, plan, the documents a start would send). */
   context: SessionContext | null;
+  /** The suggested title model when the setting is null; null when no provider is configured. */
+  titleSuggest: TitleModel | null;
+  /** Auto sessions already attempted this app run: one automatic call per session per run. */
+  titleAttempts: Set<string>;
+  /** Sessions with a title generation in flight, so the menu can disable and say so. */
+  titleJobs: Set<string>;
   loading: boolean;
   busy: boolean;
   error: string | null;
@@ -90,16 +117,61 @@ export interface SessionStore extends SessionStoreData {
   respondPermission: (bridge: GroveBridge, requestId: string, decision: Decision) => Promise<void>;
   respondQuestion: (bridge: GroveBridge, requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
   setThinking: (bridge: GroveBridge, level: ThinkingLevel) => Promise<boolean>;
+  /** Change whether mutating tools ask before they run; applies to the next tool call. */
+  setPermissionMode: (bridge: GroveBridge, mode: PermissionMode) => Promise<boolean>;
+  /**
+   * Change the active session's model in place (same provider). Returns whether the core accepted
+   * it; the transcript is untouched and the resulting detail carries the persisted model.
+   */
+  setModel: (
+    bridge: GroveBridge,
+    model: string,
+    thinking?: ThinkingLevel | null,
+  ) => Promise<boolean>;
   /** Restart a stopped session; `send` calls this automatically before the next message. */
   resume: (bridge: GroveBridge) => Promise<boolean>;
   close: (bridge: GroveBridge) => Promise<void>;
+  /** Hide a session from the active tree. A running agent is stopped by the core. */
+  archive: (bridge: GroveBridge, id: string) => Promise<boolean>;
+  /** Put an archived session back in the active tree; sends a "Session restored" toast. */
+  restore: (bridge: GroveBridge, id: string) => Promise<boolean>;
+  /** Remove a session permanently; closes its tab and selects the next row, if any. */
+  deleteSession: (bridge: GroveBridge, id: string) => Promise<boolean>;
   /** Adopt a snapshot another panel produced (the Specs panel pins and unpins). */
   applyContext: (context: SessionContext) => void;
   /** Re-send the current pins and plan to the running agent, then show the new snapshot. */
   /** Returns whether the running agent accepted the refreshed snapshot. */
   refreshContext: (bridge: GroveBridge) => Promise<boolean>;
-  /** Re-launch the active session on another registered provider, keeping its transcript. */
-  switchProvider: (bridge: GroveBridge, provider: string, model?: string) => Promise<void>;
+  /** Fetch the suggested title model for the providers (and live lists) currently known. */
+  suggestTitleModel: (bridge: GroveBridge) => Promise<TitleModel | null>;
+  /** Name a session with the global title model; overwrites any title, manual included. */
+  generateTitle: (bridge: GroveBridge, id: string, force?: boolean) => Promise<boolean>;
+  /**
+   * The App session-event trigger: one automatic attempt per auto session per app run. A manual
+   * title is never touched, and no model configured means no call at all.
+   */
+  maybeGenerateTitle: (bridge: GroveBridge, id: string) => Promise<void>;
+  /**
+   * Pick a model for the active session, routing by provider: same provider is a hot swap, a different
+   * provider is a lossless relaunch. While a turn is running (or a permission is open) the
+   * cross-provider change is queued and applied when the session is idle. Returns whether the change
+   * landed now; `false` covers both a queued change and a rejected one.
+   */
+  switchModel: (bridge: GroveBridge, provider: string, model: string) => Promise<boolean>;
+  /**
+   * Apply the queued cross-provider change if its session is idle now. Called by the shell after a
+   * `status` event; returns the change that landed so the caller can toast it.
+   */
+  flushPendingModel: (bridge: GroveBridge) => Promise<PendingModelSwitch | null>;
+  /** Drop the queued change, optionally only when it belongs to `sessionId` (archive/delete call this). */
+  clearPendingModel: (sessionId?: string) => void;
+  /**
+   * Rename a session. The command trims and validates, so the row may pass what the user typed;
+   * returns `null` on success or the message to show beside the field.
+   */
+  rename: (bridge: GroveBridge, id: string, title: string) => Promise<string | null>;
+  /** Pin or unpin a session; the row is patched from the command result. */
+  setPinned: (bridge: GroveBridge, id: string, pinned: boolean) => Promise<boolean>;
   /** Fold one live `grove://session-event` into the list and, when it belongs to the open session, the transcript. */
   applyEvent: (sessionId: string | null, event: SessionEvent) => void;
   reset: () => void;
@@ -116,7 +188,11 @@ const initial: SessionStoreData = {
   openIds: [],
   drafts: {},
   queues: {},
+  pendingModel: null,
   context: null,
+  titleSuggest: null,
+  titleAttempts: new Set<string>(),
+  titleJobs: new Set<string>(),
   loading: true,
   busy: false,
   error: null,
@@ -126,6 +202,28 @@ const initial: SessionStoreData = {
 function summaryOf(detail: SessionDetail): SessionSummary {
   const { events, thinkingLevel: _thinkingLevel, ...session } = detail;
   return { ...session, eventCount: events.length, subagents: [] };
+}
+
+/**
+ * Fold one stored session row into the tree and, when it is the open tab, the header. All four row
+ * commands (archive, restore, rename, generate-title) return the same shape; spreading it keeps every
+ * field the core persisted instead of hand-listing the ones each action happens to change.
+ */
+function applySessionRow(
+  state: Pick<SessionStoreData, "sessions" | "detail">,
+  session: Session,
+): Pick<SessionStoreData, "sessions" | "detail"> {
+  return {
+    sessions: state.sessions.map((row) => (row.id === session.id ? { ...row, ...session } : row)),
+    detail:
+      state.detail?.id === session.id ? { ...state.detail, ...session } : state.detail,
+  };
+}
+
+/** Remove one session's queued messages without disturbing the other tabs' queues. */
+function dropQueue(queues: Record<string, string[]>, id: string): Record<string, string[]> {
+  const { [id]: _removed, ...rest } = queues;
+  return rest;
 }
 
 /**
@@ -212,6 +310,59 @@ function opened(openIds: string[], id: string): string[] {
   return openIds.includes(id) ? openIds : [...openIds, id];
 }
 
+type SessionSet = StoreApi<SessionStore>["setState"];
+
+/**
+ * Re-launch one session on another provider. Id-aware rather than active-tab-aware: a queued
+ * cross-provider change must land on the conversation it was chosen for, even when the user has
+ * opened another session by the time the turn ends. A non-active session's transcript stays out of
+ * the visible `detail`/`events`, exactly like an event for it would.
+ */
+async function switchSession(
+  set: SessionSet,
+  bridge: GroveBridge,
+  id: string,
+  provider: string,
+  model: string,
+): Promise<boolean> {
+  set({ busy: true, error: null });
+  try {
+    const detail = await bridge.invoke("session_switch_provider", { id, provider, model });
+    const context = await contextOf(bridge, id);
+    set((state) => ({
+      busy: false,
+      pendingModel: state.pendingModel?.sessionId === id ? null : state.pendingModel,
+      detail: state.activeId === id ? detail : state.detail,
+      events: state.activeId === id ? detail.events : state.events,
+      context: state.activeId === id ? context : state.context,
+      sessions: state.sessions.map((row) =>
+        row.id === id
+          ? { ...row, provider: detail.provider, model: detail.model, status: detail.status }
+          : row,
+      ),
+    }));
+    return true;
+  } catch (error) {
+    const failure = toCommandFailure(error);
+    // A conflict means the core refused because a turn is still running: the switch was never
+    // attempted, so keep it queued and let the idle boundary retry it. Any other failure is real.
+    set((state) =>
+      failure.code === "conflict"
+        ? {
+            busy: false,
+            error: null,
+            pendingModel: { sessionId: id, provider, model },
+          }
+        : {
+            busy: false,
+            error: errorText(error),
+            pendingModel: state.pendingModel?.sessionId === id ? null : state.pendingModel,
+          },
+    );
+    return false;
+  }
+}
+
 export const useSessionStore = create<SessionStore>((set, get) => ({
   ...initial,
 
@@ -225,6 +376,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       ]);
       set({ providers, providerStatuses, sessions, loading: false });
       void get().refreshModels(bridge);
+      void get().suggestTitleModel(bridge);
     } catch (error) {
       set({ loading: false, error: errorText(error) });
     }
@@ -274,6 +426,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
     const thinking = await thinkingRequest;
     if (thinking) set({ modelThinking: thinking });
+    void get().suggestTitleModel(bridge);
   },
 
   create: async (bridge, input) => {
@@ -377,6 +530,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (!activeId) return;
     const queue = queues[activeId] ?? [];
     if (queue.length === 0) return;
+    if (detail?.archivedAt) return;
     if (
       detail &&
       (detail.awaiting || detail.status === "starting" || detail.status === "busy")
@@ -397,7 +551,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const id = get().activeId;
     const message = text.trim();
     if (!id || !message) return false;
-    const detail = get().detail;
+    let detail = get().detail;
+    if (detail?.archivedAt) {
+      // Sending is a vote to keep going: an archived session comes back first instead of asking the
+      // user to press Restore. The restore action announces itself with a toast.
+      if (!(await get().restore(bridge, id))) return false;
+      detail = get().detail;
+    }
     if (detail?.status === "exited" || detail?.status === "error") {
       // The user asked to continue the conversation; starting the agent is an implementation
       // detail, not a separate action they should have to remember.
@@ -462,6 +622,50 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
+  setPermissionMode: async (bridge, mode) => {
+    const id = get().activeId;
+    if (!id) return false;
+    set({ error: null });
+    try {
+      const detail = await bridge.invoke("session_set_permission_mode", { id, mode });
+      set((state) => ({
+        detail,
+        sessions: state.sessions.map((row) => (row.id === id ? { ...row, updatedAt: detail.updatedAt } : row)),
+      }));
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
+  setModel: async (bridge, model, thinking) => {
+    const id = get().activeId;
+    if (!id) return false;
+    set({ error: null });
+    try {
+      const detail = await bridge.invoke("session_set_model", {
+        id,
+        model,
+        thinking: thinking ?? null,
+      });
+      // A hot swap does not touch the transcript, so keep the live event list rather than replacing
+      // it with the snapshot the command returned.
+      set((state) => ({
+        detail,
+        sessions: state.sessions.map((row) =>
+          row.id === id ? { ...row, model: detail.model, updatedAt: detail.updatedAt } : row,
+        ),
+        // The newer same-provider choice supersedes a cross-provider switch queued behind the turn.
+        pendingModel: state.pendingModel?.sessionId === id ? null : state.pendingModel,
+      }));
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
   resume: async (bridge) => {
     const id = get().activeId;
     if (!id) return false;
@@ -491,6 +695,77 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
+  archive: async (bridge, id) => {
+    set({ error: null });
+    // Archiving stops the agent, and the stop's `exited` event can arrive before the archive result.
+    // Drop the queue and the pending switch first so that event cannot auto-send into the session the
+    // user is archiving (a send would restore or resume it).
+    get().clearPendingModel(id);
+    set((state) => ({ queues: dropQueue(state.queues, id) }));
+    try {
+      const session = await bridge.invoke("session_archive", { id });
+      // A message or switch queued while the command was in flight must not survive either.
+      get().clearPendingModel(id);
+      set((state) => ({
+        ...applySessionRow(state, session),
+        queues: dropQueue(state.queues, id),
+      }));
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
+  restore: async (bridge, id) => {
+    set({ error: null });
+    try {
+      const session = await bridge.invoke("session_restore", { id });
+      set((state) => applySessionRow(state, session));
+      useUiStore.getState().notify("Session restored");
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
+  deleteSession: async (bridge, id) => {
+    set({ error: null });
+    try {
+      await bridge.invoke("session_delete", { id });
+      // The row is gone, so a queued switch referring to it has nothing left to apply to.
+      get().clearPendingModel(id);
+      const state = get();
+      const index = state.openIds.indexOf(id);
+      const openIds = state.openIds.filter((openId) => openId !== id);
+      const { [id]: _draft, ...drafts } = state.drafts;
+      const { [id]: _queue, ...queues } = state.queues;
+      const remaining = state.sessions.filter((row) => row.id !== id);
+      if (state.activeId !== id) {
+        set({ sessions: remaining, openIds, drafts, queues });
+        return true;
+      }
+      // The deleted tab's neighbour, else the first row left in the tree, keeps the pane useful.
+      const next = openIds[Math.min(index, openIds.length - 1)] ?? remaining[0]?.id ?? null;
+      set({
+        sessions: remaining,
+        openIds,
+        drafts,
+        queues,
+        activeId: null,
+        detail: null,
+        events: [],
+        context: null,
+      });
+      if (next) await get().select(bridge, next);
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
   applyContext: (context) => {
     if (get().activeId === context.sessionId) set({ context });
   },
@@ -509,27 +784,141 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
-  switchProvider: async (bridge, provider, model) => {
-    const id = get().activeId;
-    if (!id) return;
-    set({ busy: true, error: null });
-    try {
-      const detail = await bridge.invoke("session_switch_provider", { id, provider, model });
-      const context = await contextOf(bridge, id);
-      set((state) => ({
-        busy: false,
-        detail,
-        events: detail.events,
-        context,
-        sessions: state.sessions.map((row) =>
-          row.id === id
-            ? { ...row, provider: detail.provider, model: detail.model, status: detail.status }
-            : row,
-        ),
-      }));
-    } catch (error) {
-      set({ busy: false, error: errorText(error) });
+  switchModel: async (bridge, provider, model) => {
+    const { activeId: id, detail } = get();
+    if (!id || !detail) return false;
+    if (provider === detail.provider) return get().setModel(bridge, model);
+    // Stopping a busy agent or one waiting for an answer would cancel a turn or strand the request:
+    // queue the change and let the shell retry it when the session is idle.
+    if (detail.awaiting || detail.status === "busy" || detail.status === "starting") {
+      set({ pendingModel: { sessionId: id, provider, model } });
+      return false;
     }
+    return switchSession(set, bridge, id, provider, model);
+  },
+
+  flushPendingModel: async (bridge) => {
+    const pending = get().pendingModel;
+    if (!pending) return null;
+    const row = get().sessions.find((candidate) => candidate.id === pending.sessionId);
+    if (!row) {
+      set({ pendingModel: null });
+      return null;
+    }
+    if (row.status === "exited" || row.status === "error") {
+      // There is no live history left to hand over; dropping it matches the exit/error clear.
+      set({ pendingModel: null });
+      return null;
+    }
+    if (row.awaiting || row.status === "busy" || row.status === "starting") return null;
+    // Claim the queue before awaiting: two idle transitions in a row must not launch two switches.
+    set({ pendingModel: null });
+    const landed = await switchSession(
+      set,
+      bridge,
+      pending.sessionId,
+      pending.provider,
+      pending.model,
+    );
+    return landed ? pending : null;
+  },
+
+  clearPendingModel: (sessionId) => {
+    const pending = get().pendingModel;
+    if (!pending) return;
+    if (sessionId && pending.sessionId !== sessionId) return;
+    set({ pendingModel: null });
+  },
+
+  rename: async (bridge, id, title) => {
+    try {
+      const session = await bridge.invoke("session_rename", { id, title });
+      // The command returns the stored row, so the tree and the open header show exactly what was
+      // persisted rather than what was typed (the core may have trimmed it).
+      set((state) => applySessionRow(state, session));
+      return null;
+    } catch (error) {
+      return errorText(error);
+    }
+  },
+
+  setPinned: async (bridge, id, pinned) => {
+    try {
+      const session = await bridge.invoke("session_set_pinned", { id, pinned });
+      set((state) => applySessionRow(state, session));
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
+  suggestTitleModel: async (bridge) => {
+    // The live lists the shell already fetched decide the OpenRouter route; the core does not keep
+    // them. Nothing is written: the suggestion is a default, not a choice.
+    const liveModels = Object.fromEntries(
+      get().providers.map((provider) => [provider.id, provider.models]),
+    );
+    try {
+      const suggestion = await bridge.invoke("title_model_suggest", { liveModels });
+      set({ titleSuggest: suggestion });
+      return suggestion;
+    } catch {
+      return get().titleSuggest;
+    }
+  },
+
+  generateTitle: async (bridge, id, force = true) => {
+    if (get().titleJobs.has(id)) return false;
+    const explicit = useWorkspaceStore.getState().prefs.titleModel;
+    const model =
+      explicit ??
+      get().titleSuggest ??
+      (await get().suggestTitleModel(bridge));
+    if (!model) {
+      useUiStore
+        .getState()
+        .notify("Pick a title model in Settings → General to name sessions.", "error");
+      return false;
+    }
+    set((state) => ({ titleJobs: new Set(state.titleJobs).add(id) }));
+    try {
+      const session = await bridge.invoke("session_generate_title", { id, force });
+      set((state) => applySessionRow(state, session));
+      return true;
+    } catch (error) {
+      const provider =
+        get().providers.find((spec) => spec.id === model.provider)?.name ??
+        providerMeta(model.provider).name;
+      useUiStore
+        .getState()
+        .notify(
+          `Couldn't name this session with ${modelLabel(model.model, model.provider)} on ${provider}: ${errorText(error)}`,
+          "error",
+        );
+      return false;
+    } finally {
+      set((state) => {
+        const titleJobs = new Set(state.titleJobs);
+        titleJobs.delete(id);
+        return { titleJobs };
+      });
+    }
+  },
+
+  maybeGenerateTitle: async (bridge, id) => {
+    if (!useWorkspaceStore.getState().prefs.autoTitles) return;
+    const row = get().sessions.find((session) => session.id === id);
+    if (!row || row.titleSource !== "auto") return;
+    if (get().titleAttempts.has(id)) return;
+    // Claim the one attempt before any await, so two assistant events cannot both fire a call.
+    set((state) => ({ titleAttempts: new Set(state.titleAttempts).add(id) }));
+    const explicit = useWorkspaceStore.getState().prefs.titleModel;
+    if (!explicit) {
+      const suggestion = get().titleSuggest ?? (await get().suggestTitleModel(bridge));
+      if (!suggestion) return;
+    }
+    await get().generateTitle(bridge, id, false);
   },
 
   applyEvent: (sessionId, event) => {
@@ -548,6 +937,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
               stopped
             ? false
             : null;
+      const title = event.kind === "title_changed" ? event.title : null;
+      const titleSource = event.kind === "title_changed" ? event.source : null;
       return {
         sessions: state.sessions.map((row) => {
           if (row.id !== sessionId) return row;
@@ -556,6 +947,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             ...row,
             status: status ?? row.status,
             awaiting: awaiting ?? row.awaiting,
+            title: title ?? row.title,
+            titleSource: titleSource ?? row.titleSource,
             eventCount: row.eventCount + 1,
             updatedAt: event.at,
             ...(subagents ? { subagents } : {}),
@@ -567,10 +960,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
                 ...state.detail,
                 status: status ?? state.detail.status,
                 awaiting: awaiting ?? state.detail.awaiting,
+                title: title ?? state.detail.title,
+                titleSource: titleSource ?? state.detail.titleSource,
                 updatedAt: event.at,
               }
             : state.detail,
         events: isActive ? [...state.events, event] : state.events,
+        pendingModel:
+          stopped && state.pendingModel?.sessionId === sessionId ? null : state.pendingModel,
       };
     });
   },

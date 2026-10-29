@@ -1,5 +1,5 @@
-use crate::providers::ThinkingLevel;
-use crate::sessions::event::{SessionEvent, SessionState};
+use crate::providers::{PermissionMode, ThinkingLevel};
+use crate::sessions::event::{SessionEvent, SessionState, TitleSource};
 use serde::{Deserialize, Serialize};
 
 /// Header payload for the shell. Pinned by `contract/fixtures/app-info.json`.
@@ -51,11 +51,22 @@ pub struct Session {
     pub cwd: String,
     pub model: Option<String>,
     pub title: String,
+    /// Who wrote the title: the user (`manual`), the first-message placeholder (`auto`) or a model
+    /// (`generated`). Only an `auto` session still carrying the temporary title is eligible for
+    /// automatic replacement.
+    pub title_source: TitleSource,
     pub status: SessionState,
     /// The workspace project this session belongs to, or `None` for a loose chat.
     pub project_id: Option<String>,
     /// True while a permission request is waiting for the user.
     pub awaiting: bool,
+    /// When the session was archived, or `None` while it is active. Archive is a nullable column,
+    /// not a delete: the row, its transcript and its plan stay exactly where they were.
+    pub archived_at: Option<String>,
+    /// A durable user pin. Pinned sessions rise into the sidebar's Pinned section. Pinning never
+    /// changes `updated_at`, so it cannot reorder recent activity.
+    #[serde(default)]
+    pub pinned: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -97,7 +108,35 @@ pub struct SessionDetail {
     pub session: Session,
     /// The reasoning level the runtime will use on the next turn.
     pub thinking_level: ThinkingLevel,
+    /// Whether mutating tools ask before they run.
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
     pub events: Vec<SessionEvent>,
+}
+
+/// One metered window of a provider plan. Percentages are whole numbers; `remaining` is the inverse
+/// of what the vendor reports, which is what the panel shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanUsageWindow {
+    /// The vendor's window id: `rolling`, `weekly` or `monthly`.
+    pub id: String,
+    pub label: String,
+    pub used_percent: u8,
+    pub remaining_percent: u8,
+    /// `ok` or `rate-limited`.
+    pub status: String,
+    /// RFC3339 instant when the window resets.
+    pub resets_at: String,
+}
+
+/// A provider plan's usage, when the provider exposes one. Empty for providers without a plan
+/// endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanUsage {
+    pub provider: String,
+    pub windows: Vec<PlanUsageWindow>,
 }
 
 /// Arguments to `session_create`. `cwd` falls back to the process directory, then the app data dir.
@@ -170,4 +209,31 @@ pub struct DirListing {
     /// Parent folder, or `None` at a filesystem root.
     pub parent: Option<String>,
     pub dirs: Vec<DirEntry>,
+}
+
+/// What a picker shortcut points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FsRootKind {
+    Home,
+    Drive,
+    Filesystem,
+}
+
+/// One place the add-project picker can jump to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRoot {
+    pub name: String,
+    /// Forward-slash display path.
+    pub path: String,
+    pub kind: FsRootKind,
+}
+
+/// Every root the picker offers. `home` is where a fresh picker opens; `roots` is the chip list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRoots {
+    pub home: Option<String>,
+    pub roots: Vec<FsRoot>,
 }

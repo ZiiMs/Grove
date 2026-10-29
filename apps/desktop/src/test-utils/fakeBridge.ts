@@ -1,16 +1,20 @@
 import type {
   Decision,
   DetectedSkill,
+  DirListing,
+  FsRoots,
   ProviderStatus,
   EventEnvelope,
   GitBranch,
   GitStatus,
   GitWorktree,
+  ProjectDetection,
   QuestionAnswer,
   SessionEvent,
   ProviderSpec,
   Plan,
   PlanUpdate,
+  PlanUsage,
   Project,
   SecretStatus,
   Session,
@@ -68,6 +72,12 @@ export interface FakeBridgeSeed {
     path: string;
     installedAt: string;
   }>;
+  /** Roots `fs_list_roots` returns; defaults to a home folder on `C:`. */
+  fsRoots?: FsRoots;
+  /** Folder listings by display path, as `fs_list_dirs` returns them. */
+  fsListings?: Record<string, DirListing>;
+  /** Detection by path; a path that is absent looks like a plain, non-git folder. */
+  detections?: Record<string, ProjectDetection>;
 }
 
 export interface FakeBridge extends GroveBridge {
@@ -130,6 +140,38 @@ export const DEFAULT_PROVIDERS: ProviderSpec[] = [
 export const DEFAULT_SETTINGS: Settings = {
   catalogSources: ["anthropics/skills", "mattpocock/skills"],
   theme: "system",
+  autoTitles: true,
+};
+
+/** What the fake `plan_usage` answers for OpenCode Go: 6/29/74 used, so 94/71/26 left. */
+const DEFAULT_PLAN_USAGE: PlanUsage = {
+  provider: "opencode-go",
+  windows: [
+    {
+      id: "rolling",
+      label: "5-hour",
+      usedPercent: 6,
+      remainingPercent: 94,
+      status: "ok",
+      resetsAt: "2026-10-29T15:50:00.000Z",
+    },
+    {
+      id: "weekly",
+      label: "Weekly",
+      usedPercent: 29,
+      remainingPercent: 71,
+      status: "ok",
+      resetsAt: "2026-11-01T19:00:00.000Z",
+    },
+    {
+      id: "monthly",
+      label: "Monthly",
+      usedPercent: 74,
+      remainingPercent: 26,
+      status: "ok",
+      resetsAt: "2026-11-17T10:18:00.000Z",
+    },
+  ],
 };
 
 /** A provider row for a UI test: Anthropic with a keychain credential unless overridden. */
@@ -203,6 +245,23 @@ export const DEFAULT_PROVIDER_STATUSES: ProviderStatus[] = [
   }),
 ];
 
+const DEFAULT_FS_ROOTS: FsRoots = {
+  home: "C:/Users/demo",
+  roots: [
+    { name: "Home", path: "C:/Users/demo", kind: "home" },
+    { name: "C:", path: "C:/", kind: "drive" },
+  ],
+};
+
+/** The folder above a display path, or null at a filesystem root. */
+function parentFolder(path: string): string | null {
+  const trimmed = path.replace(/\/+$/, "");
+  if (!trimmed || /^[A-Za-z]:$/.test(trimmed)) return null;
+  const index = trimmed.lastIndexOf("/");
+  if (index < 0) return null;
+  return index === 0 ? "/" : trimmed.slice(0, index);
+}
+
 export function fakeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: "session-1",
@@ -210,9 +269,12 @@ export function fakeSession(overrides: Partial<Session> = {}): Session {
     cwd: "C:/projects/grove",
     model: null,
     title: "mock session",
+    titleSource: "manual",
     status: "idle",
     projectId: null,
     awaiting: false,
+    archivedAt: null,
+    pinned: false,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,
@@ -221,6 +283,22 @@ export function fakeSession(overrides: Partial<Session> = {}): Session {
 
 export function fakeSummary(session: Session = fakeSession(), eventCount = 0): SessionSummary {
   return { ...session, eventCount, subagents: [] };
+}
+
+/** The core's first-message placeholder: one line, 60 chars at a word boundary, with an ellipsis. */
+function placeholderTitle(text: string): string {
+  const collapsed = text.trim().split(/\s+/).join(" ");
+  if ([...collapsed].length <= 60) return collapsed;
+  const chars = [...collapsed];
+  const head = chars.slice(0, 60);
+  const cut =
+    chars[60]?.match(/\s/) || !head.includes(" ")
+      ? head.join("").trimEnd()
+      : (() => {
+          const lastSpace = head.lastIndexOf(" ");
+          return lastSpace > 0 ? head.slice(0, lastSpace).join("").trimEnd() : head.join("").trimEnd();
+        })();
+  return `${cut}…`;
 }
 
 /**
@@ -270,6 +348,9 @@ export function createFakeBridge(
   const branches = structuredClone(seed.branches ?? []);
   const installs = structuredClone(seed.installs ?? []);
   const inventory = structuredClone(seed.skillInventory ?? []);
+  const fsRoots = () => structuredClone(seed.fsRoots ?? DEFAULT_FS_ROOTS);
+  const fsListings: Record<string, DirListing> = structuredClone(seed.fsListings ?? {});
+  const detections = seed.detections ?? {};
   const defaultGit = (): GitStatus => ({
     repoRoot: projectRoot,
     branch: "main",
@@ -365,6 +446,9 @@ export function createFakeBridge(
       if (command === "app_window_minimize" || command === "app_window_close") {
         return null as CommandMap[K]["result"];
       }
+      if (command === "app_reveal_path") {
+        return null as CommandMap[K]["result"];
+      }
       if (command === "app_window_is_maximized") {
         return windowMaximized as CommandMap[K]["result"];
       }
@@ -393,27 +477,54 @@ export function createFakeBridge(
             title?: string | null;
             projectId?: string | null;
             worktreePath?: string | null;
+            config?: unknown;
           };
         };
         const at = "2025-01-01T00:00:00.000Z";
         const project = req.projectId ? projects.find((row) => row.id === req.projectId) : null;
+        const typedTitle = req.title?.trim() ?? "";
         const session = fakeSession({
           id: `session-${sessions.length + 1}`,
           provider: req.provider,
           cwd: req.worktreePath ?? project?.path ?? req.cwd ?? "C:/projects/grove",
           model: req.model ?? null,
-          title: req.title ?? `${req.provider} session`,
+          title: typedTitle || "New session",
+          titleSource: typedTitle ? "manual" : "auto",
           status: "starting",
           projectId: project?.id ?? null,
           createdAt: at,
           updatedAt: at,
         });
-        const detail: SessionDetail = { ...session, events: [] };
+        const detail: SessionDetail = {
+          ...session,
+          permissionMode:
+            (req.config as { permissionMode?: SessionDetail["permissionMode"] } | undefined)
+              ?.permissionMode ?? "ask",
+          events: [],
+        };
         details[session.id] = detail;
         sessions.unshift({ ...session, eventCount: 0, subagents: [] });
         return detail as CommandMap[K]["result"];
       }
       if (command === "session_send") {
+        const { id, text } = args as { id: string; text: string };
+        const row = sessions.find((session) => session.id === id);
+        const detail = details[id];
+        // Mirror the core's first-message placeholder so a UI flow sees the same title event.
+        if (row && detail && row.titleSource === "auto" && row.title === "New session") {
+          const title = placeholderTitle(text);
+          row.title = title;
+          detail.title = title;
+          const event: SessionEvent = {
+            at: "2025-01-01T00:00:01.000Z",
+            kind: "title_changed",
+            title,
+            source: "auto",
+          };
+          detail.events = [...detail.events, event];
+          row.eventCount = detail.events.length;
+          bridge.emitSessionEvent({ sessionId: id, payload: event });
+        }
         return null as CommandMap[K]["result"];
       }
       if (command === "session_cancel") {
@@ -470,8 +581,137 @@ export function createFakeBridge(
         detail.thinkingLevel = level;
         return detail as CommandMap[K]["result"];
       }
+      if (command === "session_set_permission_mode") {
+        const { id, mode } = args as { id: string; mode: SessionDetail["permissionMode"] };
+        const detail = details[id];
+        if (!detail) throw new Error(`FakeBridge has no session: ${id}`);
+        detail.permissionMode = mode;
+        return detail as CommandMap[K]["result"];
+      }
+      if (command === "session_set_pinned") {
+        const { id, pinned } = args as { id: string; pinned: boolean };
+        const row = sessions.find((session) => session.id === id);
+        if (!row) throw new Error(`FakeBridge has no session: ${id}`);
+        row.pinned = pinned;
+        const detail = details[id];
+        if (detail) detail.pinned = pinned;
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return structuredClone(session) as CommandMap[K]["result"];
+      }
+      if (command === "session_rename") {
+        // The core trims, validates and bumps the timestamp; the fake applies the same rules so a UI
+        // flow meets the real behaviour instead of a permissive shortcut.
+        const { id, title } = args as { id: string; title: string };
+        const row = sessions.find((session) => session.id === id);
+        if (!row) throw new Error(`FakeBridge has no session: ${id}`);
+        const next = title.trim();
+        if (!next) throw new Error("invalid request: title is empty");
+        if ([...next].length > 80) {
+          throw new Error("invalid request: title is longer than 80 characters");
+        }
+        const at = "2025-01-01T00:00:09.000Z";
+        row.title = next;
+        row.titleSource = "manual";
+        row.updatedAt = at;
+        const detail = details[id];
+        if (detail) {
+          detail.title = next;
+          detail.titleSource = "manual";
+          detail.updatedAt = at;
+          const event: SessionEvent = {
+            at,
+            kind: "title_changed",
+            title: next,
+            source: "manual",
+          };
+          detail.events = [...detail.events, event];
+          row.eventCount = detail.events.length;
+          bridge.emitSessionEvent({ sessionId: id, payload: event });
+        }
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return structuredClone(session) as CommandMap[K]["result"];
+      }
+      if (command === "session_set_model") {
+        const { id, model, thinking } = args as {
+          id: string;
+          model: string;
+          thinking: SessionDetail["thinkingLevel"] | null;
+        };
+        const detail = details[id];
+        const row = sessions.find((session) => session.id === id);
+        if (!detail || !row) throw new Error(`FakeBridge has no session: ${id}`);
+        detail.model = model;
+        row.model = model;
+        if (thinking !== null && thinking !== undefined) detail.thinkingLevel = thinking;
+        // A same-provider hot swap adds no transcript event; the toast is the feedback.
+        return structuredClone(detail) as CommandMap[K]["result"];
+      }
+      if (command === "session_generate_title") {
+        const { id, force } = args as { id: string; force: boolean };
+        const row = sessions.find((session) => session.id === id);
+        const detail = details[id];
+        if (!row || !detail) throw new Error(`FakeBridge has no session: ${id}`);
+        if (!force && row.titleSource === "manual") {
+          // An automatic attempt never overwrites a manual title, even when it raced one.
+          const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+          return structuredClone(session) as CommandMap[K]["result"];
+        }
+        const replied = detail.events.some(
+          (event) => event.kind === "message" && event.role === "assistant",
+        );
+        if (!replied) throw new Error("invalid request: session has no assistant reply yet");
+        const at = "2025-01-01T00:00:10.000Z";
+        const title = "Generated session title";
+        row.title = title;
+        row.titleSource = "generated";
+        row.updatedAt = at;
+        detail.title = title;
+        detail.titleSource = "generated";
+        detail.updatedAt = at;
+        const event: SessionEvent = { at, kind: "title_changed", title, source: "generated" };
+        detail.events = [...detail.events, event];
+        row.eventCount = detail.events.length;
+        bridge.emitSessionEvent({ sessionId: id, payload: event });
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return structuredClone(session) as CommandMap[K]["result"];
+      }
       if (command === "session_close") {
         setStatus((args as { id: string }).id, "exited");
+        return null as CommandMap[K]["result"];
+      }
+      if (command === "session_archive") {
+        const { id } = args as { id: string };
+        const row = sessions.find((session) => session.id === id);
+        const detail = details[id];
+        if (!row || !detail) throw new Error(`FakeBridge has no session: ${id}`);
+        const archivedAt = "2025-01-01T00:01:00.000Z";
+        row.archivedAt = archivedAt;
+        row.status = "exited";
+        row.awaiting = false;
+        detail.archivedAt = archivedAt;
+        detail.status = "exited";
+        detail.awaiting = false;
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return { ...session } as CommandMap[K]["result"];
+      }
+      if (command === "session_restore") {
+        const { id } = args as { id: string };
+        const row = sessions.find((session) => session.id === id);
+        const detail = details[id];
+        if (!row || !detail) throw new Error(`FakeBridge has no session: ${id}`);
+        row.archivedAt = null;
+        detail.archivedAt = null;
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return { ...session } as CommandMap[K]["result"];
+      }
+      if (command === "session_delete") {
+        const { id } = args as { id: string };
+        const index = sessions.findIndex((session) => session.id === id);
+        if (index === -1) throw new Error(`FakeBridge has no session: ${id}`);
+        sessions.splice(index, 1);
+        delete details[id];
+        delete plans[id];
+        delete pins[id];
         return null as CommandMap[K]["result"];
       }
       if (command === "session_resume") {
@@ -560,6 +800,8 @@ export function createFakeBridge(
       }
       if (command === "project_detect") {
         const { path } = args as { path: string };
+        const detected = detections[path];
+        if (detected) return structuredClone(detected) as CommandMap[K]["result"];
         return {
           path,
           isGit: false,
@@ -593,13 +835,56 @@ export function createFakeBridge(
         projects.push(project);
         return structuredClone(project) as CommandMap[K]["result"];
       }
+      if (command === "project_remove") {
+        const { id } = args as { id: string };
+        const index = projects.findIndex((project) => project.id === id);
+        if (index === -1) throw new Error(`FakeBridge has no project: ${id}`);
+        projects.splice(index, 1);
+        // The real store's `ON DELETE SET NULL` turns the project's sessions into chats.
+        for (const row of sessions) {
+          if (row.projectId === id) row.projectId = null;
+        }
+        for (const detail of Object.values(details)) {
+          if (detail.projectId === id) detail.projectId = null;
+        }
+        return null as CommandMap[K]["result"];
+      }
+      if (command === "fs_list_roots") {
+        return fsRoots() as CommandMap[K]["result"];
+      }
       if (command === "fs_list_dirs") {
         const { path } = (args ?? {}) as { path?: string };
+        const target = path || fsRoots().home || "C:/Users/demo";
+        const listing = fsListings[target];
+        if (listing) return structuredClone(listing) as CommandMap[K]["result"];
+        if (Object.keys(seed.fsListings ?? {}).length > 0) {
+          throw new Error(`cannot open ${target}: the folder does not exist`);
+        }
         return {
-          path: path ?? "C:/Users/demo",
-          parent: null,
+          path: target,
+          parent: parentFolder(target),
           dirs: [],
         } as CommandMap[K]["result"];
+      }
+      if (command === "fs_create_dir") {
+        const { parent, name } = args as { parent: string; name: string };
+        const trimmed = name.trim();
+        if (
+          !trimmed ||
+          trimmed === "." ||
+          trimmed === ".." ||
+          /[\\/]/.test(trimmed) ||
+          /[\u0000-\u001f]/.test(trimmed)
+        ) {
+          throw new Error("a folder name must be a single path segment");
+        }
+        if (fsListings[parent]?.dirs.some((dir) => dir.name === trimmed)) {
+          throw new Error(`'${trimmed}' already exists`);
+        }
+        const path = `${parent.replace(/\/+$/, "")}/${trimmed}`;
+        fsListings[parent]?.dirs.push({ name: trimmed, path });
+        fsListings[path] = { path, parent: parentFolder(path), dirs: [] };
+        return { name: trimmed, path } as CommandMap[K]["result"];
       }
       if (command === "git_status") {
         return structuredClone(gitStatus) as CommandMap[K]["result"];
@@ -656,6 +941,12 @@ export function createFakeBridge(
         };
         worktrees.push(worktree);
         return structuredClone(worktree) as CommandMap[K]["result"];
+      }
+      if (command === "git_worktree_remove") {
+        const { worktreePath } = args as { worktreePath: string };
+        const index = worktrees.findIndex((worktree) => worktree.path === worktreePath);
+        if (index >= 0) worktrees.splice(index, 1);
+        return 0 as CommandMap[K]["result"];
       }
       if (command === "spec_index") {
         return (
@@ -800,11 +1091,43 @@ export function createFakeBridge(
       }
       if (command === "settings_set") {
         const { patch } = args as { patch: SettingsPatch };
-        const { catalogSources, theme, ...extras } = patch;
+        const { catalogSources, theme, autoTitles, titleModel, clearTitleModel, ...extras } = patch;
+        if (clearTitleModel && titleModel) {
+          throw new Error(
+            "invalid request: a title model cannot be set and cleared in the same update",
+          );
+        }
         if (catalogSources) settings.catalogSources = [...catalogSources];
         if (theme) settings.theme = theme;
+        if (autoTitles !== undefined) settings.autoTitles = autoTitles;
+        if (clearTitleModel) settings.titleModel = null;
+        if (titleModel) settings.titleModel = { ...titleModel };
         Object.assign(settings, extras);
         return structuredClone(settings) as CommandMap[K]["result"];
+      }
+      if (command === "title_model_suggest") {
+        const { liveModels } = (args ?? {}) as { liveModels?: Record<string, string[]> };
+        const rows = seed.providerStatuses ?? DEFAULT_PROVIDER_STATUSES;
+        const order = ["anthropic", "openai", "google", "openrouter", "opencode-go"];
+        const small: Record<string, string> = {
+          anthropic: "claude-haiku-4-5",
+          openai: "gpt-5-mini",
+          google: "gemini-2.5-flash",
+          "opencode-go": "deepseek-v4.1-flash",
+        };
+        for (const id of order) {
+          const row = rows.find((status) => status.id === id);
+          if (!row?.configured) continue;
+          if (id === "openrouter") {
+            const live = liveModels?.openrouter ?? row.models;
+            const model = live.includes("google/gemini-2.5-flash")
+              ? "google/gemini-2.5-flash"
+              : (live[0] ?? row.models[0]);
+            return { provider: id, model } as CommandMap[K]["result"];
+          }
+          return { provider: id, model: small[id] } as CommandMap[K]["result"];
+        }
+        return null as CommandMap[K]["result"];
       }
       if (command === "secret_status") {
         const { key } = args as { key: string };
@@ -851,6 +1174,10 @@ export function createFakeBridge(
       }
       if (command === "provider_thinking") {
         return structuredClone(seed.modelThinking ?? {}) as CommandMap[K]["result"];
+      }
+      if (command === "plan_usage") {
+        const { provider } = args as { provider: string };
+        return (provider === "opencode-go" ? DEFAULT_PLAN_USAGE : null) as CommandMap[K]["result"];
       }
 
       throw new Error(`FakeBridge has no handler for command: ${command}`);

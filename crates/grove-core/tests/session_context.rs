@@ -240,6 +240,9 @@ fn session_row(id: &str, project: &Path, provider: &str) -> Session {
         status: SessionState::Idle,
         project_id: None,
         awaiting: false,
+        archived_at: None,
+        pinned: false,
+        title_source: grove_core::sessions::event::TitleSource::Manual,
         created_at: "2025-01-01T00:00:00.000Z".into(),
         updated_at: "2025-01-01T00:00:00.000Z".into(),
     }
@@ -456,6 +459,9 @@ async fn the_context_is_a_snapshot_until_it_is_refreshed() {
 
 #[tokio::test]
 async fn switching_harness_reloads_the_same_context_with_a_transcript_summary() {
+    // The recording adapter exports no history, so this keeps exercising the replay fallback. The
+    // live-history handoff is covered by the manager tests; here the point is that the context
+    // documents are reassembled from the pins for the new provider either way.
     let fixture = fixture();
     write_spec(
         fixture.dir.path(),

@@ -51,6 +51,7 @@ mod tests {
     use super::*;
     use crate::ipc::Session;
     use crate::sessions::event::SessionState;
+    use crate::sessions::event::TitleSource;
 
     fn session(id: &str) -> Session {
         Session {
@@ -62,6 +63,9 @@ mod tests {
             status: SessionState::Idle,
             project_id: None,
             awaiting: false,
+            archived_at: None,
+            pinned: false,
+            title_source: TitleSource::Manual,
             created_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-01T00:00:00.000Z".into(),
         }

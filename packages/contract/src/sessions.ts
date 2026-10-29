@@ -20,6 +20,13 @@ export const sessionStateSchema = z.enum([
 ]);
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
+/** Who wrote a session's title. Only `auto` still carrying the temporary title may be replaced. */
+export const titleSourceSchema = z.enum(["auto", "generated", "manual"]);
+export type TitleSource = z.infer<typeof titleSourceSchema>;
+
+/** The longest title the core accepts and the tree row renders (`SESSION_TITLE_MAX_CHARS`). */
+export const SESSION_TITLE_MAX_CHARS = 80;
+
 export const roleSchema = z.enum(["user", "assistant", "system"]);
 export type Role = z.infer<typeof roleSchema>;
 
@@ -51,6 +58,10 @@ export const thinkingLevelSchema = z.enum([
   "max",
 ]);
 export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
+
+/** Whether mutating tools ask before they run. `full` still lets `ask_user` questions through. */
+export const permissionModeSchema = z.enum(["ask", "full"]);
+export type PermissionMode = z.infer<typeof permissionModeSchema>;
 
 /** One option in a structured question. */
 export const questionOptionSchema = z.object({
@@ -182,6 +193,12 @@ export const sessionEventSchema = z.discriminatedUnion("kind", [
   z.object({ at: z.string(), kind: z.literal("status"), state: sessionStateSchema }),
   z.object({
     at: z.string(),
+    kind: z.literal("title_changed"),
+    title: z.string(),
+    source: titleSourceSchema,
+  }),
+  z.object({
+    at: z.string(),
     kind: z.literal("error"),
     message: z.string(),
     retryable: z.boolean(),
@@ -207,11 +224,17 @@ export const sessionSchema = z.object({
   cwd: z.string(),
   model: z.string().nullable(),
   title: z.string(),
+  /** Who wrote the title: the user, the first-message placeholder, or a model. */
+  titleSource: titleSourceSchema,
   status: sessionStateSchema,
   /** The workspace project this session belongs to, or null for a loose chat. */
   projectId: z.string().nullable(),
   /** True while a permission request is waiting for the user. */
   awaiting: z.boolean(),
+  /** When the session was archived, or null while it is active. Archive keeps the transcript. */
+  archivedAt: z.string().nullable(),
+  /** A durable user pin; pinned sessions rise into the Pinned section. */
+  pinned: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -243,6 +266,8 @@ export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 export const sessionDetailSchema = sessionSchema.extend({
   /** Reasoning level the runtime will use on the next turn; absent means `off`. */
   thinkingLevel: thinkingLevelSchema.optional(),
+  /** Approval mode the runtime will use for the next tool call; absent means `ask`. */
+  permissionMode: permissionModeSchema.optional(),
   events: z.array(sessionEventSchema),
 });
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;

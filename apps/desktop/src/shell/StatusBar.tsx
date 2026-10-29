@@ -1,4 +1,11 @@
-import type { AppInfo, SessionEvent, Project, SessionDetail, SessionSummary } from "@grove/contract";
+import type {
+  AppInfo,
+  PermissionMode,
+  SessionEvent,
+  Project,
+  SessionDetail,
+  SessionSummary,
+} from "@grove/contract";
 import type { Preferences } from "../state/workspaceStore";
 import { providerMeta, sessionVisual } from "../workspace/models";
 import { basename } from "../workspace/tree";
@@ -14,10 +21,9 @@ interface StatusBarProps {
   prefs: Preferences;
 }
 
-const PERM_LABEL: Record<Preferences["permissionMode"], string> = {
+const PERM_LABEL: Record<PermissionMode, string> = {
   ask: "ask",
-  "accept-edits": "accept edits",
-  bypass: "bypass",
+  full: "full access",
 };
 
 /** The 26px footer: live counts on the left, where you are in the middle, settings state right. */
@@ -32,7 +38,7 @@ export function StatusBar({
   prefs,
 }: StatusBarProps) {
   const running = sessions.filter((row) => sessionVisual(row) === "running").length;
-  const waiting = sessions.filter((row) => row.awaiting).length;
+  const waiting = sessions.filter((row) => row.awaiting && !row.archivedAt).length;
   const failed = sessions.filter((row) => sessionVisual(row) === "failed").length;
   const bits = [`${running} running`, `${waiting} awaiting you`];
   if (failed) bits.push(`${failed} failed`);
@@ -43,6 +49,7 @@ export function StatusBar({
     (event) => event.kind === "message" && event.role !== "system",
   ).length;
   const where = project ? `${project.name} · ${branch ?? "no worktree"}` : "chats · no worktree";
+  const perm = session?.permissionMode ?? (prefs.permissionMode === "bypass" ? "full" : "ask");
 
   return (
     <footer className="statusbar">
@@ -57,7 +64,7 @@ export function StatusBar({
       </div>
       <div className="sb-right">
         <span className="sb-item tidy">
-          perm <span>{PERM_LABEL[prefs.permissionMode]}</span>
+          perm <span>{PERM_LABEL[perm]}</span>
         </span>
         <span className="sb-item tidy">
           plan <span>{plan.total ? `${plan.done}/${plan.total}` : "—"}</span>

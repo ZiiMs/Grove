@@ -1,0 +1,29 @@
+{
+  "provider": "opencode-go",
+  "windows": [
+    {
+      "id": "rolling",
+      "label": "5-hour",
+      "usedPercent": 6,
+      "remainingPercent": 94,
+      "status": "ok",
+      "resetsAt": "2026-10-29T15:50:00.000Z"
+    },
+    {
+      "id": "weekly",
+      "label": "Weekly",
+      "usedPercent": 29,
+      "remainingPercent": 71,
+      "status": "ok",
+      "resetsAt": "2026-11-01T19:00:00.000Z"
+    },
+    {
+      "id": "monthly",
+      "label": "Monthly",
+      "usedPercent": 74,
+      "remainingPercent": 26,
+      "status": "ok",
+      "resetsAt": "2026-11-17T10:18:00.000Z"
+    }
+  ]
+}

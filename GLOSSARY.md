@@ -97,6 +97,43 @@ live row `exited`, and `session_resume` relaunches the agent with the stored res
 of the conversation tail. Sending the next message resumes a stopped session automatically; the
 conversation survives a quit.
 
+## Archived session
+
+A session whose `sessions.archived_at` is set. It leaves the active tree and appears in the sidebar's
+Archive section, keeps its transcript, plan, pins and workers, and can be restored at any time. Only an
+archived session can be permanently deleted; archive itself is reversible soft state, never a delete.
+
+## Title source
+
+`sessions.title_source` records who wrote a session's title: `auto` (the first-message placeholder,
+still eligible for model generation), `generated` (written by a one-shot title completion) or `manual`
+(typed by the user; every title that predates the column). A rename sets `manual` and emits
+`title_changed`, which patches the tree row and the open header without a reload.
+
+## Title model
+
+The one global small model used to name sessions, stored as `titleModel` in settings and resolved
+from a suggested default when unset (`settings::suggest_title_model`). The suggestion is the small
+model of the first configured provider in catalog order; it is never persisted silently. Generative
+naming is one non-streaming `AgentProvider::complete` call with no tools and no history, once per auto
+session per app run or on demand from the session menu. A failure leaves the placeholder and toasts
+the model and provider (ADR 0004).
+
+## Hot swap
+
+Changing a live session's model without ending the conversation. A same-provider change is applied
+in place (`session_set_model`, next turn); a cross-provider change hands the normalized history to the
+new agent (`switch_provider`) and drops the old provider's resume token. Work is never cancelled to
+satisfy a model change: a busy or awaiting session queues the switch until it is idle.
+
+## Context menu
+
+The single app-wide menu primitive that replaces the native webview menu (`shell/ContextMenu.tsx`,
+state in `state/menuStore.ts`). Components put `MenuItem[]` in the store; one host portals the menu
+into the topmost native dialog (or the body), keeps it inside the viewport, and implements the
+keyboard navigation. Text fields get the edit menu; sessions, projects, worktrees, messages and the
+tree background register their own items.
+
 ## Spec graph
 
 The index of repo `.md` files whose frontmatter carries `id` + `type`, with `parent`, `depends-on`,
@@ -116,6 +153,12 @@ One pinned spec or the current plan, already rendered to markdown, that a sessio
 hands to the agent (`providers::ContextDoc`, assembled by `sessions::context::SessionContextService`; the event summary is `sessions::event::ContextDocument`). Context is a **snapshot**
 with explicit budgets (8 000 chars per document, 24 000 total) and a truncation marker; nothing
 re-reads a spec on a timer. The transcript records what was sent as a `context_refreshed` event.
+
+## Pinned session
+
+A session whose `pinned` flag is set (`session_set_pinned`). It appears in the sidebar's Pinned
+section above the tree, and remains in its project group. Pinning is a preference, not activity: it
+never changes `updated_at`, so it cannot reorder the recent list.
 
 ## Offline provider
 

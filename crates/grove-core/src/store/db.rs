@@ -145,6 +145,25 @@ LEFT JOIN events result
 WHERE call.kind = 'tool_call'
   AND json_extract(call.payload, '$.name') = 'subagent';
 "#,
+    // 8 — archive. Archiving is soft state, not a delete: `archived_at` NULL means active, and the
+    // session keeps its transcript, plan, pins and workers. The index serves the Archive section,
+    // which lists archived rows by recency.
+    r#"
+ALTER TABLE sessions ADD COLUMN archived_at TEXT;
+CREATE INDEX sessions_by_archive ON sessions(archived_at, updated_at);
+"#,
+    // 9 — title provenance. Every title written before this column existed was typed by the user, so
+    // the default is `manual`: only a session created with a blank title is `auto` and may have its
+    // placeholder replaced by the first message (and, later, a model). Values: auto | generated |
+    // manual. See `docs/plans/session-ux-polish.md` §D1.
+    r#"
+ALTER TABLE sessions ADD COLUMN title_source TEXT NOT NULL DEFAULT 'manual';
+"#,
+    // 10 — pinned sessions. A pin is a durable preference, not an activity: the column does not touch
+    // `updated_at`, so pinning cannot reorder recent activity.
+    r#"
+ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+"#,
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -267,7 +286,7 @@ mod tests {
             let store = Store::open(&path).unwrap();
             assert_eq!(
                 store.applied_migrations().unwrap(),
-                vec![1, 2, 3, 4, 5, 6, 7]
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
             );
         }
         assert!(path.exists(), "the database file is created on open");
@@ -275,7 +294,7 @@ mod tests {
         let reopened = Store::open(&path).unwrap();
         assert_eq!(
             reopened.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7],
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
             "reopening does not replay migrations"
         );
     }
@@ -285,7 +304,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         assert_eq!(
             store.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
     }
 
@@ -338,7 +357,7 @@ mod tests {
         let store = Store::open(&path).unwrap();
         assert_eq!(
             store.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
         let session = store.session("legacy").unwrap().expect("the row survives");
         assert_eq!(
@@ -373,9 +392,132 @@ mod tests {
         let store = Store::open(&path).unwrap();
         assert_eq!(
             store.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
         assert!(store.pins("session-1").unwrap().is_empty(), "pins exists");
+    }
+
+    #[test]
+    fn migration_eight_leaves_existing_sessions_active_and_keeps_their_transcripts() {
+        // Archive is a nullable column, not a copy of the row: an install that predates it keeps every
+        // conversation exactly where it was, on the active side of the tree.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (index, sql) in MIGRATIONS[..7].iter().enumerate() {
+                conn.execute_batch(sql).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![index as i64 + 1, now()],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO sessions (id, provider, cwd, title, status, created_at, updated_at)
+                 VALUES ('legacy', 'mock', 'C:/work', 'Before archive', 'idle', ?1, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO events (session_id, at, kind, payload)
+                 VALUES ('legacy', ?1, 'status', '{\"kind\":\"status\",\"state\":\"idle\"}')",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.applied_migrations().unwrap(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        );
+        let session = store.session("legacy").unwrap().unwrap();
+        assert_eq!(session.archived_at, None, "existing rows stay active");
+        assert_eq!(
+            store.session_events("legacy").unwrap().len(),
+            1,
+            "the migration leaves the transcript alone"
+        );
+    }
+
+    #[test]
+    fn migration_ten_leaves_existing_sessions_unpinned() {
+        // Pinned is a user preference added after the fact; an upgrade must not pin anything.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (index, sql) in MIGRATIONS[..9].iter().enumerate() {
+                conn.execute_batch(sql).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![index as i64 + 1, now()],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO sessions (id, provider, cwd, title, status, created_at, updated_at)
+                 VALUES ('legacy', 'mock', 'C:/work', 'Old session', 'idle', ?1, ?1)",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        let session = store.session("legacy").unwrap().expect("the legacy row");
+        assert!(!session.pinned);
+    }
+
+    #[test]
+    fn migration_nine_gives_existing_sessions_a_manual_title_source() {
+        // Titles written before provenance existed were all typed by the user, so the column's
+        // default says exactly that: an upgrade must not mark a real title as eligible for a
+        // generated replacement.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (index, sql) in MIGRATIONS[..8].iter().enumerate() {
+                conn.execute_batch(sql).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![index as i64 + 1, now()],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO sessions (id, provider, cwd, title, status, created_at, updated_at)
+                 VALUES ('legacy', 'mock', 'C:/work', 'A title the user typed', 'idle', ?1, ?1)",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.applied_migrations().unwrap(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        );
+        let session = store.session("legacy").unwrap().unwrap();
+        assert_eq!(
+            session.title_source,
+            crate::sessions::event::TitleSource::Manual,
+            "existing titles become manual"
+        );
+        assert_eq!(session.title, "A title the user typed");
     }
 
     #[test]

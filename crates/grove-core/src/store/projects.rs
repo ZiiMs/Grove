@@ -94,6 +94,16 @@ impl Store {
         })
     }
 
+    /// Delete a project row only.
+    ///
+    /// Sessions keep their rows: the schema's `project_id` is `ON DELETE SET NULL`, so they become
+    /// chats. The working tree is not touched either — removing a project forgets the bookmark, it
+    /// does not delete the folder. Returns the number of rows removed so the caller can report an
+    /// unknown id instead of silently doing nothing.
+    pub fn remove_project(&self, id: &str) -> Result<usize, StoreError> {
+        self.with_conn(|conn| Ok(conn.execute("DELETE FROM projects WHERE id = ?1", params![id])?))
+    }
+
     /// Attach every loose session whose cwd is one of `paths` (or sits under one) to a project.
     ///
     /// This is what makes a newly added project immediately show the conversations that already ran

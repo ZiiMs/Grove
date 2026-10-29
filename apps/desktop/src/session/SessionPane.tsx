@@ -1,4 +1,5 @@
 import type {
+  Block,
   Decision,
   Project,
   QuestionAnswer,
@@ -6,14 +7,25 @@ import type {
   SessionSummary,
   ThinkingLevel,
 } from "@grove/contract";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 
 const EMPTY_QUEUE: string[] = [];
+
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBridge } from "../ipc/context";
 import { errorText } from "../ipc/errors";
 import { useSessionStore } from "../state/sessionStore";
+import type { MenuItem } from "../state/menuStore";
+import { useMenuStore } from "../state/menuStore";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import {
@@ -22,25 +34,66 @@ import {
   firstAvailableProvider,
   providerMeta,
   turnInFlight,
-  modelGroupsFor,
   sessionVisual,
   SESSION_UI_STATE,
+  PROVIDERS,
+  type ProviderMeta,
 } from "../workspace/models";
-import { Icon } from "../workspace/Icon";
+import { Icon, type IconName } from "../workspace/Icon";
+import { FileTypeIcon } from "../workspace/FileTypeIcon";
+import { ProviderGlyph } from "../workspace/ProviderGlyph";
+import { modelLabel } from "../workspace/modelLabel";
 import {
   knownThinkingLevels,
   nearestThinkingLevel,
   thinkingGroups,
+  thinkingLabel,
   thinkingLevelsFor,
 } from "../workspace/thinking";
-import { Combo } from "../shell/Combo";
+import { Combo, type ComboGroup, type ComboOption } from "../shell/Combo";
 import {
   clockLabel,
   durationLabel,
   foldTranscript,
   footerIndexes,
+  toolTarget,
+  toolTiming,
   type TranscriptItem,
 } from "../session/transcript";
+import { copyText } from "../shell/clipboard";
+import { revealPath } from "../shell/reveal";
+
+const RECENT_MODELS_KEY = "grove.recentModels";
+const RECENT_LIMIT = 5;
+
+/** One model and the provider it runs through, as the picker menus see it. */
+interface ModelChoice {
+  id: string;
+  meta: ProviderMeta;
+  ready: boolean;
+}
+
+function readRecentModels(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_MODELS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    // Storage can be blocked or hold an older value; recents are a convenience, not state.
+    return [];
+  }
+}
+
+function writeRecentModels(models: string[]): void {
+  try {
+    localStorage.setItem(RECENT_MODELS_KEY, JSON.stringify(models));
+  } catch {
+    // Same: the picker still works without remembering anything.
+  }
+}
 
 interface SessionPaneProps {
   active: boolean;
@@ -70,6 +123,7 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
   const openSettings = useUiStore((state) => state.openSettings);
   const respondPermission = useSessionStore((state) => state.respondPermission);
   const respondQuestion = useSessionStore((state) => state.respondQuestion);
+  const restoreSession = useSessionStore((state) => state.restore);
   const error = useSessionStore((state) => state.error);
   const applyContext = useSessionStore((state) => state.applyContext);
   const notify = useUiStore((state) => state.notify);
@@ -86,6 +140,17 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
 
   const headerActions = (
     <div className="sh-right">
+      {detail?.archivedAt ? (
+        <button
+          className="btn-ghost sm"
+          type="button"
+          aria-label="Restore session"
+          title="Move this session back to the active tree"
+          onClick={() => void restoreSession(bridge, detail.id)}
+        >
+          Restore
+        </button>
+      ) : null}
       <button
         className="icon-btn"
         type="button"
@@ -113,6 +178,16 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
             <h1 className="sh-title" title={detail.title}>
               {detail.title}
             </h1>
+            {detail.model ? (
+              <span className="sh-model" title={detail.model}>
+                {modelLabel(detail.model, detail.provider)}
+              </span>
+            ) : null}
+            {detail.archivedAt ? (
+              <span className="sh-pill archived" title="This session is archived">
+                Archived
+              </span>
+            ) : null}
             <span className="sh-state" data-state={visual}>
               <span className="dot" data-state={visual} aria-hidden="true" />
               <span className="sh-state-label">{SESSION_UI_STATE[visual]}</span>
@@ -132,28 +207,29 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
         onAnswer={(requestId, answers) => respondQuestion(bridge, requestId, answers)}
         empty={!detail}
         onNewSession={() => openNewSession({ projectId: project?.id ?? null })}
+        footer={
+          detail ? (
+            <Composer
+              sessionId={detail.id}
+              model={detail.model}
+              locked={questionPending}
+              pinned={pinned}
+              onUnpin={async (specId) => {
+                try {
+                  const next = await bridge.invoke("session_pin", {
+                    id: detail.id,
+                    specId,
+                    pinned: false,
+                  });
+                  applyContext(next);
+                } catch (err) {
+                  notify(errorText(err), "error");
+                }
+              }}
+            />
+          ) : null
+        }
       />
-
-      {detail ? (
-        <Composer
-          sessionId={detail.id}
-          model={detail.model}
-          locked={questionPending}
-          pinned={pinned}
-          onUnpin={async (specId) => {
-            try {
-              const next = await bridge.invoke("session_pin", {
-                id: detail.id,
-                specId,
-                pinned: false,
-              });
-              applyContext(next);
-            } catch (err) {
-              notify(errorText(err), "error");
-            }
-          }}
-        />
-      ) : null}
 
       {error ? (
         <p className="session-error" role="alert" style={{ padding: "0 20px 8px" }}>
@@ -172,6 +248,7 @@ function Transcript({
   onAnswer,
   empty,
   onNewSession,
+  footer,
 }: {
   items: TranscriptItem[];
   working: boolean;
@@ -180,9 +257,13 @@ function Transcript({
   onAnswer: (requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
   empty: boolean;
   onNewSession: () => void;
+  /** The composer, kept inside the scrollport so the scrollbar runs to the bottom of the chat. */
+  footer?: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const scrollTimer = useRef<number | undefined>(undefined);
+  const [scrolling, setScrolling] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const footers = useMemo(() => footerIndexes(items, working), [items, working]);
   const virtualizer = useVirtualizer({
@@ -205,7 +286,13 @@ function Transcript({
     const node = scrollRef.current;
     if (!node) return;
     stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+    // The scrollbar stays out of sight until the transcript actually moves.
+    setScrolling(true);
+    window.clearTimeout(scrollTimer.current);
+    scrollTimer.current = window.setTimeout(() => setScrolling(false), 900);
   };
+
+  useEffect(() => () => window.clearTimeout(scrollTimer.current), []);
 
   const toggle = (id: string) => {
     setExpanded((current) => {
@@ -221,9 +308,10 @@ function Transcript({
       className="run-scroll od-scroll"
       ref={scrollRef}
       onScroll={onScroll}
+      data-scrolling={scrolling ? "true" : undefined}
       tabIndex={0}
       role="region"
-      aria-label="Session transcript"
+      aria-label="Session transcript and composer"
     >
       <div className="run-inner">
         {empty ? (
@@ -269,6 +357,7 @@ function Transcript({
           </div>
         )}
       </div>
+      {footer}
     </div>
   );
 }
@@ -298,6 +387,71 @@ function AssistantFoot({
   );
 }
 
+function fullText(blocks: Block[]): string {
+  return blocks.map((block) => block.text).join("\n");
+}
+
+function markdownOf(blocks: Block[]): string {
+  return blocks
+    .map((block) =>
+      block.type === "code" ? `\`\`\`${block.language}\n${block.text}\n\`\`\`` : block.text,
+    )
+    .join("\n\n");
+}
+
+function codeOf(blocks: Block[]): string | null {
+  const code = blocks.filter(
+    (block): block is Extract<Block, { type: "code" }> => block.type === "code",
+  );
+  return code.length > 0 ? code.map((block) => block.text).join("\n\n") : null;
+}
+
+/**
+ * The file a tool row points at, if its target looks like one. Absolute paths stand alone; a relative
+ * one is resolved against the session's cwd so Reveal has a real path to hand the core.
+ */
+function resolveToolPath(title: string, cwd: string | null): string | null {
+  const raw = title.trim();
+  if (!raw) return null;
+  if (/^(?:[a-zA-Z]:[\\/]|[/\\]|~[\\/])/.test(raw)) return raw;
+  if (!/[\\/]/.test(raw) && !/\.[a-z0-9]{1,8}$/i.test(raw)) return null;
+  if (!cwd) return null;
+  return `${cwd.replace(/[\\/]+$/, "")}/${raw.replace(/\\/g, "/")}`;
+}
+
+/** The action mark for a tool row; a file-type mark sits beside the target for file tools. */
+function toolIcon(name: string): IconName {
+  switch (name) {
+    case "read_file":
+      return "file";
+    case "list_dir":
+      return "folder";
+    case "grep":
+      return "search";
+    case "write_file":
+    case "edit_file":
+      return "edit";
+    case "run_command":
+      return "terminal";
+    case "ask_user":
+      return "message";
+    case "subagent":
+      return "layers";
+    default:
+      return "terminal";
+  }
+}
+
+function openAt(event: ReactMouseEvent<HTMLElement>, items: MenuItem[]) {
+  event.preventDefault();
+  useMenuStore.getState().openMenu({
+    x: event.clientX,
+    y: event.clientY,
+    returnFocus: event.currentTarget,
+    items,
+  });
+}
+
 export function TranscriptRow({
   item,
   footer,
@@ -313,9 +467,63 @@ export function TranscriptRow({
   onDecide: (requestId: string, decision: Decision) => void;
   onAnswer: (requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
 }) {
+  const bridge = useBridge();
   const [answered, setAnswered] = useState<Decision | null>(null);
   const detail = useSessionStore((state) => state.detail);
   const provider = detail?.provider ?? "mock";
+  const notify = useUiStore((state) => state.notify);
+
+  const copy = (text: string) => {
+    void copyText(text).then((ok) => {
+      if (!ok) notify("Clipboard is unavailable", "error");
+    });
+  };
+
+  const openMessageMenu = (event: ReactMouseEvent<HTMLElement>, blocks: Block[]) => {
+    const text = fullText(blocks);
+    const items: MenuItem[] = [
+      { kind: "item", label: "Copy", icon: "copy", onSelect: () => copy(text) },
+      {
+        kind: "item",
+        label: "Copy as Markdown",
+        icon: "file",
+        onSelect: () => copy(markdownOf(blocks)),
+      },
+    ];
+    const code = codeOf(blocks);
+    if (code) {
+      items.push({
+        kind: "item",
+        label: "Copy code",
+        icon: "terminal",
+        onSelect: () => copy(code),
+      });
+    }
+    openAt(event, items);
+  };
+
+  const openTargetMenu = (event: ReactMouseEvent<HTMLElement>, target: string) => {
+    const path = resolveToolPath(target, detail?.cwd ?? null);
+    const items: MenuItem[] = [];
+    if (path) {
+      items.push({ kind: "item", label: "Copy path", icon: "copy", onSelect: () => copy(path) });
+      items.push({
+        kind: "item",
+        label: "Reveal in Explorer",
+        icon: "folder",
+        onSelect: () => void revealPath(bridge, path, notify),
+      });
+    } else if (target.trim()) {
+      items.push({
+        kind: "item",
+        label: "Copy",
+        icon: "copy",
+        onSelect: () => copy(target.trim()),
+      });
+    }
+    if (items.length === 0) return;
+    openAt(event, items);
+  };
 
   switch (item.kind) {
     case "message": {
@@ -325,7 +533,10 @@ export function TranscriptRow({
           .map((block) => block.text)
           .join("\n");
         return (
-          <div className="turn turn-user">
+          <div
+            className="turn turn-user"
+            onContextMenu={(event) => openMessageMenu(event, item.blocks)}
+          >
             <div className="bubble">
               <p>{text}</p>
             </div>
@@ -333,7 +544,7 @@ export function TranscriptRow({
         );
       }
       return (
-        <div className="turn">
+        <div className="turn" onContextMenu={(event) => openMessageMenu(event, item.blocks)}>
           {item.blocks.map((block, index) => {
             if (block.type === "code") {
               return (
@@ -361,23 +572,28 @@ export function TranscriptRow({
       // Whitespace-only deltas would otherwise leave a bare, blinking row behind tool cards.
       if (!item.text.trim()) return null;
       return (
-        <div className="turn">
+        <div
+          className="turn"
+          onContextMenu={(event) =>
+            openMessageMenu(event, [{ type: "text", text: item.text }])
+          }
+        >
           <p>{item.text}</p>
           {footer ? <AssistantFoot provider={provider} at={item.at} /> : null}
         </div>
       );
     case "tool": {
-      const icon =
-        /read|grep|search/i.test(item.name)
-          ? "search"
-          : /write/i.test(item.name)
-            ? "file"
-            : /edit/i.test(item.name)
-              ? "edit"
-              : "terminal";
+      const target = toolTarget(item.name, item.title);
+      const fileTool =
+        item.name === "read_file" || item.name === "write_file" || item.name === "edit_file";
+      const timing = toolTiming(item.status, item.durationMs);
       return (
         <div className="turn">
-          <div className="tool" data-status={item.status ?? "running"}>
+          <div
+            className="tool"
+            data-status={item.status ?? "running"}
+            onContextMenu={(event) => openTargetMenu(event, target)}
+          >
             <button
               className="tool-head"
               type="button"
@@ -385,20 +601,23 @@ export function TranscriptRow({
               onClick={onToggle}
             >
               <span className="tool-ico">
-                <Icon name={icon} size="sm" />
+                <Icon name={toolIcon(item.name)} size="sm" />
               </span>
               <span className="tool-name">{item.name}</span>
-              <span className="tool-target">{item.title}</span>
-              <span className="tool-time">
-                {item.status === null ? "running" : durationLabel(item.durationMs)}
-              </span>
+              {fileTool && target ? (
+                <span className="tool-filetype">
+                  <FileTypeIcon path={target} />
+                </span>
+              ) : null}
+              <span className="tool-target">{target}</span>
+              {timing ? <span className="tool-time">{timing}</span> : null}
               <span className="chev">
                 <Icon name="chevron" size="sm" />
               </span>
             </button>
             {open ? (
               <div className="tool-body">
-                {item.title ? <span className="tool-path">{item.title}</span> : null}
+                {target ? <span className="tool-path">{target}</span> : null}
                 <pre className={item.status === "error" ? "err" : undefined}>
                   {item.summary ?? "No output recorded."}
                 </pre>
@@ -411,7 +630,11 @@ export function TranscriptRow({
     case "diff":
       return (
         <div className="turn">
-          <div className="tool" data-status="ok">
+          <div
+            className="tool"
+            data-status="ok"
+            onContextMenu={(event) => openTargetMenu(event, item.path)}
+          >
             <button className="tool-head" type="button" aria-expanded={open} onClick={onToggle}>
               <span className="tool-ico">
                 <Icon name="diff" size="sm" />
@@ -846,15 +1069,20 @@ function Composer({
   const enqueue = useSessionStore((state) => state.enqueue);
   const dequeue = useSessionStore((state) => state.dequeue);
   const cancel = useSessionStore((state) => state.cancel);
-  const switchProvider = useSessionStore((state) => state.switchProvider);
   const setThinking = useSessionStore((state) => state.setThinking);
+  const setPermissionMode = useSessionStore((state) => state.setPermissionMode);
+  const setModel = useSessionStore((state) => state.setModel);
+  const switchModel = useSessionStore((state) => state.switchModel);
+  const pendingModel = useSessionStore((state) => state.pendingModel);
   const busy = useSessionStore((state) => state.busy);
   const prefs = useWorkspaceStore((state) => state.prefs);
   const registered = useSessionStore((state) => state.providers);
   const providerStatuses = useSessionStore((state) => state.providerStatuses);
   const modelThinking = useSessionStore((state) => state.modelThinking);
   const notify = useUiStore((state) => state.notify);
+  const openSettings = useUiStore((state) => state.openSettings);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [recentModels, setRecentModels] = useState<string[]>(readRecentModels);
 
   const live = detail ? detail.status !== "exited" && detail.status !== "error" : false;
   const working = turnInFlight(detail);
@@ -864,16 +1092,88 @@ function Composer({
     () => Object.fromEntries(registered.map((spec) => [spec.id, spec.models])),
     [registered],
   );
-  const modelGroups = modelGroupsFor(prefs.enabledProviders, available, modelsByProvider);
   const fallbackProvider = firstAvailableProvider(prefs.enabledProviders, available, prefs.defaultProvider);
   const currentProvider = detail?.provider ?? fallbackProvider;
   const currentModel = model ?? defaultModelFor(currentProvider, modelsByProvider[currentProvider]);
   const currentThinking = detail?.thinkingLevel ?? "off";
+  const permission =
+    detail?.permissionMode ?? (prefs.permissionMode === "bypass" ? "full" : "ask");
+  const pending = pendingModel?.sessionId === sessionId ? pendingModel : null;
   const knownLevels = useMemo(
     () => knownThinkingLevels(currentProvider, currentModel, modelThinking),
     [currentModel, currentProvider, modelThinking],
   );
   const thinkingLevels = knownLevels ?? thinkingLevelsFor(currentProvider, currentModel, modelThinking);
+
+  /**
+   * Every provider the menu can list, with whether it has a credential. The shipped catalog is the
+   * fallback until `provider_list` answers, so the picker is never empty on first paint.
+   */
+  const catalog = useMemo(() => {
+    const ids = registered.length > 0 ? registered.map((spec) => spec.id) : Object.keys(PROVIDERS);
+    const configured = new Set(availableProviderIds(registered, providerStatuses));
+    const groups = ids
+      .filter((id) => prefs.enabledProviders[id] !== false)
+      .map((id) => {
+        const meta = providerMeta(id);
+        const models = modelsByProvider[id]?.length ? modelsByProvider[id] : meta.models;
+        return { id, meta, models, ready: configured.has(id) };
+      });
+    const owners = new Map<string, ModelChoice>();
+    for (const group of groups) {
+      for (const entry of group.models) {
+        if (!owners.has(entry)) {
+          owners.set(entry, { id: group.id, meta: group.meta, ready: group.ready });
+        }
+      }
+    }
+    return { groups, owners };
+  }, [modelsByProvider, prefs.enabledProviders, providerStatuses, registered]);
+
+  // A recent model that no longer exists, or whose provider lost its key, is not a choice any more.
+  useEffect(() => {
+    setRecentModels((current) => {
+      const next = current
+        .filter((id) => catalog.owners.get(id)?.ready)
+        .filter((id, index, list) => list.indexOf(id) === index)
+        .slice(0, RECENT_LIMIT);
+      const same =
+        next.length === current.length && next.every((id, index) => id === current[index]);
+      return same ? current : next;
+    });
+  }, [catalog]);
+
+  useEffect(() => {
+    writeRecentModels(recentModels);
+  }, [recentModels]);
+
+  const modelMenu = useMemo(() => {
+    const option = (value: string, owner: ModelChoice): ComboOption => ({
+      value,
+      label: modelLabel(value, owner.id),
+      hint: owner.ready ? value : "Add a key in Settings",
+      disabled: !owner.ready,
+      icon: <ProviderGlyph provider={owner.id} />,
+    });
+    const groups: ComboGroup[] = [];
+    const recent = recentModels.flatMap((id) => {
+      const owner = catalog.owners.get(id);
+      return owner ? [{ id, owner }] : [];
+    });
+    if (recent.length > 0) {
+      groups.push({
+        label: "Recent",
+        options: recent.map((entry) => option(entry.id, entry.owner)),
+      });
+    }
+    for (const entry of catalog.groups) {
+      groups.push({
+        label: entry.meta.name,
+        options: entry.models.map((id) => option(id, entry)),
+      });
+    }
+    return groups;
+  }, [catalog, recentModels]);
 
   useEffect(() => {
     const node = inputRef.current;
@@ -902,13 +1202,36 @@ function Composer({
 
   const changeModel = async (value: string) => {
     if (!detail || value === currentModel) return;
-    const next = modelGroups.find((group) => group.models.includes(value))?.provider.id;
-    if (!next) return;
-    try {
-      await switchProvider(bridge, next, value);
-      notify(`Session now runs on ${providerMeta(next).name} · ${value}`);
-    } catch {
-      // The store already carries the error message.
+    // `catalog.owners` is keyed by model id alone and first-wins, so a provider that also lists the
+    // id would win over the session's own. Prefer the session's provider when it offers the id.
+    const ownModels = modelsByProvider[detail.provider] ?? providerMeta(detail.provider).models;
+    const owner = ownModels.includes(value)
+      ? {
+          id: detail.provider,
+          meta: providerMeta(detail.provider),
+          ready: available.includes(detail.provider),
+        }
+      : catalog.owners.get(value);
+    if (!owner?.ready) return;
+    let landed = true;
+    if (owner.id === detail.provider) {
+      // A same-provider change is a hot swap: keep the agent, its turn and its transcript. Compute
+      // the nearest level the new model accepts from the capability map; with no entry, leave the
+      // level exactly as the user had it.
+      const levels = knownThinkingLevels(owner.id, value, modelThinking);
+      const thinking = levels ? nearestThinkingLevel(currentThinking, levels) : null;
+      if (!(await setModel(bridge, value, thinking))) return;
+    } else {
+      // A cross-provider change relaunches on the new wire client. While the session is busy or
+      // waiting for an answer the store queues it and the shell applies it at idle, so there is no
+      // toast yet: the composer shows the waiting dot and App toasts when it lands.
+      landed = await switchModel(bridge, owner.id, value);
+    }
+    setRecentModels((current) =>
+      [value, ...current.filter((id) => id !== value)].slice(0, RECENT_LIMIT),
+    );
+    if (landed) {
+      notify(`Session now runs on ${owner.meta.name} · ${modelLabel(value, owner.id)}`);
     }
   };
 
@@ -977,48 +1300,108 @@ function Composer({
             }}
           />
           <div className="composer-foot">
-            <Combo
-              className="combo-model"
-              id="model-select"
-              label="Model for this session"
-              value={currentModel}
-              groups={modelGroups.map(({ provider: entry, models }) => ({
-                label: entry.name,
-                options: models.map((value) => ({ value })),
-              }))}
-              disabled={busy}
-              searchable
-              placement="up"
-              onChange={(value) => void changeModel(value)}
-            />
-            <Combo
-              className="combo-thinking"
-              id="thinking-select"
-              label="Thinking level for this session"
-              value={currentThinking}
-              groups={thinkingGroups(thinkingLevels)}
-              disabled={busy}
-              placement="up"
-              title="Thinking level for the next turn"
-              onChange={(value) => void setThinking(bridge, value as ThinkingLevel)}
-            />
-            <div className="foot-actions">
-              {working ? (
-                <button className="btn-stop" type="button" onClick={() => void cancel(bridge)}>
-                  <Icon name="stop" size="sm" />
-                  Stop
-                </button>
-              ) : null}
+            <div className="composer-pickers">
               <button
-                className="btn-send"
                 type="button"
-                disabled={!typed || locked}
-                onClick={() => void submit()}
-                aria-label={working ? "Queue this message for the next turn" : "Send message"}
+                className="inline-picker approval-picker"
+                data-mode={permission}
+                title={
+                  permission === "ask"
+                    ? "Ask before changes. Click for full access."
+                    : "Full access: no approval prompts. Questions still ask."
+                }
+                aria-label={
+                  permission === "ask"
+                    ? "Approval mode: ask before changes. Switch to full access"
+                    : "Approval mode: full access. Switch to ask"
+                }
+                onClick={() =>
+                  void setPermissionMode(bridge, permission === "ask" ? "full" : "ask")
+                }
               >
-                <Icon name={working && typed ? "arrowRight" : "send"} size="sm" />
-                {working && typed ? "Queue" : "Send"}
+                <Icon name={permission === "ask" ? "shield" : "shieldCheck"} size="sm" />
               </button>
+              <Combo
+                className="inline-picker model-picker"
+                id="model-select"
+                label="Model for this session"
+                value={currentModel}
+                groups={modelMenu}
+                disabled={busy}
+                searchable
+                placement="up"
+                title={currentModel}
+                triggerIcon={<ProviderGlyph provider={currentProvider} />}
+                renderTriggerValue={(value) => modelLabel(value, currentProvider)}
+                hideChevron
+                footer={
+                  <button
+                    className="combo-footer-action"
+                    type="button"
+                    onClick={() => openSettings("providers")}
+                  >
+                    <Icon name="settings" size="xs" />
+                    Providers
+                  </button>
+                }
+                onChange={(value) => void changeModel(value)}
+              />
+              <Combo
+                className="inline-picker thinking-picker"
+                id="thinking-select"
+                label="Thinking level for this session"
+                value={currentThinking}
+                groups={thinkingGroups(thinkingLevels)}
+                disabled={busy}
+                placement="up"
+                title="Thinking level for the next turn"
+                triggerIcon={<Icon name="brain" />}
+                renderTriggerValue={(level) => thinkingLabel(level as ThinkingLevel)}
+                hideChevron
+                onChange={(value) => void setThinking(bridge, value as ThinkingLevel)}
+              />
+              {pending ? (
+                <span
+                  className="pending-switch"
+                  role="status"
+                  aria-label={`Switching to ${modelLabel(
+                    pending.model,
+                    pending.provider,
+                  )} when this turn ends`}
+                  title={`Waiting for this turn to finish before switching to ${modelLabel(
+                    pending.model,
+                    pending.provider,
+                  )}`}
+                >
+                  <span className="dot" data-state="waiting" aria-hidden="true" />
+                  {modelLabel(pending.model, pending.provider)}
+                </span>
+              ) : null}
+            </div>
+            <div className="foot-actions">
+              <div className="send-stack">
+                <button
+                  className="btn-send"
+                  type="button"
+                  disabled={!typed || locked}
+                  onClick={() => void submit()}
+                  aria-label={working ? "Queue this message for the next turn" : "Send message"}
+                  title={working && typed ? "Queue for the next turn" : "Send"}
+                >
+                  <Icon name={working && typed ? "arrowRight" : "send"} size="sm" />
+                </button>
+                {working ? (
+                  <button
+                    className="btn-stop"
+                    type="button"
+                    title="Stop"
+                    aria-label="Stop the running turn"
+                    onClick={() => void cancel(bridge)}
+                  >
+                    <Icon name="stop" size="sm" />
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
         </div>

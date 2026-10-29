@@ -3,7 +3,9 @@
 
 use crate::commands::app::adopt;
 use crate::state::AppState;
-use grove_core::ipc::{DirListing, IpcError, IpcResult, Project, ProjectDetection};
+use grove_core::ipc::{
+    DirEntry, DirListing, FsRoots, IpcError, IpcResult, Project, ProjectDetection,
+};
 use grove_core::projects::AddProjectRequest;
 
 #[tauri::command]
@@ -42,9 +44,35 @@ pub async fn project_add(
 }
 
 #[tauri::command]
+pub async fn project_remove(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || -> IpcResult<()> {
+        Ok(core.projects.remove(&id)?)
+    })
+    .await
+    .map_err(|error| IpcError::io(format!("project task failed: {error}")))?
+}
+
+#[tauri::command]
 pub async fn fs_list_dirs(path: Option<String>) -> IpcResult<DirListing> {
     tauri::async_runtime::spawn_blocking(move || -> IpcResult<DirListing> {
         Ok(grove_core::projects::list_dirs(path.as_deref())?)
+    })
+    .await
+    .map_err(|error| IpcError::io(format!("folder task failed: {error}")))?
+}
+
+#[tauri::command]
+pub async fn fs_list_roots() -> IpcResult<FsRoots> {
+    tauri::async_runtime::spawn_blocking(grove_core::projects::list_roots)
+        .await
+        .map_err(|error| IpcError::io(format!("folder task failed: {error}")))
+}
+
+#[tauri::command]
+pub async fn fs_create_dir(parent: String, name: String) -> IpcResult<DirEntry> {
+    tauri::async_runtime::spawn_blocking(move || -> IpcResult<DirEntry> {
+        Ok(grove_core::projects::create_dir(&parent, &name)?)
     })
     .await
     .map_err(|error| IpcError::io(format!("folder task failed: {error}")))?

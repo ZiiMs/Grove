@@ -4,7 +4,8 @@ import { useSessionStore } from "../state/sessionStore";
 import { errorText } from "../ipc/errors";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore, type PermissionMode } from "../state/workspaceStore";
-import type { ThinkingLevel } from "@grove/contract";
+import type { ThinkingLevel, TitleModel } from "@grove/contract";
+import { modelLabel } from "../workspace/modelLabel";
 import {
   availableProviderIds,
   firstAvailableProvider,
@@ -32,11 +33,17 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
   const registered = useSessionStore((state) => state.providers);
   const providerStatuses = useSessionStore((state) => state.providerStatuses);
   const modelThinking = useSessionStore((state) => state.modelThinking);
+  const titleSuggest = useSessionStore((state) => state.titleSuggest);
+  const suggestTitleModel = useSessionStore((state) => state.suggestTitleModel);
   const saveSettings = useWorkspaceStore((state) => state.saveSettings);
   const notify = useUiStore((state) => state.notify);
 
   const [model, setModel] = useState(prefs.defaultModel);
   const [thinking, setThinking] = useState<ThinkingLevel>(prefs.thinkingLevel);
+  const [titleModel, setTitleModel] = useState<TitleModel | null>(prefs.titleModel);
+  // Off is its own persisted switch: the title model may be null and still mean "use the
+  // suggestion", so a cleared model cannot express "never name a session".
+  const [titleOff, setTitleOff] = useState(!prefs.autoTitles);
   const [permission, setPermission] = useState<PermissionMode>(prefs.permissionMode);
   const [root, setRoot] = useState(prefs.worktreeRoot);
   const [restore, setRestore] = useState(prefs.restoreSessions);
@@ -46,10 +53,17 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
   useEffect(() => {
     setModel(prefs.defaultModel);
     setThinking(prefs.thinkingLevel);
+    setTitleModel(prefs.titleModel);
+    setTitleOff(!prefs.autoTitles);
     setPermission(prefs.permissionMode);
     setRoot(prefs.worktreeRoot);
     setRestore(prefs.restoreSessions);
   }, [prefs]);
+
+  // The suggestion depends on which providers have keys, so read it when the pane opens.
+  useEffect(() => {
+    void suggestTitleModel(bridge);
+  }, [bridge, suggestTitleModel]);
 
   const available = availableProviderIds(registered, providerStatuses);
   const modelsByProvider = Object.fromEntries(registered.map((spec) => [spec.id, spec.models]));
@@ -57,6 +71,26 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
     () => modelGroupsFor(prefs.enabledProviders, available, modelsByProvider),
     [available, modelsByProvider, prefs.enabledProviders],
   );
+  // The title model is global and asks only for a small model, so every configured provider is
+  // offered (the default-model picker's enable switches do not apply here).
+  const titleGroups = useMemo(
+    () => [
+      { options: [{ value: "off", label: "Off", hint: "No automatic names" }] },
+      ...available.map((id) => ({
+        label: providerMeta(id).name,
+        options: (modelsByProvider[id] ?? providerMeta(id).models).map((value) => ({
+          value: `${id}::${value}`,
+          label: modelLabel(value, id),
+          hint: value,
+        })),
+      })),
+    ],
+    [available, modelsByProvider],
+  );
+  const selectedTitle = titleOff ? null : (titleModel ?? titleSuggest);
+  const titleValue = selectedTitle
+    ? `${selectedTitle.provider}::${selectedTitle.model}`
+    : "off";
   const fallbackProvider = firstAvailableProvider(prefs.enabledProviders, available, prefs.defaultProvider);
   const selectedProvider = providerForModel(model, groups) ?? fallbackProvider;
   const knownLevels = useMemo(
@@ -85,12 +119,20 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
     setWorking(true);
     setError(null);
     try {
+      // Saving writes what the form shows. When no explicit model is chosen, the visible suggestion
+      // becomes the explicit choice; Off clears it instead.
+      const titleChoice = titleOff ? null : (titleModel ?? titleSuggest);
       await saveSettings(bridge, {
         defaultModel: model,
         thinkingLevel: thinking,
         permissionMode: permission,
         worktreeRoot: trimmed,
         restoreSessions: restore,
+        ...(titleOff
+          ? { autoTitles: false, clearTitleModel: true }
+          : titleChoice
+            ? { autoTitles: true, titleModel: titleChoice }
+            : { autoTitles: true }),
       });
       notify(`Settings saved — new sessions start on ${model}`);
       onSaved();
@@ -140,6 +182,40 @@ export function GeneralPane({ onSaved }: { onSaved: () => void }) {
             />
             <p className="field-hint">
               How much hidden reasoning to ask for on models that support it.
+            </p>
+          </div>
+          <h4 className="sm-group-title">Session names</h4>
+          <div className="field">
+            <label htmlFor="set-title-model">Title model</label>
+            <Combo
+              id="set-title-model"
+              label="Title model"
+              value={titleValue}
+              groups={titleGroups}
+              searchable
+              disabled={available.length === 0}
+              onChange={(value) => {
+                if (value === "off") {
+                  setTitleModel(null);
+                  setTitleOff(true);
+                  return;
+                }
+                const separator = value.indexOf("::");
+                setTitleModel({
+                  provider: value.slice(0, separator),
+                  model: value.slice(separator + 2),
+                });
+                setTitleOff(false);
+              }}
+            />
+            <p className="field-hint">
+              {available.length === 0
+                ? "Add a provider key first."
+                : titleOff
+                  ? "No automatic names. You can still generate one from a session's menu."
+                  : !titleModel && titleSuggest
+                    ? `Suggested: ${modelLabel(titleSuggest.model, titleSuggest.provider)} on ${providerMeta(titleSuggest.provider).name}. Save to make it your choice.`
+                    : "Runs after the first reply to name new sessions. One small call per session."}
             </p>
           </div>
           <div className="field">

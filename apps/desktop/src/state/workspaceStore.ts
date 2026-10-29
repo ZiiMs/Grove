@@ -6,12 +6,13 @@ import type {
   Project,
   SettingsPatch,
   ThinkingLevel,
+  TitleModel,
 } from "@grove/contract";
-import { thinkingLevelSchema } from "@grove/contract";
+import { thinkingLevelSchema, titleModelSchema } from "@grove/contract";
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 import { errorText } from "../ipc/errors";
-import { applyTheme, findTheme, readBootTheme, type ThemeId, type ThemeMode } from "../workspace/theme";
+import { applyTheme, DEFAULT_THEME_ID, findTheme, readBootTheme, type ThemeId, type ThemeMode } from "../workspace/theme";
 
 export type PermissionMode = "ask" | "accept-edits" | "bypass";
 
@@ -21,6 +22,10 @@ export interface Preferences {
   defaultModel: string;
   /** Default reasoning level for a new session. */
   thinkingLevel: ThinkingLevel;
+  /** The global small model that names sessions; null means the suggested one applies. */
+  titleModel: TitleModel | null;
+  /** Whether an auto-titled session may be named automatically after its first reply. */
+  autoTitles: boolean;
   permissionMode: PermissionMode;
   /** Absolute folder new worktrees are created under; empty means "next to the project". */
   worktreeRoot: string;
@@ -43,6 +48,8 @@ interface WorkspaceState {
   refreshProjects: (bridge: GroveBridge) => Promise<void>;
   refreshProjectGit: (bridge: GroveBridge, project: Project) => Promise<void>;
   addProject: (bridge: GroveBridge, request: AddProjectRequest) => Promise<Project>;
+  /** Delete the project row; its sessions stay and come back as chats. The folder is untouched. */
+  removeProject: (bridge: GroveBridge, id: string) => Promise<void>;
   setTheme: (id: ThemeId, mode: ThemeMode) => void;
   saveSettings: (bridge: GroveBridge, patch: SettingsPatch) => Promise<void>;
   setPrefs: (patch: Partial<Preferences>) => void;
@@ -53,6 +60,8 @@ const DEFAULT_PREFS: Preferences = {
   defaultProvider: "anthropic",
   defaultModel: "claude-sonnet-4-5",
   thinkingLevel: "off",
+  titleModel: null,
+  autoTitles: true,
   permissionMode: "ask",
   worktreeRoot: "~/code",
   restoreSessions: true,
@@ -72,12 +81,19 @@ function thinkingLevelValue(value: unknown, fallback: ThinkingLevel): ThinkingLe
   return parsed.success ? parsed.data : fallback;
 }
 
+function titleModelValue(value: unknown): TitleModel | null {
+  const parsed = titleModelSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 function prefsFromSettings(settings: Record<string, unknown>): Preferences {
   const mode = settings.permissionMode;
   return {
     defaultProvider: stringValue(settings.defaultProvider, DEFAULT_PREFS.defaultProvider),
     defaultModel: stringValue(settings.defaultModel, DEFAULT_PREFS.defaultModel),
     thinkingLevel: thinkingLevelValue(settings.thinkingLevel, DEFAULT_PREFS.thinkingLevel),
+    titleModel: titleModelValue(settings.titleModel),
+    autoTitles: booleanValue(settings.autoTitles, true),
     permissionMode:
       mode === "accept-edits" || mode === "bypass" || mode === "ask"
         ? mode
@@ -172,6 +188,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     return project;
   },
 
+  removeProject: async (bridge, id) => {
+    await bridge.invoke("project_remove", { id });
+    set((state) => {
+      const worktrees = { ...state.worktrees };
+      const branches = { ...state.branches };
+      const gitErrors = { ...state.gitErrors };
+      delete worktrees[id];
+      delete branches[id];
+      delete gitErrors[id];
+      return {
+        projects: state.projects.filter((project) => project.id !== id),
+        worktrees,
+        branches,
+        gitErrors,
+      };
+    });
+  },
+
   setTheme: (id, mode) => {
     applyTheme(id, mode);
     set({ themeId: id, themeMode: mode });
@@ -186,7 +220,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setPrefs: (patch) => set((state) => ({ prefs: { ...state.prefs, ...patch } })),
 
   reset: () => {
-    applyTheme("house", "dark");
+    applyTheme(DEFAULT_THEME_ID, "dark");
     set({
       info: null,
       projects: [],
@@ -194,7 +228,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       branches: {},
       gitErrors: {},
       prefs: DEFAULT_PREFS,
-      themeId: "house",
+      themeId: DEFAULT_THEME_ID,
       themeMode: "dark",
       loading: true,
       error: null,

@@ -5,8 +5,10 @@
 //! tool-call index, so the decoder buffers each slot and only emits a call at `finish_reason`.
 
 use super::tools::ToolSpec;
-use super::wire::{Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent};
-use super::{ProviderError, ProviderSpec, ThinkingLevel};
+use super::wire::{
+    authorize, send_json, Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent,
+};
+use super::{CompletionRequest, ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
 
 /// `POST {base}/chat/completions`. The catalog's base already carries `/v1` where the vendor wants it.
@@ -101,6 +103,39 @@ fn encode_messages(system: &str, messages: &[Message]) -> Vec<serde_json::Value>
         encoded.push(json!({ "role": "user", "content": message.text_of() }));
     }
     encoded
+}
+
+/// One non-streaming request with no tools and no history: what a session title needs.
+pub async fn complete(
+    http: &reqwest::Client,
+    spec: &ProviderSpec,
+    key: &str,
+    request: &CompletionRequest,
+) -> Result<String, ProviderError> {
+    let body = json!({
+        "model": request.model,
+        "messages": [
+            { "role": "system", "content": request.system },
+            { "role": "user", "content": request.prompt },
+        ],
+        "max_tokens": request.max_tokens,
+        "stream": false,
+    });
+    let value = send_json(
+        authorize(http.post(endpoint(spec)), super::Wire::OpenAi, key).json(&body),
+        &spec.name,
+    )
+    .await?;
+    value
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ProviderError::Protocol(format!("{} completion returned no text", spec.name))
+        })
 }
 
 /// Decodes `text/event-stream` chunks from `/chat/completions`.
@@ -369,5 +404,51 @@ mod tests {
         assert_eq!(none["reasoning_effort"], "none");
         let off = body("gpt-5", "system", &[], &[], ThinkingLevel::Off);
         assert!(off.get("reasoning_effort").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_completion_sends_no_tools_or_history() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/chat/completions"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Fix the login bug" } }]
+            })))
+            .mount(&server)
+            .await;
+        let mut spec = crate::providers::catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+        let request = crate::providers::CompletionRequest {
+            model: "gpt-5-mini".into(),
+            system: "You name conversations.".into(),
+            prompt: "First exchange".into(),
+            max_tokens: 64,
+        };
+
+        let answer = complete(&reqwest::Client::new(), &spec, "test-key", &request)
+            .await
+            .expect("the first choice is the answer");
+        assert_eq!(answer, "Fix the login bug");
+
+        let sent = server.received_requests().await.unwrap();
+        assert_eq!(sent.len(), 1, "one request, not a session");
+        let body: serde_json::Value = serde_json::from_slice(&sent[0].body).unwrap();
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["max_tokens"], 64);
+        assert!(
+            body.get("tools").is_none(),
+            "the title prompt must not see tools"
+        );
+        assert_eq!(
+            body["messages"].as_array().unwrap().len(),
+            2,
+            "the system instruction and the one-shot prompt, no history"
+        );
+        assert_eq!(body["messages"][1]["role"], "user");
+        assert!(body.get("reasoning_effort").is_none(), "thinking is off");
+        assert_eq!(
+            sent[0].headers.get("authorization").unwrap(),
+            "Bearer test-key"
+        );
     }
 }

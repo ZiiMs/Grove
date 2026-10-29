@@ -7,8 +7,10 @@
 //! the id → name map built from the assistant turn.
 
 use super::tools::ToolSpec;
-use super::wire::{Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent};
-use super::{ProviderError, ProviderSpec, ThinkingLevel};
+use super::wire::{
+    authorize, send_json, Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent,
+};
+use super::{CompletionRequest, ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
 
 /// One turn's output ceiling. The largest thinking budget below leaves room for a final answer
@@ -114,6 +116,68 @@ fn encode_contents(messages: &[Message]) -> Vec<serde_json::Value> {
         }
     }
     contents
+}
+
+/// `POST {base}/v1beta/models/{model}:generateContent` for a one-shot answer.
+///
+/// The stream variant asks for `alt=sse`; a title call wants one JSON body, so it uses the plain
+/// method name.
+pub fn generate_endpoint(spec: &ProviderSpec, model: &str) -> String {
+    format!(
+        "{}/v1beta/models/{}:generateContent",
+        spec.base_url.trim_end_matches('/'),
+        model
+    )
+}
+
+/// One non-streaming request with no tools and no history: what a session title needs.
+pub async fn complete(
+    http: &reqwest::Client,
+    spec: &ProviderSpec,
+    key: &str,
+    request: &CompletionRequest,
+) -> Result<String, ProviderError> {
+    let body = json!({
+        "systemInstruction": { "parts": [{ "text": request.system }] },
+        "contents": [{ "role": "user", "parts": [{ "text": request.prompt }] }],
+        "generationConfig": {
+            "maxOutputTokens": request.max_tokens,
+            // Off for this call: a title is a few words, and reasoning tokens would eat the 64-token
+            // budget before an answer is written.
+            "thinkingConfig": { "thinkingBudget": 0 },
+        },
+    });
+    let value = send_json(
+        authorize(
+            http.post(generate_endpoint(spec, &request.model)),
+            super::Wire::Google,
+            key,
+        )
+        .json(&body),
+        &spec.name,
+    )
+    .await?;
+    value
+        .get("candidates")
+        .and_then(|candidates| candidates.get(0))
+        .and_then(|candidate| candidate.get("content"))
+        .and_then(|content| content.get("parts"))
+        .and_then(|parts| parts.as_array())
+        .and_then(|parts| {
+            parts.iter().find_map(|part| {
+                let thought = part
+                    .get("thought")
+                    .and_then(|thought| thought.as_bool())
+                    .unwrap_or(false);
+                (!thought)
+                    .then(|| part.get("text").and_then(|text| text.as_str()))
+                    .flatten()
+            })
+        })
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ProviderError::Protocol(format!("{} completion returned no text", spec.name))
+        })
 }
 
 /// Decodes `text/event-stream` chunks from `:streamGenerateContent`.
@@ -353,5 +417,53 @@ mod tests {
             none["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             0
         );
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_completion_sends_no_tools_or_history() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/v1beta/models/gemini-2.5-flash:generateContent",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "candidates": [{
+                    "content": { "parts": [{ "text": "Fix the login bug" }], "role": "model" }
+                }]
+            })))
+            .mount(&server)
+            .await;
+        let mut spec = crate::providers::catalog::find("google").unwrap();
+        spec.base_url = server.uri();
+        let request = crate::providers::CompletionRequest {
+            model: "gemini-2.5-flash".into(),
+            system: "You name conversations.".into(),
+            prompt: "First exchange".into(),
+            max_tokens: 64,
+        };
+
+        let answer = complete(&reqwest::Client::new(), &spec, "test-key", &request)
+            .await
+            .expect("the first candidate's text is the answer");
+        assert_eq!(answer, "Fix the login bug");
+
+        let sent = server.received_requests().await.unwrap();
+        assert_eq!(sent.len(), 1, "one request, not a session");
+        let body: serde_json::Value = serde_json::from_slice(&sent[0].body).unwrap();
+        assert!(
+            body.get("tools").is_none(),
+            "the title prompt must not see tools"
+        );
+        assert_eq!(
+            body["contents"].as_array().unwrap().len(),
+            1,
+            "only the one-shot prompt, no conversation history"
+        );
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 64);
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0,
+            "thinking is explicitly off for the title call"
+        );
+        assert_eq!(sent[0].headers.get("x-goog-api-key").unwrap(), "test-key");
     }
 }

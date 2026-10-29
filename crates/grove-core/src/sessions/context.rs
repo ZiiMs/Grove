@@ -386,6 +386,7 @@ mod tests {
     use crate::ipc::Session;
     use crate::plan::PlanUpdate;
     use crate::sessions::event::SessionState;
+    use crate::sessions::event::TitleSource;
     use std::path::Path;
 
     fn doc(id: &str, body: &str) -> ContextDoc {
@@ -537,6 +538,9 @@ mod tests {
             status: SessionState::Idle,
             project_id: None,
             awaiting: false,
+            archived_at: None,
+            pinned: false,
+            title_source: TitleSource::Manual,
             created_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-01T00:00:00.000Z".into(),
         }

@@ -4,6 +4,7 @@
 use crate::commands::app::adopt;
 use crate::state::AppState;
 use grove_core::ipc::{CreateSessionRequest, IpcResult, Session, SessionDetail, SessionSummary};
+use grove_core::providers::PermissionMode;
 use grove_core::providers::ProviderSpec;
 use grove_core::providers::ThinkingLevel;
 use grove_core::sessions::context::SessionContext;
@@ -97,9 +98,84 @@ pub async fn session_set_thinking(
     Ok(state.core.sessions.set_thinking(&id, level).await?)
 }
 
+/// Change whether mutating tools ask before they run. A live agent applies it from the next tool
+/// call; the stored config keeps it across resumes.
+#[tauri::command]
+pub async fn session_set_permission_mode(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    mode: PermissionMode,
+) -> IpcResult<SessionDetail> {
+    Ok(state.core.sessions.set_permission_mode(&id, mode).await?)
+}
+
+/// Pin or unpin a session in the sidebar. A preference only: no activity and no transcript change.
+#[tauri::command]
+pub fn session_set_pinned(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    pinned: bool,
+) -> IpcResult<Session> {
+    Ok(state.core.sessions.set_pinned(&id, pinned)?)
+}
+
+/// Rename a session. The trimmed, validated title is persisted and the updated row comes back so the
+/// tree patches in place; the agent and its transcript are untouched.
+#[tauri::command]
+pub async fn session_rename(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    title: String,
+) -> IpcResult<Session> {
+    Ok(state.core.sessions.rename(&id, &title).await?)
+}
+
+/// Change the model for the next turn. A same-provider change is a hot swap: the agent keeps its
+/// process and conversation, and only the next request names the new model. The optional level is the
+/// nearest one the new model supports, so the pair changes together.
+#[tauri::command]
+pub async fn session_set_model(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    model: String,
+    thinking: Option<ThinkingLevel>,
+) -> IpcResult<SessionDetail> {
+    Ok(state.core.sessions.set_model(&id, &model, thinking).await?)
+}
+
+/// Name a session with the global title model: one small call outside the agent loop. `force` is the
+/// explicit menu action; the automatic first-reply trigger passes false so it cannot overwrite a
+/// manual title. The stored title and source come back, and `title_changed` patches open views.
+#[tauri::command]
+pub async fn session_generate_title(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    force: bool,
+) -> IpcResult<Session> {
+    Ok(state.core.sessions.generate_title(&id, force).await?)
+}
+
 #[tauri::command]
 pub async fn session_close(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     Ok(state.core.sessions.close(&id).await?)
+}
+
+/// Hide a session from the active tree. A running agent is stopped first; the transcript stays.
+#[tauri::command]
+pub async fn session_archive(state: tauri::State<'_, AppState>, id: String) -> IpcResult<Session> {
+    Ok(state.core.sessions.archive(&id).await?)
+}
+
+/// Put an archived session back in the active tree. Its agent stays stopped until the next send.
+#[tauri::command]
+pub async fn session_restore(state: tauri::State<'_, AppState>, id: String) -> IpcResult<Session> {
+    Ok(state.core.sessions.restore(&id).await?)
+}
+
+/// Delete a session permanently, cascading its events, plan, pins and workers.
+#[tauri::command]
+pub async fn session_delete(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    Ok(state.core.sessions.delete(&id).await?)
 }
 
 #[tauri::command]

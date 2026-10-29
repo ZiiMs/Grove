@@ -43,6 +43,29 @@ const PATHS: Record<string, ReactNode> = {
     </>
   ),
   circle: <circle cx="8" cy="8" r="4.6" />,
+  panelRight: (
+    <>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.6" />
+      <path d="M9.5 3v10" />
+    </>
+  ),
+  filter: <path d="M2.5 3.5h11L9.6 8.3v4.2l-3.2-1.7V8.3z" />,
+  sort: <path d="M4 3.5v9M2 10.5l2 2 2-2M9 4.5h5M9 8h3.6M9 11.5h2.2" />,
+  list: <path d="M3 4.5h10M3 8h10M3 11.5h10" />,
+  collapseAll: <path d="M4 6.5 8 2.5l4 4M4 9.5l4 4 4-4" />,
+  pin: (
+    <>
+      <path d="M9.8 2.2l4 4M10.6 3l-5 5-.8 3.8 3.8-.8 5-5z" />
+      <path d="M5.6 10.4 2.5 13.5" />
+    </>
+  ),
+  shield: <path d="M8 2.2 12.8 3.9v3.6c0 2.9-2 4.9-4.8 5.9-2.8-1-4.8-3-4.8-5.9V3.9z" />,
+  shieldCheck: (
+    <>
+      <path d="M8 2.2 12.8 3.9v3.6c0 2.9-2 4.9-4.8 5.9-2.8-1-4.8-3-4.8-5.9V3.9z" />
+      <path d="M5.9 7.7 7.4 9.2 10.2 6.3" />
+    </>
+  ),
   alert: (
     <>
       <path d="M8 2.6 13.7 12.6H2.3z" />
@@ -99,7 +122,27 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M5.1 5.2l.6 7.3h4.6l.6-7.3" />
     </>
   ),
+  archive: (
+    <>
+      <path d="M2.9 4.4h10.2v2.2H2.9z" />
+      <path d="M3.8 6.6v5.6h8.4V6.6" />
+      <path d="M6.4 8.9h3.2" />
+    </>
+  ),
   check: <path d="M3.6 8.4 6.4 11.2 12.4 4.8" />,
+  more: (
+    <>
+      <circle cx="3.6" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="12.4" cy="8" r="0.9" fill="currentColor" stroke="none" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="5.4" y="5.4" width="7.2" height="7.2" rx="1.2" />
+      <path d="M10.2 5.4V4.2A1.2 1.2 0 0 0 9 3H4.2A1.2 1.2 0 0 0 3 4.2V9a1.2 1.2 0 0 0 1.2 1.2h1.2" />
+    </>
+  ),
   diff: (
     <>
       <path d="M3.2 4.8h9.6M3.2 11.2h9.6" />
@@ -140,6 +183,20 @@ const PATHS: Record<string, ReactNode> = {
     <>
       <path d="M8 2.2l1.3 3.2 3.2 1.3-3.2 1.3L8 11.2 6.7 8 3.5 6.7 6.7 5.4z" />
       <path d="M12.6 10.8l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5z" />
+    </>
+  ),
+  brain: (
+    <>
+      <path d="M8 3.4C6.6 2.5 4.9 3.2 4.8 4.6c-1.3.2-2.2 1.4-1.8 2.6-1 .7-1 2.3 0 3.1 0 1.3 1.2 2.2 2.5 2.1.4.8 1.3 1.3 2.3 1.1" />
+      <path
+        d="M8 3.4C6.6 2.5 4.9 3.2 4.8 4.6c-1.3.2-2.2 1.4-1.8 2.6-1 .7-1 2.3 0 3.1 0 1.3 1.2 2.2 2.5 2.1.4.8 1.3 1.3 2.3 1.1"
+        transform="translate(16 0) scale(-1 1)"
+      />
+      <path d="M8 3.4v10.1" />
+      <path d="M5.2 6c.7.1 1.2.6 1.4 1.3" />
+      <path d="M4.3 9c.7.1 1.2.5 1.4 1.2" />
+      <path d="M5.2 6c.7.1 1.2.6 1.4 1.3" transform="translate(16 0) scale(-1 1)" />
+      <path d="M4.3 9c.7.1 1.2.5 1.4 1.2" transform="translate(16 0) scale(-1 1)" />
     </>
   ),
 };

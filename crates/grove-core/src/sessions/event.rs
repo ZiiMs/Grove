@@ -92,6 +92,13 @@ pub enum EventKind {
     Status {
         state: SessionState,
     },
+    /// A session's title changed outside the transcript. The sidebar patches its row from this event,
+    /// and `source` records who wrote it: the first-message placeholder (`auto`), a model (`generated`)
+    /// or the user (`manual`).
+    TitleChanged {
+        title: String,
+        source: TitleSource,
+    },
     Error {
         message: String,
         retryable: bool,
@@ -215,6 +222,7 @@ impl EventKind {
             EventKind::QuestionResolved { .. } => "question_resolved",
             EventKind::Usage { .. } => "usage",
             EventKind::Status { .. } => "status",
+            EventKind::TitleChanged { .. } => "title_changed",
             EventKind::Error { .. } => "error",
             EventKind::ContextRefreshed { .. } => "context_refreshed",
         }
@@ -291,6 +299,39 @@ pub enum SessionState {
     Idle,
     Exited,
     Error,
+}
+
+/// Who wrote a session's title. Persisted as `sessions.title_source`, and carried by
+/// `title_changed` so every window agrees on whether the title is still a placeholder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleSource {
+    /// A first-message placeholder, still eligible for model generation.
+    Auto,
+    /// Written by a one-shot title completion.
+    Generated,
+    /// Typed by the user (or a title that predates title sources).
+    Manual,
+}
+
+impl TitleSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TitleSource::Auto => "auto",
+            TitleSource::Generated => "generated",
+            TitleSource::Manual => "manual",
+        }
+    }
+
+    /// Parse a persisted source. A value from a future core degrades to `manual`, so an unknown
+    /// provenance can never make a title look eligible for automatic replacement.
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "auto" => TitleSource::Auto,
+            "generated" => TitleSource::Generated,
+            _ => TitleSource::Manual,
+        }
+    }
 }
 
 impl SessionState {
@@ -417,6 +458,10 @@ mod tests {
             EventKind::Status {
                 state: SessionState::Idle,
             },
+            EventKind::TitleChanged {
+                title: "Release notes".into(),
+                source: TitleSource::Manual,
+            },
             EventKind::Error {
                 message: "boom".into(),
                 retryable: true,
@@ -508,6 +553,27 @@ mod tests {
             assert_eq!(SessionState::parse(state.as_str()), state);
         }
         assert_eq!(SessionState::parse("from-the-future"), SessionState::Error);
+    }
+
+    #[test]
+    fn every_title_source_names_its_wire_tag() {
+        for (source, tag) in [
+            (TitleSource::Auto, "auto"),
+            (TitleSource::Generated, "generated"),
+            (TitleSource::Manual, "manual"),
+        ] {
+            assert_eq!(source.as_str(), tag);
+            assert_eq!(TitleSource::parse(tag), source);
+            assert_eq!(
+                serde_json::to_string(&source).unwrap(),
+                format!("\"{tag}\"")
+            );
+        }
+        assert_eq!(
+            TitleSource::parse("from-the-future"),
+            TitleSource::Manual,
+            "an unknown provenance is never treated as eligible for generation"
+        );
     }
 
     #[test]

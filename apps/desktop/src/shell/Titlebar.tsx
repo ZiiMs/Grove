@@ -12,6 +12,9 @@ interface TitlebarProps {
   awaitingCount: number;
   onGit: () => void;
   onAwaiting: () => void;
+  /** Whether the floating session-info panel is visible; the button toggles it. */
+  infoOpen: boolean;
+  onInfo: () => void;
 }
 
 /** Brand, the active checkout chip, the window controls, and no native frame above them. */
@@ -24,6 +27,8 @@ export function Titlebar({
   awaitingCount,
   onGit,
   onAwaiting,
+  infoOpen,
+  onInfo,
 }: TitlebarProps) {
   const bridge = useBridge();
   const [maximized, setMaximized] = useState(false);
@@ -80,12 +85,8 @@ export function Titlebar({
   };
 
   return (
-    <header className="titlebar">
-      <div
-        className="brand"
-        data-tauri-drag-region
-        onDoubleClick={() => void toggleMaximize()}
-      >
+    <header className="titlebar" data-tauri-drag-region="deep">
+      <div className="brand">
         <span className="brand-mark">
           <BrandMark />
         </span>
@@ -114,13 +115,19 @@ export function Titlebar({
         </button>
       ) : null}
 
-      <div
-        className="titlebar-drag"
-        data-tauri-drag-region
-        onDoubleClick={() => void toggleMaximize()}
-      />
+      <div className="titlebar-drag" />
 
       <div className="titlebar-right">
+        <button
+          className="icon-btn"
+          type="button"
+          aria-label="Session info"
+          title="Session info"
+          aria-pressed={infoOpen}
+          onClick={onInfo}
+        >
+          <Icon name="panelRight" />
+        </button>
         {awaitingCount > 0 ? (
           <button
             className="await-chip"

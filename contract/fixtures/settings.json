@@ -1,5 +1,7 @@
 {
   "catalogSources": ["anthropics/skills", "mattpocock/skills"],
   "theme": "dark",
+  "autoTitles": false,
+  "titleModel": { "provider": "anthropic", "model": "claude-haiku-4-5" },
   "futureFlag": true
 }

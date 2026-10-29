@@ -1,7 +1,7 @@
 //! Git panel commands. Behaviour lives in `grove-core::gitops`; these handlers only unwrap command
 //! arguments and keep the blocking `git`/`gh` calls off the async runtime.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::events;
 use crate::state::AppState;
@@ -116,6 +116,33 @@ pub async fn git_worktree_create(
             .create_worktree(&repo_path, &branch, &base, &path)?)
     })
     .await
+}
+
+/// Remove a linked worktree, optionally deleting its local branch, and archive the sessions that ran
+/// in it. Returns how many sessions were archived.
+#[tauri::command]
+pub async fn git_worktree_remove(
+    state: tauri::State<'_, AppState>,
+    repo_path: String,
+    worktree_path: String,
+    delete_branch: bool,
+    force: bool,
+    force_branch: bool,
+) -> IpcResult<usize> {
+    let core = state.core.clone();
+    let remove_core = core.clone();
+    let remove_path = worktree_path.clone();
+    blocking(move || {
+        remove_core.git.remove_worktree(
+            Some(Path::new(&repo_path)),
+            &remove_path,
+            delete_branch,
+            force,
+            force_branch,
+        )
+    })
+    .await?;
+    Ok(core.sessions.archive_for_worktree(&worktree_path).await?)
 }
 
 #[tauri::command]

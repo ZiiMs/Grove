@@ -60,8 +60,9 @@ packages/contract/             zod schemas + TS types + fixture validator (UI �
 contract/fixtures/             golden JSON, written by Rust tests, parsed by TS tests
 crates/grove-core/src/
   providers/{mod,catalog,credentials,wire,anthropic,openai,google,probe,tools,agent,offline}.rs
-  sessions/{mod,event,manager,pump,context}.rs
+  sessions/{mod,event,manager,pump,context,title}.rs
   projects/mod.rs                 workspace folders + folder browsing
+  reveal.rs                       platform file-manager reveal for a path
   store/{mod,db,repos,plans,pins,projects}.rs
   specgraph/{mod,frontmatter,index,watch}.rs
   plan/{mod,service,mirror}.rs
@@ -75,7 +76,7 @@ apps/desktop/src/                React UI: shell/, session/, context/, settings/
 apps/desktop/src/styles/         themes.css (token contract) · design.css (shell) · extras.css · fonts/
 apps/desktop/tools/              visual screenshot harness (not part of `npm test`)
 apps/desktop/src-tauri/src/
-  lib.rs main.rs state.rs events.rs commands/{mod,app,projects,sessions,plan,specs,skills,mcp,git,settings}.rs
+  lib.rs main.rs state.rs events.rs tray.rs commands/{mod,app,projects,sessions,plan,specs,skills,mcp,git,settings}.rs
 .scratch/grove/issues/           first-build tickets (history; new work is in ClickUp)
 ```
 
@@ -99,8 +100,10 @@ pub struct ProviderSpec {                 // what the picker and settings pane r
 
 pub struct StartContext {
     pub cwd: PathBuf, pub model: Option<String>, pub session_id: String,
-    pub prompt: Option<String>, pub resume_token: Option<String>,
-    pub config: serde_json::Value, // `maxSteps`, `thinkingLevel`
+    pub prompt: Option<String>,   // replayed transcript tail (resume fallback)
+    pub history: Vec<wire::Message>, // full conversation, when a live session is handed over
+    pub resume_token: Option<String>,
+    pub config: serde_json::Value, // `maxSteps`, `thinkingLevel`, `permissionMode`
     pub context_files: Vec<ContextDoc>, // pinned specs + plan, as markdown
 }
 
@@ -113,6 +116,8 @@ pub trait AgentProvider: Send + Sync {
     fn spec(&self) -> &ProviderSpec;
     fn capabilities(&self) -> Capabilities;
     fn detect(&self, deps: &ProviderDeps) -> Detection;   // is a credential configured?
+    async fn complete(&self, req: CompletionRequest, deps: ProviderDeps)
+        -> Result<String, ProviderError>;                // one-shot, no tools or history
     async fn start(&self, ctx: StartContext, deps: ProviderDeps)
         -> Result<Box<dyn AgentSession>, ProviderError>;
 }
@@ -121,9 +126,11 @@ pub trait AgentProvider: Send + Sync {
 pub trait AgentSession: Send {
     fn take_events(&mut self) -> tokio::sync::mpsc::Receiver<SessionEvent>;  // once
     async fn send(&mut self, input: UserInput) -> Result<(), ProviderError>;
+    async fn history(&mut self) -> Vec<wire::Message>;  // [] = keep the transcript replay
     async fn respond_permission(&mut self, request_id: &str, decision: Decision)
         -> Result<(), ProviderError>;
     async fn set_thinking(&mut self, level: ThinkingLevel) -> Result<(), ProviderError>;
+    async fn set_model(&mut self, model: String) -> Result<(), ProviderError>;
     async fn cancel(&mut self) -> Result<(), ProviderError>;
     async fn shutdown(&mut self) -> Result<(), ProviderError>;
     fn resume_token(&self) -> Option<String>;
@@ -150,7 +157,12 @@ Provider rules that keep them isolated:
 - **Thinking is a session preference, not a prompt trick.** `ThinkingLevel` lives in
   `sessions.adapter_config` as `thinkingLevel` and is surfaced as `SessionDetail.thinkingLevel`.
   `session_set_thinking` updates the live agent's next turn and persists the config for a stopped
-  session. The selectable values are per-model, not global: `providers::model_catalog` reads the
+  session.
+- **Approval mode is the same kind of preference.** `PermissionMode` lives in `adapter_config` as
+  `permissionMode` and is surfaced as `SessionDetail.permissionMode`. `ask` opens a permission card
+  before `write_file`, `edit_file` or `run_command`; `full` runs them without asking, while `ask_user`
+  questions still reach the user. `session_set_permission_mode` applies to a live agent from its next
+  tool call and persists for a stopped one. The selectable values are per-model, not global: `providers::model_catalog` reads the
   public models.dev catalogue's provider-specific `reasoning_options` into a one-hour file cache and
   `provider_thinking` hands the result to the webview. A model can therefore expose `off`/`none`,
   `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or the static fallback when metadata is absent.
@@ -227,6 +239,7 @@ pub enum EventKind {
     QuestionResolved { request_id: String, answers: Vec<QuestionAnswer> },
     Usage { input_tokens: u64, output_tokens: u64 },
     Status { state: SessionState },                    // starting|ready|busy|idle|exited|error
+    TitleChanged { title: String, source: TitleSource }, // auto|generated|manual
     Error { message: String, retryable: bool },
     ContextRefreshed { reason: ContextReason, provider: String,
                        documents: Vec<ContextDocument>, note: String },
@@ -275,8 +288,11 @@ Two runtime operations move it, and both are visible in the transcript as a `Con
 - `session_refresh_context(id)` re-reads pins and plan, pushes the rendered documents into the **running**
   session as a turn, and records what was sent.
 - `session_switch_provider(id, provider, model)` re-launches the same conversation on another registered
-  provider with the same context documents plus a transcript summary (`render_tail`) as its prompt,
-  keeping the transcript and dropping the old resume token and model.
+  provider. A live, idle session hands over its normalized history, trimmed to the last complete
+  assistant message, so the transcript is not replayed; a stopped session falls back to a transcript
+  summary (`render_tail`). The switch keeps the transcript and drops the old resume token and model.
+  While the session is busy or waiting for a permission/question it is refused with a `conflict` and
+  the shell queues it until idle (ADR 0005).
 
 `session_set_thinking(id, level)` is not a context operation: it persists `thinkingLevel` in the
 session config and updates a live agent in place; a stopped session picks it up on resume. It does not
@@ -300,7 +316,7 @@ stale project and no service has to be rebuilt. `GROVE_PROJECT_ROOT` (else the p
 SQLite via `rusqlite` (`bundled`, no system dependency), one file at the Tauri app-data dir:
 `%APPDATA%/Grove/grove.db`. Migrations are an ordered `&[&str]` applied under
 `schema_migrations(version)`; later domains append rather than edit an earlier migration, so an
-existing install upgrades in place. Six migrations have shipped:
+existing install upgrades in place. Ten migrations have shipped:
 
 | # | Tables / columns | Feature |
 |---|---|---|
@@ -310,13 +326,19 @@ existing install upgrades in place. Six migrations have shipped:
 | 4 | `pins` | specs pinned to a session |
 | 5 | `projects`, `sessions.project_id`, `sessions.awaiting` | workspace tree and "needs you" |
 | 6 | `sessions.provider` (renamed from `harness`) | providers replace harnesses (ADR 0003) |
+| 7 | `subagents` (+ backfill from `tool_call`/`tool_result`) | durable delegated-worker trace |
+| 8 | `sessions.archived_at`, `sessions_by_archive` | archive, restore and permanent delete |
+| 9 | `sessions.title_source` | optional session titles and first-message placeholders |
+| 10 | `sessions.pinned` | pinned sessions in the sidebar |
 
 ```sql
 projects(id TEXT PK, name TEXT UNIQUE, path TEXT UNIQUE, remote TEXT, default_branch TEXT,
          is_git INTEGER, created_at TEXT, updated_at TEXT)
 sessions(id TEXT PK, provider TEXT, cwd TEXT, model TEXT, title TEXT, status TEXT,
          adapter_config TEXT, resume_token TEXT, project_id TEXT REFERENCES projects(id),
-         awaiting INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT)
+         awaiting INTEGER NOT NULL DEFAULT 0, archived_at TEXT,
+         title_source TEXT NOT NULL DEFAULT 'manual', pinned INTEGER NOT NULL DEFAULT 0,
+         created_at TEXT, updated_at TEXT)
 events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, at TEXT,
        kind TEXT, payload TEXT)                       -- payload = full EventKind JSON
 plans(session_id TEXT PK, markdown TEXT, version INTEGER, mirror_hash TEXT, updated_at TEXT)
@@ -366,6 +388,21 @@ Two channels, both typed in `packages/contract`:
 `provider_models` (asks the vendor which models the key can reach). `provider_models` powers both the
 settings pane's "test" button and the picker refresh that runs after boot; `provider_list` remains the
 offline fallback. `session_set_thinking` changes the persisted reasoning level for one session.
+`session_set_pinned` pins a session into the sidebar's Pinned section; it is a preference and does not
+touch `updated_at`.
+`plan_usage` reports the remaining 5-hour/weekly/monthly budget for a metered provider (OpenCode Go's
+`/zen/go/v1/usage`); it returns `null` for providers without a plan endpoint and never runs on a
+session turn.
+
+**Session titles.** `settings.titleModel` is the one global small model that names sessions, or null
+when the suggested model applies; `settings.autoTitles` is the Off switch, because clearing the model
+alone means "use the suggestion", not "never name". `clearTitleModel` is how the patch expresses a
+cleared model, because a JSON null cannot be told apart from an omitted field. `title_model_suggest`
+answers the suggestion for the first configured provider (the shell passes its live model lists so the
+OpenRouter choice can follow the account) and never writes settings. `session_generate_title` runs one
+non-streaming completion with no tools and no history, then stores the title as `generated` and emits
+`title_changed`; its `force` flag separates the explicit menu action from the automatic trigger, which
+never overwrites a manual title. See ADR 0004.
 
 **Drift control without codegen.** `contract/fixtures/<domain>.<case>.json` holds canonical payloads.
 A Rust test serialises a representative sample per DTO and asserts equality with the file; a TS test in
@@ -385,13 +422,15 @@ renders the code beside the message; no panel formats a rejection itself.
 The shipped shell is the three-column workspace from `design-reference/`; ADR 0002 records why the
 seven-panel shell and the spec/plan editors were retired.
 
-- **Shell:** custom titlebar · 272px project tree · always-mounted chat · 304px context column
+- **Shell:** custom titlebar · resizable project tree (300px by default, dragged from its right edge) · always-mounted chat · 304px context column · floating session-info card
   (Git · Plan · Spec) · status bar. Below 900px the three columns become Navigation · Session ·
   Context tabs. The centre never swaps for another product surface.
 - **Window chrome:** the native decorations are off. The titlebar's marked drag regions move the
   window; its minimize, maximize/restore and close buttons call the typed `app_window_*` commands, so
   the webview still never imports Tauri's window API and the controls remain fakeable. New sessions
   start from the `+` actions in the tree, not from the titlebar.
+- **Tray:** one icon while the app runs; left-click restores the window and right-click offers
+  Show Grove / Quit Grove.
 - **Transcript:** `@tanstack/react-virtual` mounts only the rows in view, so a 10 000-event session
   costs the same as a short one. Tool rows, diffs, permission cards, and inline question cards are
   transcript rows, not separate panels.
@@ -442,8 +481,11 @@ seven-panel shell and the spec/plan editors were retired.
   a side effect.
 - **projects** — a folder the user added, with the git facts detected at add time (`is_git`,
   `default_branch`, normalized `owner/name` remote). `fs_list_dirs` lists one level for the picker;
-  adding a project backfills `sessions.project_id` for conversations that already ran in the folder or
-  one of its worktrees. Worktrees themselves stay in git.
+  `fs_list_roots` adds home and every mounted drive/root, and `fs_create_dir` creates one validated
+  segment under the current folder. `project_remove` deletes the projects row only: its sessions become
+  chats (`project_id` is `ON DELETE SET NULL`) and the working tree is untouched. Adding a project
+  backfills `sessions.project_id` for conversations that already ran in the folder or one of its
+  worktrees. Worktrees themselves stay in git.
 - **gitops** — shell out to `git` (no libgit2): `rev-parse --show-toplevel`, status, branches,
   worktrees, unified diff per file/branch, stage/unstage selected paths, commit with paths, create a
   branch plus worktree, and `gh pr create` (draft or ready) returning the URL.

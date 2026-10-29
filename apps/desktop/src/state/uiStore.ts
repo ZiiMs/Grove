@@ -1,3 +1,4 @@
+import type { GitWorktree, Project } from "@grove/contract";
 import { create } from "zustand";
 
 /** Shell-only state: which pane is visible, which context tab is open, and which dialog is up. */
@@ -12,8 +13,7 @@ export interface NewSessionTarget {
 }
 
 export interface PullRequestSeed {
-  title: string;
-  body: string;
+  title: string;  body: string;
 }
 
 export interface ToastMessage {
@@ -27,11 +27,20 @@ export interface SubagentSelection {
   callId: string;
 }
 
+/** A linked worktree the user asked to delete; the dialog owns the destructive options. */
+export interface WorktreeRemoval {
+  project: Project;
+  worktree: GitWorktree;
+}
+
 interface UiState {
   view: PaneView;
   setView: (view: PaneView) => void;
   contextOpen: boolean;
   setContextOpen: (open: boolean) => void;
+  /** The floating session-info panel. Never shown while the context column is open. */
+  infoOpen: boolean;
+  setInfoOpen: (open: boolean) => void;
   contextTab: ContextTab;
   setContextTab: (tab: ContextTab) => void;
   settingsTab: SettingsTab | null;
@@ -50,9 +59,16 @@ interface UiState {
   prSeed: PullRequestSeed | null;
   openPr: (seed?: PullRequestSeed) => void;
   closePr: () => void;
+  worktreeRemoval: WorktreeRemoval | null;
+  openWorktreeRemoval: (project: Project, worktree: GitWorktree) => void;
+  closeWorktreeRemoval: () => void;
   subagent: SubagentSelection | null;
   openSubagent: (sessionId: string, callId: string) => void;
   closeSubagent: () => void;
+  /** The session whose tree row is in inline-rename mode, if any; the menu starts it. */
+  renamingSession: string | null;
+  startRename: (id: string) => void;
+  endRename: () => void;
   toast: ToastMessage | null;
   notify: (message: string, tone?: "ok" | "error") => void;
   clearToast: () => void;
@@ -62,8 +78,10 @@ interface UiState {
 export const useUiStore = create<UiState>((set) => ({
   view: "session",
   setView: (view) => set({ view }),
-  contextOpen: true,
+  contextOpen: false,
   setContextOpen: (contextOpen) => set({ contextOpen }),
+  infoOpen: true,
+  setInfoOpen: (infoOpen) => set({ infoOpen }),
   contextTab: "git",
   setContextTab: (contextTab) => set({ contextTab }),
   settingsTab: null,
@@ -88,16 +106,23 @@ export const useUiStore = create<UiState>((set) => ({
   prSeed: null,
   openPr: (prSeed) => set({ prOpen: true, prSeed: prSeed ?? null }),
   closePr: () => set({ prOpen: false, prSeed: null }),
+  worktreeRemoval: null,
+  openWorktreeRemoval: (project, worktree) => set({ worktreeRemoval: { project, worktree } }),
+  closeWorktreeRemoval: () => set({ worktreeRemoval: null }),
   subagent: null,
   openSubagent: (sessionId, callId) => set({ subagent: { sessionId, callId } }),
   closeSubagent: () => set({ subagent: null }),
+  renamingSession: null,
+  startRename: (id) => set({ renamingSession: id }),
+  endRename: () => set({ renamingSession: null }),
   toast: null,
   notify: (message, tone = "ok") => set({ toast: { message, tone } }),
   clearToast: () => set({ toast: null }),
   reset: () =>
     set({
       view: "session",
-      contextOpen: true,
+      contextOpen: false,
+      infoOpen: true,
       contextTab: "git",
       settingsTab: null,
       newSession: null,
@@ -105,7 +130,9 @@ export const useUiStore = create<UiState>((set) => ({
       diffPath: null,
       prOpen: false,
       prSeed: null,
+      worktreeRemoval: null,
       subagent: null,
+      renamingSession: null,
       toast: null,
     }),
 }));

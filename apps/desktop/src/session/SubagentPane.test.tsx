@@ -76,7 +76,8 @@ describe("SubagentPane", () => {
     expect(screen.getByText("worker in Store audit")).toBeInTheDocument();
     expect(screen.getByText("Done")).toBeInTheDocument();
     expect(screen.getByText("This is testing a sub agent")).toBeInTheDocument();
-    expect(screen.getByText("read_file crates/store.rs")).toBeInTheDocument();
+    expect(screen.getByText("read_file")).toBeInTheDocument();
+    expect(screen.getByText("crates/store.rs")).toBeInTheDocument();
   });
 
   it("returns to the parent session", async () => {

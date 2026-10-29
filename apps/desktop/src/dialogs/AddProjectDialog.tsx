@@ -1,11 +1,11 @@
-import type { DirListing, ProjectDetection } from "@grove/contract";
-import { useEffect, useState } from "react";
+import type { DirEntry, DirListing, FsRoots, ProjectDetection } from "@grove/contract";
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useBridge } from "../ipc/context";
 import { errorText } from "../ipc/errors";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import { Icon } from "../workspace/Icon";
-import { basename } from "../workspace/tree";
+import { normalizeFolderPath, projectNameFromPath } from "../workspace/tree";
 import { Dialog } from "./Dialog";
 
 /** Add a folder as a project: pick it, detect git, name it, save. */
@@ -26,9 +26,30 @@ export function AddProjectDialog() {
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
 
+  const [roots, setRoots] = useState<FsRoots | null>(null);
   const [listing, setListing] = useState<DirListing | null>(null);
+  const [address, setAddress] = useState("");
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerError, setPickerError] = useState<string | null>(null);
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [newFolderError, setNewFolderError] = useState<string | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
+
+  const addressRef = useRef<HTMLInputElement>(null);
+  const newFolderRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // The address is a path plus an optional trailing filter: at `D:/Dev/` typing `Zcon` narrows the
+  // listing to folders under Dev whose name contains "Zcon", without leaving Dev.
+  const currentPath = listing?.path ?? "";
+  const filter = addressFilter(address, currentPath);
+  const visibleDirs = filter
+    ? (listing?.dirs ?? []).filter((dir) =>
+        dir.name.toLowerCase().includes(filter.toLowerCase()),
+      )
+    : (listing?.dirs ?? []);
 
   useEffect(() => {
     if (!open) return;
@@ -41,17 +62,48 @@ export function AddProjectDialog() {
     setRemote("");
     setError(null);
     setWorking(false);
+    setRoots(null);
     setListing(null);
+    setAddress("");
     setPickerError(null);
+    setNewFolderOpen(false);
+    setNewFolderName("");
+    setNewFolderError(null);
+    setCreatingFolder(false);
+    setActiveIndex(-1);
   }, [open]);
 
-  const loadDirs = async (target?: string) => {
+  useEffect(() => {
+    if (mode === "picker") addressRef.current?.focus();
+  }, [mode]);
+
+  useEffect(() => {
+    if (newFolderOpen) newFolderRef.current?.focus();
+  }, [newFolderOpen]);
+
+  const loadRoots = async () => {
+    try {
+      setRoots(await bridge.invoke("fs_list_roots", {}));
+    } catch {
+      // Roots are shortcuts; a failure must not stop the picker from browsing folders.
+    }
+  };
+
+  const loadDirs = async (target?: string, focus: "address" | "list" = "address") => {
     setPickerLoading(true);
     setPickerError(null);
+    setNewFolderError(null);
     try {
       const next = await bridge.invoke("fs_list_dirs", target ? { path: target } : {});
       setListing(next);
+      // The slash is the cursor for the filter: every folder you enter ends with one, so typing
+      // narrows that folder's children instead of replacing the path.
+      setAddress(withTrailingSlash(next.path));
+      setActiveIndex(-1);
+      if (focus === "list") listRef.current?.focus();
+      else addressRef.current?.focus();
     } catch (err) {
+      // Keep the current listing and whatever the user typed; the error sits under the bar.
       setPickerError(errorText(err));
     } finally {
       setPickerLoading(false);
@@ -60,7 +112,64 @@ export function AddProjectDialog() {
 
   const openPicker = () => {
     setMode("picker");
+    setPickerError(null);
+    setNewFolderOpen(false);
+    setNewFolderName("");
+    setNewFolderError(null);
+    void loadRoots();
     void loadDirs(listing?.path);
+  };
+
+  const navigate = (raw: string, focus: "address" | "list" = "address") => {
+    const target = normalizeFolderPath(raw);
+    if (!target) {
+      setPickerError("Enter a folder path.");
+      return;
+    }
+    // Enter on a partial segment opens the selected (or first) match instead of erroring on a path
+    // that does not exist yet.
+    const exact = visibleDirs.find((dir) => dir.path.toLowerCase() === target.toLowerCase());
+    const match = exact ?? (filter ? visibleDirs[activeIndex >= 0 ? activeIndex : 0] : undefined);
+    void loadDirs(match?.path ?? target, focus);
+  };
+
+  const createFolder = async () => {
+    if (!listing || creatingFolder) return;
+    setCreatingFolder(true);
+    setNewFolderError(null);
+    try {
+      const entry: DirEntry = await bridge.invoke("fs_create_dir", {
+        parent: listing.path,
+        name: newFolderName,
+      });
+      setNewFolderOpen(false);
+      setNewFolderName("");
+      await loadDirs(entry.path, "list");
+    } catch (err) {
+      setNewFolderError(errorText(err));
+    } finally {
+      setCreatingFolder(false);
+    }
+  };
+
+  const handleListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const dirs = visibleDirs;
+    if (!dirs.length) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const next = Math.min(activeIndex + 1, dirs.length - 1);
+      setActiveIndex(next);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      const next = Math.max(activeIndex - 1, 0);
+      setActiveIndex(next);
+    } else if (event.key === "Enter" && activeIndex >= 0) {
+      event.preventDefault();
+      void loadDirs(dirs[activeIndex].path, "list");
+    } else if (event.key === "Backspace" && listing?.parent) {
+      event.preventDefault();
+      void loadDirs(listing.parent, "list");
+    }
   };
 
   const chooseFolder = async (folder: string) => {
@@ -70,7 +179,7 @@ export function AddProjectDialog() {
     try {
       const next = await bridge.invoke("project_detect", { path: folder });
       setDetection(next);
-      if (!nameDirty) setName(basename(next.path));
+      if (!nameDirty) setName(projectNameFromPath(next.path));
       setBranch(next.defaultBranch ?? "");
       setRemote(next.remote ?? "");
     } catch (err) {
@@ -106,9 +215,15 @@ export function AddProjectDialog() {
     }
   };
 
+  const activeRoot = (roots?.roots ?? [])
+    .filter((root) => rootContains(root.path, listing?.path ?? ""))
+    .sort((left, right) => right.path.length - left.path.length)[0]?.path;
+  const crumbs = breadcrumbs(listing?.path ?? "", roots?.home ?? null);
+
   return (
     <Dialog
       open={open}
+      className="add-project-dialog"
       labelledBy={mode === "form" ? "ap-title" : "ap-picker-title"}
       onClose={close}
     >
@@ -194,9 +309,7 @@ export function AddProjectDialog() {
                 </div>
               </div>
               <p className="field-hint">
-                {detection.currentBranch
-                  ? `Current branch: ${detection.currentBranch}. `
-                  : ""}
+                {detection.currentBranch ? `Current branch: ${detection.currentBranch}. ` : ""}
                 New sessions branch from the default branch.
               </p>
             </div>
@@ -226,49 +339,196 @@ export function AddProjectDialog() {
         <div id="ap-picker">
           <div className="dlg-head">
             <h2 id="ap-picker-title">Choose a folder</h2>
-            <button
-              className="icon-btn sm"
-              type="button"
-              aria-label="Back to new project"
-              onClick={() => setMode("form")}
-            >
+            <button className="icon-btn sm" type="button" aria-label="Close dialog" onClick={close}>
               <Icon name="x" size="sm" />
             </button>
           </div>
-          <p className="dlg-sub">Open folders by clicking them. Use this folder selects the one you are in.</p>
-          <div className="fp-bar">
+          <p className="dlg-sub">
+            Paste a path and press Enter, or open folders by clicking them. Type after the slash to
+            filter the folders you are in. Select folder uses the folder you are in.
+          </p>
+
+          <div className="fp-address-row">
             <button
               className="icon-btn sm"
               type="button"
               aria-label="Go up one folder"
-              disabled={!listing?.parent}
+              disabled={!listing?.parent || pickerLoading}
               onClick={() => listing?.parent && void loadDirs(listing.parent)}
             >
               <Icon name="chevronLeft" size="sm" />
             </button>
-            <p className="fp-path">{listing?.path ?? "…"}</p>
+            <input
+              ref={addressRef}
+              className="fp-address"
+              type="text"
+              aria-label="Folder path"
+              data-autofocus
+              autoComplete="off"
+              spellCheck={false}
+              value={address}
+              onChange={(event) => {
+                setAddress(event.target.value);
+                setActiveIndex(-1);
+                setPickerError(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  navigate(address);
+                } else if (event.key === "Escape") {
+                  setAddress(listing ? withTrailingSlash(listing.path) : "");
+                  setPickerError(null);
+                } else if (event.key === "ArrowDown" && visibleDirs.length) {
+                  event.preventDefault();
+                  setActiveIndex(0);
+                  listRef.current?.focus();
+                }
+              }}
+            />
+            <button
+              className="btn-ghost sm"
+              type="button"
+              aria-expanded={newFolderOpen}
+              disabled={!listing || pickerLoading}
+              onClick={() => {
+                setNewFolderOpen((wasOpen) => !wasOpen);
+                setNewFolderName("");
+                setNewFolderError(null);
+              }}
+            >
+              New folder
+            </button>
           </div>
-          <div className="fp-list">
+
+          {pickerError ? (
+            <p className="field-err" role="alert">
+              {pickerError}
+            </p>
+          ) : null}
+
+          {newFolderOpen ? (
+            <div className="fp-new-row">
+              <input
+                ref={newFolderRef}
+                className="fp-address"
+                type="text"
+                aria-label="New folder name"
+                placeholder="new-folder"
+                autoComplete="off"
+                spellCheck={false}
+                value={newFolderName}
+                onChange={(event) => {
+                  setNewFolderName(event.target.value);
+                  setNewFolderError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void createFolder();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    setNewFolderOpen(false);
+                    setNewFolderError(null);
+                  }
+                }}
+              />
+              <button
+                className="btn-primary sm"
+                type="button"
+                disabled={creatingFolder}
+                onClick={() => void createFolder()}
+              >
+                {creatingFolder ? "Creating…" : "Create"}
+              </button>
+            </div>
+          ) : null}
+
+          {newFolderError ? (
+            <p className="field-err" role="alert">
+              {newFolderError}
+            </p>
+          ) : null}
+
+          <nav className="fp-crumbs" aria-label="Folder path segments">
+            {crumbs.map((crumb, index) => (
+              <Fragment key={crumb.path}>
+                {index > 0 ? <span className="fp-crumb-sep">/</span> : null}
+                {index === crumbs.length - 1 ? (
+                  <span className="fp-crumb" aria-current="page">
+                    {crumb.label}
+                  </span>
+                ) : (
+                  <button
+                    className="fp-crumb"
+                    type="button"
+                    onClick={() => void loadDirs(crumb.path)}
+                  >
+                    {crumb.label}
+                  </button>
+                )}
+              </Fragment>
+            ))}
+          </nav>
+
+          {roots?.roots.length ? (
+            <div className="fp-chips" role="group" aria-label="Folder roots">
+              {roots.roots.map((root) => (
+                <button
+                  className="fp-chip"
+                  type="button"
+                  key={`${root.kind}:${root.path}`}
+                  aria-label={root.kind === "home" ? "Home folder" : root.name}
+                  aria-current={root.path === activeRoot ? "true" : undefined}
+                  title={root.path}
+                  onClick={() => void loadDirs(root.path)}
+                >
+                  {root.kind === "home" ? "~" : root.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <div
+            className="fp-list"
+            role="listbox"
+            aria-label="Folders"
+            aria-activedescendant={
+              activeIndex >= 0 ? `fp-option-${activeIndex}` : undefined
+            }
+            tabIndex={0}
+            ref={listRef}
+            onKeyDown={handleListKeyDown}
+          >
             {pickerLoading ? (
               <p className="git-empty">Reading folders…</p>
-            ) : pickerError ? (
-              <p className="git-empty">{pickerError}</p>
-            ) : listing?.dirs.length ? (
-              listing.dirs.map((dir) => (
+            ) : visibleDirs.length ? (
+              visibleDirs.map((dir, index) => (
                 <button
+                  id={`fp-option-${index}`}
                   className="fp-row"
                   type="button"
+                  role="option"
+                  aria-selected={index === activeIndex}
+                  tabIndex={-1}
                   key={dir.path}
+                  onMouseDown={() => setActiveIndex(index)}
                   onClick={() => void loadDirs(dir.path)}
                 >
                   <Icon name="folder" size="sm" />
                   <span className="fp-name">{dir.name}</span>
+                  <span className="chev">
+                    <Icon name="chevronRight" size="sm" />
+                  </span>
                 </button>
               ))
             ) : (
-              <p className="git-empty">No subfolders here.</p>
+              <p className="fp-empty">
+                {filter ? `No folders match “${filter}”.` : "No subfolders here."}
+              </p>
             )}
           </div>
+
           <div className="dlg-foot">
             <button className="btn-ghost" type="button" onClick={() => setMode("form")}>
               Back
@@ -279,11 +539,85 @@ export function AddProjectDialog() {
               disabled={!listing || pickerLoading}
               onClick={() => listing && void chooseFolder(listing.path)}
             >
-              Use this folder
+              Select folder
             </button>
           </div>
         </div>
       )}
     </Dialog>
   );
+}
+
+/** `D:/Dev` → `D:/Dev/`; a root (`D:/`, `/`) is already complete. */
+function withTrailingSlash(path: string): string {
+  if (!path) return "";
+  return path.endsWith("/") ? path : `${path}/`;
+}
+
+/**
+ * What the user typed after the current folder, if anything. Only a fragment under the listing
+ * counts as a filter; a different absolute path is left to Enter.
+ */
+function addressFilter(address: string, base: string): string {
+  if (!base) return "";
+  const root = withTrailingSlash(base);
+  const typed = address.replace(/\\/g, "/");
+  if (!typed.startsWith(root)) return "";
+  const rest = typed.slice(root.length);
+  if (!rest) return "";
+  return rest.split("/")[0] ?? "";
+}
+
+/** One clickable segment per folder; the last one is where the picker already is. */
+function breadcrumbs(path: string, home: string | null): Array<{ label: string; path: string }> {  const clean = path.replace(/\/+$/, "") || path;
+  if (!clean) return [];
+  const homePath = home?.replace(/\/+$/, "");
+
+  if (homePath && (clean === homePath || clean.startsWith(`${homePath}/`))) {
+    let at = homePath;
+    return [
+      { label: "Home", path: homePath },
+      ...clean
+        .slice(homePath.length)
+        .split("/")
+        .filter(Boolean)
+        .map((segment) => {
+          at = `${at}/${segment}`;
+          return { label: segment, path: at };
+        }),
+    ];
+  }
+
+  if (/^[A-Za-z]:/.test(clean)) {
+    const drive = clean.slice(0, 2);
+    let at = `${drive}/`;
+    return [
+      { label: drive, path: at },
+      ...clean
+        .slice(2)
+        .split("/")
+        .filter(Boolean)
+        .map((segment) => {
+          at = `${at.replace(/\/$/, "")}/${segment}`;
+          return { label: segment, path: at };
+        }),
+    ];
+  }
+
+  let at = clean.startsWith("/") ? "/" : "";
+  return clean
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => {
+      at = at === "/" ? `/${segment}` : at ? `${at}/${segment}` : segment;
+      return { label: segment, path: at };
+    });
+}
+
+/** Whether a root chip covers the current folder; the longest match wins. */
+function rootContains(rootPath: string, path: string): boolean {
+  if (!path) return false;
+  if (rootPath === path) return true;
+  if (rootPath === "/") return path.startsWith("/");
+  return path.startsWith(`${rootPath.replace(/\/+$/, "")}/`);
 }

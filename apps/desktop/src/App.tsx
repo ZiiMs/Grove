@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useBridge } from "./ipc/context";
 import {
   subscribeToGitChanged,
@@ -8,9 +8,19 @@ import {
 } from "./ipc/events";
 import { useSessionStore } from "./state/sessionStore";
 import { useContextStore } from "./state/contextStore";
+import { useMenuStore } from "./state/menuStore";
 import { useUiStore } from "./state/uiStore";
 import { useWorkspaceStore } from "./state/workspaceStore";
 import { NavTree } from "./shell/NavTree";
+import { NavResizer, useNavWidth } from "./shell/NavResizer";
+import { ContextMenuHost } from "./shell/ContextMenu";
+import { SessionInfoPanel } from "./session/SessionInfoPanel";
+import {
+  archiveSession,
+  projectMenuItems,
+  sessionMenuItems,
+  worktreeMenuItems,
+} from "./shell/menus";
 import { StatusBar } from "./shell/StatusBar";
 import { Titlebar } from "./shell/Titlebar";
 import { SessionSurface } from "./session/SessionSurface";
@@ -18,16 +28,20 @@ import { ContextPanel } from "./context/ContextPanel";
 import { SettingsModal } from "./settings/SettingsModal";
 import { NewSessionDialog } from "./dialogs/NewSessionDialog";
 import { AddProjectDialog } from "./dialogs/AddProjectDialog";
+import { WorktreeRemoveDialog } from "./dialogs/WorktreeRemoveDialog";
 import { DiffModal } from "./dialogs/DiffModal";
 import { PrDialog } from "./dialogs/PrDialog";
 import { Toast } from "./shell/Toast";
 import { Icon } from "./workspace/Icon";
 import { normalizePath, projectForSession, worktreeForSession } from "./workspace/tree";
 import { planProgress } from "./context/PlanPanel";
+import { providerMeta } from "./workspace/models";
+import { modelLabel } from "./workspace/modelLabel";
 
 /** The production shell: titlebar, tree, always-chat centre, context column, status bar. */
 export default function App() {
   const bridge = useBridge();
+  const [navWidth, setNavWidth] = useNavWidth();
   const sessions = useSessionStore((state) => state.sessions);
   const activeId = useSessionStore((state) => state.activeId);
   const detail = useSessionStore((state) => state.detail);
@@ -44,8 +58,12 @@ export default function App() {
   const refreshProjectGit = useWorkspaceStore((state) => state.refreshProjectGit);
   const view = useUiStore((state) => state.view);
   const setView = useUiStore((state) => state.setView);
+  const notify = useUiStore((state) => state.notify);
+  const openMenu = useMenuStore((state) => state.openMenu);
   const contextOpen = useUiStore((state) => state.contextOpen);
   const setContextOpen = useUiStore((state) => state.setContextOpen);
+  const infoOpen = useUiStore((state) => state.infoOpen);
+  const setInfoOpen = useUiStore((state) => state.setInfoOpen);
   const setContextTab = useUiStore((state) => state.setContextTab);
   const openNewSession = useUiStore((state) => state.openNewSession);
   const openAddProject = useUiStore((state) => state.openAddProject);
@@ -57,16 +75,32 @@ export default function App() {
   const refreshSpecs = useContextStore((state) => state.refreshSpecs);
   const refreshGit = useContextStore((state) => state.refreshGit);
   const applyPlan = useContextStore((state) => state.applyPlan);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState(() => {
+    try {
+      return localStorage.getItem("grove.navSearch") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  useEffect(() => {
+    try {
+      if (filter) localStorage.setItem("grove.navSearch", filter);
+      else localStorage.removeItem("grove.navSearch");
+    } catch {
+      // A blocked store must not affect the filter.
+    }
+  }, [filter]);
   const autoSelected = useRef(false);
 
   const activeSummary = sessions.find((row) => row.id === activeId) ?? null;
   const activeProject = activeSummary ? projectForSession(activeSummary, projects) : null;
   const activeWorktrees = activeProject ? (worktrees[activeProject.id] ?? []) : [];
   const activeWorktree = activeSummary ? worktreeForSession(activeSummary, activeWorktrees) : null;
+  const currentBranch = git?.branch ?? activeWorktree?.branch ?? null;
   const branches = activeProject ? (branchesByProject[activeProject.id] ?? []) : [];
   const planStats = plan ? planProgress(plan.markdown) : { done: 0, total: 0 };
-  const awaiting = sessions.filter((row) => row.awaiting);
+  // Archived sessions are hidden from the tree; they must not summon the "needs you" badge either.
+  const awaiting = sessions.filter((row) => row.awaiting && !row.archivedAt);
 
   useEffect(() => {
     void loadWorkspace(bridge);
@@ -83,11 +117,31 @@ export default function App() {
     };
     void subscribeToSessionEvents(bridge, (sessionId, event) => {
       useSessionStore.getState().applyEvent(sessionId, event);
+      // The first assistant reply is the moment a blank-title session has enough material to be
+      // named. `maybeGenerateTitle` guards one attempt per auto session per app run and never
+      // touches a manual title.
+      if (sessionId && event.kind === "message" && event.role === "assistant") {
+        void useSessionStore.getState().maybeGenerateTitle(bridge, sessionId);
+      }
       if (
         event.kind === "status" &&
         (event.state === "idle" || event.state === "ready" || event.state === "exited")
       ) {
         void useSessionStore.getState().flushQueue(bridge);
+        // A cross-provider model change queued behind a turn lands here, once the session is idle.
+        void useSessionStore
+          .getState()
+          .flushPendingModel(bridge)
+          .then((applied) => {
+            if (applied) {
+              notify(
+                `Session now runs on ${providerMeta(applied.provider).name} · ${modelLabel(
+                  applied.model,
+                  applied.provider,
+                )}`,
+              );
+            }
+          });
       }
     }).then(keep);
     void subscribeToGitChanged(bridge, (status) => {
@@ -103,11 +157,13 @@ export default function App() {
       active = false;
       stops.forEach((stop) => stop());
     };
-  }, [applyPlan, bridge, refreshGit, refreshSpecs]);
+  }, [applyPlan, bridge, notify, refreshGit, refreshSpecs]);
 
-  // Restore the last conversation once the list and preferences are both here.
+  // Restore the last conversation once the list and preferences are both here. An archived session
+  // is not a launch target: it opens from the Archive section, on purpose.
   useEffect(() => {
-    if (autoSelected.current || loading || sessions.length === 0) return;
+    const restorable = sessions.filter((row) => !row.archivedAt);
+    if (autoSelected.current || loading || restorable.length === 0) return;
     autoSelected.current = true;
     if (!prefs.restoreSessions) return;
     let restore: string | null = null;
@@ -116,7 +172,8 @@ export default function App() {
     } catch {
       restore = null;
     }
-    const id = restore && sessions.some((row) => row.id === restore) ? restore : sessions[0].id;
+    const id =
+      restore && restorable.some((row) => row.id === restore) ? restore : restorable[0].id;
     void select(bridge, id);
     setContextTab("git");
   }, [bridge, loading, prefs.restoreSessions, select, sessions, setContextTab]);
@@ -136,9 +193,23 @@ export default function App() {
     setView("session");
   };
 
+  /** Opening the context column only covers the floating panel; `infoOpen` keeps the user's intent. */
+  const openContext = () => {
+    setContextOpen(true);
+  };
+  const infoVisible = infoOpen && !contextOpen;
+  const toggleInfo = () => {
+    if (infoVisible) {
+      setInfoOpen(false);
+      return;
+    }
+    setInfoOpen(true);
+    setContextOpen(false);
+  };
+
   const onGit = () => {
     setContextTab("git");
-    setContextOpen(true);
+    openContext();
     setView(window.matchMedia("(max-width: 899px)").matches ? "context" : "session");
   };
 
@@ -164,7 +235,12 @@ export default function App() {
   );
 
   return (
-    <div className="app" id="app" data-ctx={contextOpen ? "open" : "closed"}>
+    <div
+      className="app"
+      id="app"
+      data-ctx={contextOpen ? "open" : "closed"}
+      data-info={infoVisible ? "open" : "closed"}
+    >
       <Titlebar
         project={activeProject}
         session={detail}
@@ -174,6 +250,8 @@ export default function App() {
         awaitingCount={awaiting.length}
         onGit={onGit}
         onAwaiting={onAwaiting}
+        infoOpen={infoVisible}
+        onInfo={toggleInfo}
       />
 
       <nav className="mobile-nav" role="tablist" aria-label="Workspace pane">
@@ -186,7 +264,7 @@ export default function App() {
             aria-controls={`panel-${entry.id}`}
             aria-selected={view === entry.id}
             onClick={() => {
-              if (entry.id === "context") setContextOpen(true);
+              if (entry.id === "context") openContext();
               setView(entry.id);
             }}
           >
@@ -195,7 +273,10 @@ export default function App() {
         ))}
       </nav>
 
-      <div className="workspace">
+      <div
+        className="workspace"
+        style={{ "--nav-user": `${navWidth}px` } as CSSProperties}
+      >
         <NavTree
           active={view === "nav"}
           filter={filter}
@@ -206,6 +287,17 @@ export default function App() {
           onNewChat={() => newSessionFor(null, null)}
           onAddProject={openAddProject}
           onSettings={() => openSettings("general")}
+          onSessionMenu={(row, anchor) =>
+            openMenu({ ...anchor, items: sessionMenuItems(bridge, row) })
+          }
+          onProjectMenu={(project, anchor) =>
+            openMenu({ ...anchor, items: projectMenuItems(bridge, project) })
+          }
+          onWorktreeMenu={(project, worktree, anchor) =>
+            openMenu({ ...anchor, items: worktreeMenuItems(bridge, project, worktree) })
+          }
+          onArchiveSession={(row) => void archiveSession(bridge, row)}
+          onRestoreSession={(id) => void useSessionStore.getState().restore(bridge, id)}
         />
 
         <SessionSurface active={view === "session"} />
@@ -225,12 +317,14 @@ export default function App() {
               aria-expanded={false}
               aria-label="Show context panel"
               title="Show context panel"
-              onClick={() => setContextOpen(true)}
+              onClick={openContext}
             >
               <Icon name="chevronLeft" />
             </button>
           </div>
         ) : null}
+
+        <NavResizer width={navWidth} onChange={setNavWidth} />
       </div>
 
       <StatusBar
@@ -238,17 +332,29 @@ export default function App() {
         sessions={sessions}
         session={detail}
         project={activeProject}
-        branch={git?.branch ?? activeWorktree?.branch ?? null}
+        branch={currentBranch}
         events={events}
         plan={planStats}
         prefs={prefs}
       />
 
+      {infoVisible ? (
+        <SessionInfoPanel
+          project={activeProject}
+          worktree={activeWorktree}
+          branch={currentBranch}
+          plan={planStats}
+          onClose={() => setInfoOpen(false)}
+        />
+      ) : null}
+
       <NewSessionDialog />
       <AddProjectDialog />
+      <WorktreeRemoveDialog />
       <DiffModal />
       <PrDialog project={activeProject} />
       <SettingsModal />
+      <ContextMenuHost />
       <Toast />
     </div>
   );

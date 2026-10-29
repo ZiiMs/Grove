@@ -74,7 +74,8 @@
   --r-sm:max(0px, calc(var(--t-r) - 2px));
   --r:var(--t-r);
   --r-lg:calc(var(--t-r) + 2px);
-  --nav:272px; --ctx:304px;
+  --nav:300px; --ctx:304px;
+  --chat-max:730px;
   --mono:var(--t-font-mono);
   --sans:var(--t-font-body);
   --display:var(--t-font-display);
@@ -188,6 +189,8 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .btn-primary[disabled]{opacity:.5}
 .btn-ghost.danger{color:var(--red);border-color:color-mix(in srgb, var(--t-bad) 38%, var(--line))}
 .btn-ghost.danger:hover{background:var(--red-soft)}
+.btn-primary.danger{background:var(--red);color:var(--bg)}
+.btn-primary.danger:hover{background:color-mix(in srgb, var(--red) 84%, #000)}
 .icon-btn{
   width:30px;height:30px;display:grid;place-items:center;border-radius:var(--r);
   color:var(--fg-2);transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
@@ -202,20 +205,65 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .mobile-nav button[aria-selected="true"]{background:var(--elev);border-color:var(--line-2);color:var(--fg)}
 
 /* ---------- workspace ---------- */
-.workspace{position:relative;display:grid;grid-template-columns:var(--nav) minmax(0,1fr) var(--ctx);min-height:0;height: 100%;}
+.workspace{position:relative;display:grid;grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) var(--ctx);min-height:0;height: 100%;}
 .panel{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel)}
 .nav{border-right:1px solid var(--line)}
-.session{background:var(--bg)}
+/* Drag the right edge of the tree. The strip is absolute inside the grid so it overlaps neither
+   column's content; the width itself lives on the workspace as --nav-user (see shell/NavResizer). */
+.nav-resizer{position:absolute;top:0;bottom:0;left:calc(var(--nav-user,var(--nav)) - 4px);width:8px;z-index:6;cursor:col-resize;touch-action:none}
+.nav-resizer::after{
+  content:"";position:absolute;top:0;bottom:0;left:3px;width:2px;border-radius:1px;
+  background:transparent;transition:background var(--dur) var(--ease);
+}
+.nav-resizer:hover::after,.nav-resizer[data-dragging="true"]::after,.nav-resizer:focus-visible::after{
+  background:color-mix(in srgb, var(--t-accent) 60%, var(--line));
+}
+.nav-resizer:focus-visible{outline:none}
+body.nav-resizing{cursor:col-resize;user-select:none}
+.session{background:var(--bg);--session-pad-x:clamp(16px,3vw,24px)}
 .context{border-left:1px solid var(--line);background:var(--panel)}
 .ctx-stub{position:absolute;top:6px;right:6px;z-index:5;display:flex}
 .ctx-stub .icon-btn{color:var(--fg-3)}
 .ctx-stub .icon-btn:hover{background:var(--elev);color:var(--fg)}
-.app[data-ctx="closed"] .workspace{grid-template-columns:var(--nav) minmax(0,1fr) 0}
+.app[data-ctx="closed"] .workspace{grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) 0}
 .app[data-ctx="closed"] .context{display:none}
 .app[data-ctx="closed"] .session-head{padding-right:54px}
 
 /* ---------- nav ---------- */
-.nav-top{padding:10px 10px 8px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.nav-top{padding:10px 10px 8px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:8px;position:relative}
+.nav-head{display:flex;align-items:center;gap:6px;min-width:0}
+.nav-title{display:flex;align-items:baseline;gap:5px;flex:1;min-width:0}
+.nav-title strong{font-size:12px;font-weight:600;letter-spacing:.01em;white-space:nowrap}
+.nav-count{font-family:var(--mono);font-size:10px;color:var(--fg-3)}
+.nav-await{font-family:var(--mono);font-size:9px;line-height:14px;color:var(--amber);background:var(--amber-soft);border-radius:99px;padding:0 5px}
+.nav-actions{display:flex;align-items:center;gap:0;flex:none}
+.nav-btn{position:relative;width:22px;height:22px;display:grid;place-items:center;border-radius:4px;color:var(--fg-3);transition:background var(--dur) var(--ease),color var(--dur) var(--ease)}
+.nav-btn:hover{background:var(--elev);color:var(--fg)}
+.nav-btn[aria-pressed="true"]{background:var(--elev);color:var(--fg)}
+.nav-btn:disabled{opacity:.35;cursor:default}
+.nav-badge{position:absolute;top:-4px;right:-4px;min-width:12px;height:12px;padding:0 3px;border-radius:7px;background:var(--jade);color:var(--jade-ink);font-family:var(--mono);font-size:8px;font-weight:700;display:grid;place-items:center}
+.nav-pop{position:absolute;z-index:25;top:calc(100% - 2px);right:8px;width:232px;max-height:70dvh;overflow-y:auto;background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r-lg);box-shadow:0 18px 42px rgba(0,0,0,.5);padding:10px}
+.nav-pop h4{margin:8px 0 3px;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
+.nav-pop h4:first-child{margin-top:0}
+.nav-pop label{display:flex;align-items:center;gap:7px;padding:3px 2px;font-size:11.5px;color:var(--fg-2);cursor:pointer}
+.nav-pop label:hover{color:var(--fg)}
+.nav-pop input{accent-color:var(--jade)}
+.nav-select{width:100%;background:var(--sunken);border:1px solid var(--line-2);border-radius:var(--r);padding:5px 7px;font-size:11.5px;color:var(--fg)}
+.nav-pop-foot{display:flex;justify-content:space-between;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+.nav-sort-row{display:flex;align-items:center;justify-content:space-between;width:100%;padding:5px 4px;border-radius:4px;font-size:11.5px;color:var(--fg-2);text-align:left}
+.nav-sort-row:hover{background:var(--elev);color:var(--fg)}
+.nav-sort-row[aria-pressed="true"]{color:var(--fg);background:var(--elev)}
+.nav-dir{display:flex;gap:4px}
+.nav-dir button{flex:1;padding:4px 6px;font-size:10.5px;border:1px solid var(--line-2);border-radius:4px;color:var(--fg-3)}
+.nav-dir button[aria-pressed="true"]{color:var(--fg);background:var(--elev)}
+.nav-btn.archive-toggle[aria-pressed="true"]{background:var(--jade-soft);color:var(--jade)}
+.archive-banner{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid color-mix(in srgb, var(--jade) 30%, var(--line));background:var(--jade-soft);border-radius:var(--r)}
+.archive-banner-icon{display:flex;color:var(--jade);flex:none}
+.archive-banner-copy{flex:1;min-width:0}
+.archive-banner-copy strong{display:block;font-size:11.5px;font-weight:600;color:var(--fg)}
+.archive-banner-copy span{display:block;font-size:10px;color:var(--fg-3);margin-top:1px}
+.archive-banner .btn-ghost{flex:none;font-size:10.5px;padding:4px 7px}
+.s-pin{display:flex;flex:none;color:var(--jade);margin-left:2px}
 .search{position:relative;display:flex;align-items:center}
 .search-ico{position:absolute;left:9px;display:flex;color:var(--fg-3);pointer-events:none}
 .search input{
@@ -397,7 +445,7 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .composer-box textarea{width:100%;background:none;border:0;resize:none;padding:2px 0;font-size:13.5px;line-height:1.55;color:var(--fg);max-height:132px}
 .composer-box textarea:focus{outline:none}
 .composer-box textarea::placeholder{color:var(--fg-3)}
-.composer-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.composer-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 /* ---------- searchable combo ---------- */
 .combo{position:relative;min-width:0}
 .combo-trigger{
@@ -441,25 +489,18 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .field .combo-pop{width:100%;min-width:100%}
 .field .combo-list{max-height:240px}
 .combo-dialog .combo-list{max-height:160px}
-.composer-foot .combo{flex:none;max-width:260px}
-.composer-foot .combo-trigger{
-  width:auto;max-width:260px;background:var(--elev);
-  padding:4px 6px 4px 8px;font-size:12px;font-family:var(--mono);color:var(--fg-2);
-}
-.composer-foot .combo-thinking{max-width:190px}
-.composer-foot .combo-pop{width:min(360px,calc(100vw - 32px));min-width:0}
-.composer-foot .combo-thinking .combo-pop{width:190px}
 .btn-send{
-  display:inline-flex;align-items:center;gap:6px;
+  display:inline-flex;align-items:center;justify-content:center;
   background:var(--jade);color:var(--jade-ink);font-weight:600;font-size:12.5px;
-  padding:6px 12px;border-radius:var(--r);
+  width:30px;height:30px;padding:0;border-radius:var(--r);
 }
 .btn-send:hover{background:var(--jade-hi)}
-.foot-actions{margin-left:auto;display:flex;align-items:center;gap:6px}
+.foot-actions{margin-left:0;display:flex;align-items:center;gap:6px}
+.send-stack{display:flex;flex-direction:column;align-items:center;gap:5px}
 .btn-stop{
-  display:inline-flex;align-items:center;gap:6px;
+  display:inline-flex;align-items:center;justify-content:center;
   border:1px solid color-mix(in srgb, var(--t-bad) 46%, var(--line));background:var(--red-soft);color:var(--red);
-  font-weight:600;font-size:12.5px;padding:6px 12px;border-radius:var(--r);
+  font-weight:600;font-size:12.5px;width:30px;height:30px;padding:0;border-radius:var(--r);
   transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease);
 }
 .btn-stop:hover{background:color-mix(in srgb, var(--t-bad) 18%, transparent);border-color:color-mix(in srgb, var(--t-bad) 62%, var(--line))}
@@ -608,7 +649,7 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 
 /* diff popup */
 dialog.diff-modal{width:min(1180px,calc(100vw - 44px));height:min(820px,calc(100dvh - 44px));max-width:none;max-height:none;
-  padding:0;overflow:hidden;border:1px solid var(--line-2);border-radius:12px;background:var(--panel);color:var(--fg);
+  padding:0;overflow:hidden;border:1px solid var(--line-2);border-radius:12px;background:color-mix(in srgb, var(--panel) 62%, transparent);color:var(--fg);
   box-shadow:0 30px 90px rgba(0,0,0,.55)}
 .dd-shell{display:flex;flex-direction:column;height:100%;min-height:0}
 .dd-head{display:flex;align-items:center;gap:9px;padding:11px 12px 11px 16px;border-bottom:1px solid var(--line);flex:none}
@@ -663,23 +704,17 @@ dialog.diff-modal{width:min(1180px,calc(100vw - 44px));height:min(820px,calc(100
 .sb-item{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--fg-3)}
 
 /* ---------- dialog ---------- */
+/* Every modal is a translucent glass panel over a blurred, undimmed app. */
 dialog{
   width:min(500px,calc(100vw - 30px));max-height:calc(100dvh - 40px);overflow:auto;
-  border:1px solid var(--line-2);border-radius:12px;background:var(--elev);color:var(--fg);
+  border:1px solid var(--line-2);border-radius:12px;color:var(--fg);
+  background:color-mix(in srgb, var(--elev) 58%, transparent);
+  -webkit-backdrop-filter:blur(20px) saturate(1.06);backdrop-filter:blur(20px) saturate(1.06);
   padding:18px 20px 20px;box-shadow:0 22px 70px rgba(0,0,0,.6);
 }
-dialog::backdrop{background:color-mix(in srgb, var(--bg) 78%, #000)}
-dialog.settings-modal::backdrop{
-  background:color-mix(in srgb, #000 38%, transparent);
-  -webkit-backdrop-filter:blur(2px);
-  backdrop-filter:blur(2px);
-}
-dialog.skill-install-dialog::backdrop,
-dialog.skill-source-dialog::backdrop,
-dialog.skill-uninstall-dialog::backdrop{
-  background:color-mix(in srgb, #000 30%, transparent);
-  -webkit-backdrop-filter:blur(2px);
-  backdrop-filter:blur(2px);
+dialog::backdrop{
+  background:transparent;
+  -webkit-backdrop-filter:blur(12px) saturate(1.02);backdrop-filter:blur(12px) saturate(1.02);
 }
 dialog.skill-install-dialog{overflow:visible}
 .dlg-head{display:flex;align-items:flex-start;gap:10px}
@@ -707,16 +742,40 @@ dialog.skill-install-dialog{overflow:visible}
 .git-detect-head{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--fg-2)}
 .git-detect-head .od-icon{color:var(--jade)}
 .git-none{font-size:11.5px;color:var(--fg-3);line-height:1.55;margin-top:13px;border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:10px}
-.fp-bar{display:flex;align-items:center;gap:8px;padding:8px 0 7px;border-bottom:1px solid var(--line)}
-.fp-path{flex:1;min-width:0;margin:0;font-family:var(--mono);font-size:11.5px;color:var(--fg-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fp-list{max-height:300px;min-height:140px;overflow-y:auto;padding:6px 0}
+dialog.add-project-dialog{width:min(760px,calc(100vw - 32px))}
+dialog.worktree-delete-dialog{width:min(560px,calc(100vw - 30px))}
+.delete-options{margin-top:12px}
+.delete-opt{display:flex;align-items:flex-start;gap:9px;padding:9px 0;border-top:1px solid var(--line);cursor:pointer}
+.delete-opt:first-child{border-top:0}
+.delete-opt input{margin-top:2px;flex:none;accent-color:var(--red)}
+.delete-opt strong{display:block;font-size:12.5px;font-weight:600;color:var(--fg)}
+.delete-opt .opt{display:block;font-size:11px;color:var(--fg-3);margin-top:2px;line-height:1.4}
+.delete-opt[data-disabled="true"]{opacity:.55;cursor:default}
+.fp-address-row{display:flex;align-items:center;gap:8px;padding:9px 0 7px}
+.fp-address{flex:1;min-width:0;background:var(--sunken);border:1px solid var(--line-2);border-radius:var(--r);padding:7px 9px;font-family:var(--mono);font-size:11.5px;color:var(--fg)}
+.fp-address::placeholder{color:var(--fg-3)}
+.fp-address:focus{outline:none;border-color:color-mix(in srgb, var(--t-accent) 55%, var(--line));box-shadow:0 0 0 3px color-mix(in srgb, var(--t-accent) 12%, transparent)}
+.fp-crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:1px;padding:0 0 8px}
+.fp-crumb{font-size:11px;color:var(--fg-2);padding:2px 4px;border-radius:4px}
+button.fp-crumb:hover{background:var(--sunken);color:var(--fg)}
+.fp-crumb[aria-current="page"]{color:var(--fg-3)}
+.fp-crumb-sep{color:var(--fg-3);font-size:11px}
+.fp-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 0 9px}
+.fp-chip{font-family:var(--mono);font-size:10.5px;color:var(--fg-3);border:1px solid var(--line-2);border-radius:99px;padding:2px 8px}
+.fp-chip:hover{color:var(--fg);border-color:color-mix(in srgb, var(--t-accent) 40%, var(--line-2))}
+.fp-chip[aria-current="true"]{color:var(--jade);border-color:color-mix(in srgb, var(--t-accent) 45%, var(--line));background:var(--jade-soft)}
+.fp-new-row{display:flex;align-items:center;gap:8px;padding:0 0 8px}
+.fp-list{max-height:46dvh;min-height:200px;overflow-y:auto;padding:6px 0;border-top:1px solid var(--line)}
 .fp-row{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px;border-radius:var(--r);font-size:13px;color:var(--fg-2)}
-.fp-row:hover{background:var(--sunken);color:var(--fg)}
+.fp-row:hover,.fp-row[aria-selected="true"]{background:var(--sunken);color:var(--fg)}
+.fp-row:focus-visible{outline:2px solid color-mix(in srgb, var(--t-accent) 60%, transparent);outline-offset:-2px}
 .fp-row .fp-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fp-row .fp-git{flex:none;font-family:var(--mono);font-size:9.5px;color:var(--jade);border:1px solid color-mix(in srgb, var(--t-accent) 34%, var(--line));background:var(--jade-soft);border-radius:3px;padding:0 4px}
 .fp-row .chev{display:flex;color:var(--fg-3)}
 .fp-empty{padding:24px 8px;font-size:12px;color:var(--fg-3);text-align:center}
 .field-label{display:block;font-size:12px;font-weight:600;color:var(--fg-2);margin-bottom:6px}
+.field-label-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.field-label-row label{font-size:12px;font-weight:600;color:var(--fg-2)}
+.field-tight input[readonly]{color:var(--fg-2)}
 .wt-block{margin-top:13px;display:flex;flex-direction:column;gap:9px}
 .switch-row{
   display:flex;align-items:flex-start;gap:10px;padding:10px;
@@ -744,7 +803,7 @@ dialog.skill-install-dialog{overflow:visible}
 dialog.settings-modal{
   width:min(1120px,calc(100vw - 48px));height:min(800px,calc(100dvh - 48px));
   max-width:none;max-height:none;padding:0;overflow:hidden;
-  border-radius:14px;border:1px solid var(--line-2);background:var(--panel);color:var(--fg);
+  border-radius:14px;border:1px solid var(--line-2);background:color-mix(in srgb, var(--panel) 62%, transparent);color:var(--fg);
   box-shadow:0 28px 90px rgba(0,0,0,.62);
 }
 .sm-shell{display:flex;flex-direction:column;height:100%;min-height:0}
@@ -768,6 +827,7 @@ dialog.settings-modal{
 .sm-form{max-width:540px;margin-top:18px}
 .sm-form .field:first-child{margin-top:0}
 .sm-form .switch-row{margin-top:14px}
+.sm-group-title{margin:22px 0 10px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3)}
 .sm-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 22px;border-top:1px solid var(--line);flex:none}
 
 @media (max-width:700px){
@@ -900,9 +960,11 @@ dialog.settings-modal{
 /* ---------- responsive ---------- */
 @media (max-width:1279px){
   :root{--nav:248px;--ctx:288px}
-  .run-scroll{padding:18px 16px 28px}
-  .composer{padding:10px 16px 13px}
   .session-head{padding:0 14px}
+  /* The dragged width is a wide-window preference; the compact layouts keep their own columns. */
+  .workspace{grid-template-columns:var(--nav) minmax(0,1fr) var(--ctx)}
+  .app[data-ctx="closed"] .workspace{grid-template-columns:var(--nav) minmax(0,1fr) 0}
+  .nav-resizer{display:none}
 }
 @media (max-width:1099px){
   :root{--nav:236px;--ctx:272px}
@@ -919,8 +981,6 @@ dialog.settings-modal{
   .window-btn{width:44px}
   .ctx-stub{display:none}
   .app[data-ctx="closed"] .session-head{padding-right:14px}
-  .run-scroll{padding:16px 14px 26px}
-  .composer{padding:9px 14px 12px}
   .session-head{padding:0 12px;height:42px}
   .toast{bottom:38px;right:12px}
   .sb-right .sb-item.tidy{display:none}
@@ -932,7 +992,6 @@ dialog.settings-modal{
   .sb-right .sb-item.mono{display:none}
   #status-live{display:inline-block;max-width:186px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .grid-2{grid-template-columns:1fr}
-  .turn-user .bubble{max-width:94%}
   .await-chip .await-text{display:none}
   .await-chip{width:26px;height:26px;justify-content:center;padding:0}
 }
@@ -1076,20 +1135,29 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .pd-manage-foot{justify-content:space-between;padding:0 18px 18px;margin-top:0}
 
 /* ---------- airy prose session ---------- */
-.session .run-scroll{padding:clamp(16px,3vw,26px) clamp(16px,2.6vw,34px) clamp(22px,4vw,30px)}
-.session .run-inner{max-width:min(1080px,100%)}
-.session .turn{margin-bottom:clamp(18px,2.4vw,22px)}
-.session .turn-foot{margin-top:7px;font-size:9.5px;opacity:.6}
-.session .turn > p{font-size:14px;line-height:1.8;max-width:100%}
+.session .run-scroll{
+  padding:18px var(--session-pad-x) 0;display:flex;flex-direction:column;
+  scrollbar-width:thin;scrollbar-color:transparent transparent;
+}
+.session .run-scroll[data-scrolling="true"]{scrollbar-color:color-mix(in srgb, var(--fg-3) 45%, transparent) transparent}
+.session .run-scroll::-webkit-scrollbar{width:8px;height:8px}
+.session .run-scroll::-webkit-scrollbar-track{background:transparent}
+.session .run-scroll::-webkit-scrollbar-thumb{background:transparent;border-radius:99px;border:2px solid transparent;background-clip:padding-box}
+.session .run-scroll[data-scrolling="true"]::-webkit-scrollbar-thumb{background:color-mix(in srgb, var(--fg-3) 45%, transparent);background-clip:padding-box}
+.session .run-inner{max-width:min(var(--chat-max),100%);padding-bottom:26px}
+.session .turn{margin-bottom:16px}
+.session .turn-foot{margin-top:6px;font-size:9.5px;opacity:.6}
+.session .turn > p{font-size:14px;line-height:1.72;max-width:100%}
 .session .turn-code{font-size:11.5px;line-height:1.7;margin:10px 0 0;padding:10px 12px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r);overflow-x:auto}
 .session .turn-thinking{color:var(--fg-3);font-size:12.5px;line-height:1.7;margin-bottom:8px}
 .session .turn-user{align-items:flex-end}
-.session .turn-user .bubble{max-width:min(85%,720px);background:var(--elev);border:1px solid var(--line);border-radius:14px 14px 4px 14px;padding:9px 12px}
+.session .turn-user .bubble{max-width:min(82%,560px);background:var(--elev);border:1px solid var(--line);border-radius:14px 14px 4px 14px;padding:9px 12px}
 .session .turn-user .bubble p{font-size:13.5px;line-height:1.65;color:var(--fg)}
 .session .tool{margin:0;border:0;border-radius:0;background:transparent;overflow:visible}
 .session .tool-head{padding:1px 0;font-family:var(--mono);font-size:11px;color:var(--fg-3);gap:8px;border-radius:3px}
 .session .tool-head:hover{background:transparent;color:var(--fg-2)}
-.session .tool-ico{display:none}
+.session .tool-ico{display:flex;color:var(--fg-3)}
+.tool-filetype{display:flex;flex:none;margin-right:-3px}
 .session .tool-name{font-weight:400;color:var(--fg-2);font-size:11px}
 .session .tool-target{font-size:11px}
 .session .tool-time{font-size:10px}
@@ -1104,13 +1172,30 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .session .perm-cmd{margin:6px 0 4px;background:transparent;border:0;border-radius:0;padding:0;font-size:11.5px;overflow:visible}
 .session .perm-note{font-size:11.5px;color:var(--fg-3);max-width:100%}
 .session .perm-actions{margin-top:10px;gap:8px}
-.session .composer{padding:12px clamp(16px,2.6vw,34px) 16px;background:var(--bg)}
-.session .composer-inner{max-width:min(1080px,100%)}
+.session .composer{position:relative;padding:10px clamp(16px,3vw,24px) 14px;border-top:0;background:var(--bg)}
+/* The composer lives inside the transcript scroller (so the scrollbar spans the whole chat),
+   sticks to the bottom while reading, and goes full-bleed across the scroller's side padding. */
+.session .run-scroll > .composer{
+  position:sticky;bottom:0;z-index:3;margin-top:auto;
+  margin-left:calc(-1 * var(--session-pad-x));margin-right:calc(-1 * var(--session-pad-x));
+}
+.session .composer::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:26px;background:linear-gradient(180deg,transparent,var(--bg));pointer-events:none}
+.session .composer-inner{max-width:min(var(--chat-max),100%)}
 .session .composer-box{border-color:transparent;background:transparent;padding:6px 8px;border-radius:var(--r);box-shadow:none;transition:border-color var(--dur) var(--ease),background var(--dur) var(--ease)}
 .session .composer-box:focus-within{border-color:var(--line-2);background:var(--sunken);box-shadow:none}
 .session .composer-box textarea{font-size:14px;line-height:1.6;max-height:96px}
-.session .composer-foot .combo-trigger{font-size:10px;background:transparent;border-color:var(--line-2);color:var(--fg-3);padding:3px 6px}
 .session .empty{border:0;background:transparent;padding:24px 0}
+
+/* The session block sits after the shared responsive section, so its breakpoints live here to win
+   the cascade at the same specificity. */
+@media (max-width:899px){
+  .session{--session-pad-x:14px}
+  .session .run-scroll{padding:16px var(--session-pad-x) 0}
+  .session .composer{padding:9px 14px 12px}
+}
+@media (max-width:640px){
+  .session .turn-user .bubble{max-width:100%}
+}
 
 /* ---------- inline question card ---------- */
 .qcard{
@@ -1175,3 +1260,171 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .qa .qv b{color:var(--fg);font-weight:600}
 .dismissed-card{display:flex;align-items:center;gap:8px;border:1px dashed var(--line-2);border-radius:var(--r-lg);padding:10px 12px;font-size:11.5px;color:var(--amber);max-width:100%}
 .dismissed-card .btn-ghost{margin-left:auto}
+
+/* ---------- inline composer pickers ---------- */
+.composer-pickers{display:inline-flex;align-items:center;gap:4px}
+.inline-picker{display:inline-flex;align-items:center}
+.inline-picker .combo-trigger{
+  width:auto;background:transparent;border:0;padding:4px 6px;font-size:12px;color:var(--fg-3);
+}
+.inline-picker .combo-trigger:hover{background:var(--hover);color:var(--fg)}
+.inline-picker .combo-trigger[aria-expanded="true"]{background:var(--hover);color:var(--fg);box-shadow:none}
+.inline-picker + .inline-picker::before{content:"·";color:var(--fg-3);margin:0 2px}
+.approval-picker{
+  flex:none;display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;padding:0;border:0;border-radius:var(--r-sm);
+  background:transparent;color:var(--fg-3);cursor:pointer;
+}
+.approval-picker:hover{background:var(--hover);color:var(--fg)}
+.approval-picker[data-mode="full"]{color:var(--jade)}
+.approval-picker:focus-visible{outline:2px solid var(--jade);outline-offset:1px}
+.inline-picker .combo-pop{width:min(340px,calc(100vw - 32px));min-width:0}
+.inline-picker.thinking-picker .combo-pop{width:190px}
+.combo-trigger-icon,.combo-option-icon{display:flex;flex:none;align-items:center;justify-content:center}
+.combo-option-icon{width:16px}
+.provider-glyph{display:block;flex:none}
+.combo-option:disabled{cursor:default;opacity:.45}
+.combo-option:disabled:hover{background:transparent;color:var(--fg-2)}
+.combo-footer{border-top:1px solid var(--line);padding:5px}
+.combo-footer-action{
+  width:100%;display:flex;align-items:center;gap:7px;text-align:left;
+  padding:6px 8px;border-radius:var(--r-sm);font-size:12px;color:var(--fg-2);
+  transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
+}
+.combo-footer-action:hover{background:var(--elev);color:var(--fg)}
+
+/* ---------- context menu (ticket C1) ---------- */
+.ctx-menu{
+  position:fixed;z-index:90;min-width:196px;max-width:300px;padding:4px;
+  display:flex;flex-direction:column;gap:1px;
+  background:var(--elev);border:1px solid var(--line-2);border-radius:var(--r);
+  box-shadow:var(--panel-shadow);
+}
+.ctx-item{
+  display:flex;align-items:center;gap:8px;width:100%;height:29px;padding:0 8px;
+  border-radius:calc(var(--r) - 2px);text-align:left;font-size:12.5px;color:var(--fg-2);
+}
+.ctx-item:hover,.ctx-item:focus-visible{background:var(--hover);color:var(--fg);outline:none}
+.ctx-item:disabled{opacity:.45;color:var(--fg-3)}
+.ctx-item[data-danger="true"]{color:var(--red)}
+.ctx-item[data-danger="true"]:hover,.ctx-item[data-danger="true"]:focus-visible{background:var(--red-soft)}
+.ctx-ico{flex:none;width:14px;display:flex;color:var(--fg-3)}
+.ctx-item[data-danger="true"] .ctx-ico{color:var(--red)}
+.ctx-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctx-shortcut{flex:none;font-family:var(--mono);font-size:10px;color:var(--fg-3)}
+.ctx-sep{height:1px;margin:4px 6px;background:var(--line)}
+.session-block{position:relative}
+.session-block .session-row{padding-right:44px}
+.session-actions{
+  position:absolute;right:3px;top:3px;display:flex;gap:1px;
+  opacity:0;transition:opacity var(--dur) var(--ease);
+}
+.session-block:hover .session-actions,.session-block:focus-within .session-actions{opacity:1}
+.session-actions .icon-btn{width:20px;height:20px}
+@media (hover:none){.session-actions{opacity:1}}
+
+/* ---------- inline session rename (ticket C2) ---------- */
+.session-row.is-editing{background:var(--elev);color:var(--fg)}
+.session-rename{
+  flex:1;min-width:0;background:transparent;border:0;outline:0;padding:0;
+  font:inherit;font-size:12.5px;color:var(--fg);caret-color:var(--jade);
+}
+.session-rename[aria-invalid="true"]{color:var(--red)}
+.session-rename-error{
+  padding:2px 8px 4px 26px;font-size:10.5px;line-height:1.4;color:var(--red);
+}
+
+/* ---------- queued cross-provider switch (ticket E3) ---------- */
+.pending-switch{
+  display:inline-flex;align-items:center;gap:5px;margin-left:4px;
+  font-size:11px;color:var(--fg-3);white-space:nowrap;cursor:default;
+}
+.pending-switch .dot{width:6px;height:6px}
+
+/* ---------- archive and permanent delete (ticket C3/C4) ---------- */
+.archive-group{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
+.sh-model{
+  flex:none;max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10.5px;color:var(--fg-3);opacity:.8;
+}
+.session-row .s-suffix{
+  flex:none;max-width:15ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);font-size:9.5px;color:var(--fg-3);opacity:.8;
+}
+.session-block[data-archived="true"] .session-row .s-title{color:var(--fg-2)}
+.session-block[data-archived="true"] .session-row .dot{opacity:.55}
+.sh-pill{
+  display:inline-flex;align-items:center;flex:none;height:18px;padding:0 7px;
+  border:1px solid var(--line-2);border-radius:99px;background:var(--elev);
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--fg-3);white-space:nowrap;
+}
+.sh-pill.archived{color:var(--fg-2)}
+
+/* ---------- floating session info ---------- */
+/* The card floats, but its footprint is reserved as a third column so the centred chat sits
+   between the tree and the card instead of running underneath it. The column is 312px: 16px of
+   padding, the 280px card, 16px of padding. */
+.app[data-info="open"]{--info-reserve:312px}
+.app[data-info="open"] .workspace{
+  grid-template-columns:var(--nav-user,var(--nav)) minmax(0,1fr) var(--info-reserve);
+}
+/* The chat header spans the whole window, over the reserved strip; only the transcript and
+   composer are centred between the tree and the card. */
+.app[data-info="open"] .session-head{margin-right:calc(-1 * var(--info-reserve))}
+.session-info{
+  position:fixed;z-index:34;top:98px;right:16px;bottom:40px;width:280px;
+  display:flex;flex-direction:column;min-height:0;overflow:hidden;
+  background:color-mix(in srgb, var(--panel) 86%, transparent);
+  -webkit-backdrop-filter:blur(18px) saturate(1.06);backdrop-filter:blur(18px) saturate(1.06);
+  border:1px solid var(--line-2);border-radius:var(--r-lg);
+}
+.si-head{display:flex;align-items:flex-start;gap:8px;padding:10px 10px 9px 12px;border-bottom:1px solid var(--line);flex:none}
+.si-heading{flex:1;min-width:0}
+.si-heading h2{font-size:12.5px;font-weight:600}
+.si-heading p{font-size:11px;color:var(--fg-3);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.si-scroll{flex:1;min-height:0;overflow-y:auto;padding:0 12px 12px;scrollbar-width:none;-ms-overflow-style:none}
+.si-scroll::-webkit-scrollbar{display:none}
+.si-section{padding:10px 0;border-top:1px solid var(--line)}
+.si-section:first-child{border-top:0}
+.si-title{display:flex;align-items:center;gap:6px;width:100%;background:none;border:0;padding:0;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);margin-bottom:0;text-align:left;cursor:pointer}
+.si-title:hover{color:var(--fg-2)}
+.si-chevron{display:flex;flex:none;color:var(--fg-3);transition:transform var(--dur) var(--ease)}
+.si-title[aria-expanded="true"] .si-chevron{transform:rotate(90deg)}
+.si-title-text{flex:1;min-width:0}
+.si-body{padding-top:7px}
+.si-count{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fg-3)}
+.si-model{display:flex;align-items:center;gap:7px;font-size:12.5px;margin-bottom:7px;min-width:0}
+.si-model-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.si-model-provider{margin-left:auto;font-size:11px;color:var(--fg-3);flex:none}
+.si-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:3px 0;font-size:11.8px}
+.si-row > span:first-child{color:var(--fg-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.si-row > span:last-child{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.si-bar{height:5px;border-radius:99px;background:var(--sunken);overflow:hidden;margin:2px 0 6px}
+.si-bar span{display:block;height:100%;background:var(--jade);border-radius:inherit}
+.si-bar[data-low="true"] span{background:var(--amber)}
+.si-plan{display:flex;flex-direction:column;gap:9px;margin-bottom:9px}
+.si-plan-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:11.8px}
+.si-plan-head span:last-child{font-family:var(--mono);font-size:10.5px;white-space:nowrap}
+.si-plan-reset{font-size:10px;color:var(--fg-3);margin-top:3px}
+.si-path{font-family:var(--mono);font-size:10.5px;color:var(--fg-3);margin-top:6px;overflow-wrap:anywhere}
+.si-empty{font-size:11.5px;color:var(--fg-3);line-height:1.5}
+.si-sub{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:11.5px;min-width:0}
+.si-sub-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.si-sub-status{font-size:10px;color:var(--fg-3);font-family:var(--mono)}
+.si-add{color:var(--jade)}
+.si-del{color:var(--red)}
+@media (max-width:1279px){
+  .app[data-info="open"] .workspace,
+  .app[data-info="open"][data-ctx="closed"] .workspace{
+    grid-template-columns:var(--nav) minmax(0,1fr) var(--info-reserve);
+  }
+}
+@media (max-width:899px){
+  .app[data-info="open"] .workspace,
+  .app[data-info="open"][data-ctx="closed"] .workspace{
+    grid-template-columns:minmax(0,1fr);
+  }
+  .app[data-info="open"] .session-head{margin-right:0}
+  .session-info{top:138px;left:12px;right:12px;bottom:38px;width:auto;z-index:39}
+}

@@ -2,15 +2,16 @@ use grove_core::gitops::{
     DiffTarget, GitBranch, GitDiff, GitStatus, GitStatusFile, GitWorktree, PrResult,
 };
 use grove_core::ipc::{
-    AppInfo, CreateSessionRequest, DirEntry, DirListing, ErrorCode, EventEnvelope, IpcError,
-    Project, ProjectDetection, Session, SessionDetail, SessionSummary, SubagentSummary,
+    AppInfo, CreateSessionRequest, DirEntry, DirListing, ErrorCode, EventEnvelope, FsRoot,
+    FsRootKind, FsRoots, IpcError, PlanUsage, PlanUsageWindow, Project, ProjectDetection, Session,
+    SessionDetail, SessionSummary, SubagentSummary,
 };
 use grove_core::plan::{Plan, PlanUpdate};
 use grove_core::providers::{Capabilities, Detection, ThinkingLevel};
 use grove_core::sessions::context::{ContextLimits, ContextPin, SessionContext};
 use grove_core::sessions::event::{
     Block, ContextDocument, ContextReason, Decision, EventKind, Question, QuestionAnswer,
-    QuestionChoice, QuestionOption, Role, SessionEvent, SessionState, ToolStatus,
+    QuestionChoice, QuestionOption, Role, SessionEvent, SessionState, TitleSource, ToolStatus,
 };
 use grove_core::skills::{DetectedSkill, InstallRecord};
 
@@ -329,9 +330,12 @@ fn sample_session() -> Session {
         cwd: "C:/projects/grove".into(),
         model: Some("mock-1".into()),
         title: "Refactor the store".into(),
+        title_source: TitleSource::Manual,
         status: SessionState::Idle,
         project_id: None,
         awaiting: false,
+        archived_at: None,
+        pinned: false,
         created_at: "2025-01-01T00:00:00.000Z".into(),
         updated_at: "2025-01-01T00:00:05.000Z".into(),
     }
@@ -489,6 +493,13 @@ fn sample_events() -> Vec<SessionEvent> {
             "2025-01-01T00:00:04.500Z",
         ),
         event(
+            EventKind::TitleChanged {
+                title: "Release notes".into(),
+                source: TitleSource::Manual,
+            },
+            "2025-01-01T00:00:04.700Z",
+        ),
+        event(
             EventKind::Error {
                 message: "provider exited".into(),
                 retryable: true,
@@ -562,11 +573,49 @@ fn session_detail_matches_fixture() {
     let sample = SessionDetail {
         session: sample_session(),
         thinking_level: ThinkingLevel::High,
+        permission_mode: grove_core::providers::PermissionMode::Ask,
         events: vec![events[0].clone(), events[3].clone()],
     };
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("session-detail.json")
+    );
+}
+
+#[test]
+fn plan_usage_matches_fixture() {
+    let sample = PlanUsage {
+        provider: "opencode-go".into(),
+        windows: vec![
+            PlanUsageWindow {
+                id: "rolling".into(),
+                label: "5-hour".into(),
+                used_percent: 6,
+                remaining_percent: 94,
+                status: "ok".into(),
+                resets_at: "2026-10-29T15:50:00.000Z".into(),
+            },
+            PlanUsageWindow {
+                id: "weekly".into(),
+                label: "Weekly".into(),
+                used_percent: 29,
+                remaining_percent: 71,
+                status: "ok".into(),
+                resets_at: "2026-11-01T19:00:00.000Z".into(),
+            },
+            PlanUsageWindow {
+                id: "monthly".into(),
+                label: "Monthly".into(),
+                used_percent: 74,
+                remaining_percent: 26,
+                status: "ok".into(),
+                resets_at: "2026-11-17T10:18:00.000Z".into(),
+            },
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("plan-usage.json")
     );
 }
 
@@ -592,6 +641,7 @@ fn every_harness_event_variant_matches_the_fixture() {
         "question_resolved",
         "usage",
         "status",
+        "title_changed",
         "error",
         "context_refreshed",
     ] {
@@ -777,6 +827,46 @@ fn dir_listing_matches_fixture() {
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("dir-listing.json")
+    );
+}
+
+#[test]
+fn fs_roots_match_fixture() {
+    let sample = FsRoots {
+        home: Some("C:/Users/ada".into()),
+        roots: vec![
+            FsRoot {
+                name: "Home".into(),
+                path: "C:/Users/ada".into(),
+                kind: FsRootKind::Home,
+            },
+            FsRoot {
+                name: "C:".into(),
+                path: "C:/".into(),
+                kind: FsRootKind::Drive,
+            },
+            FsRoot {
+                name: "D:".into(),
+                path: "D:/".into(),
+                kind: FsRootKind::Drive,
+            },
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("fs-roots.json")
+    );
+}
+
+#[test]
+fn created_dir_matches_fixture() {
+    let sample = DirEntry {
+        name: "grove".into(),
+        path: "D:/Dev/grove".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("fs-create-dir.json")
     );
 }
 

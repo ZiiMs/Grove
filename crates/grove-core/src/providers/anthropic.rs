@@ -5,8 +5,10 @@
 //! here so the agent loop stays vendor-neutral.
 
 use super::tools::ToolSpec;
-use super::wire::{Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent};
-use super::{ProviderError, ProviderSpec, ThinkingLevel};
+use super::wire::{
+    authorize, send_json, Message, MsgBlock, MsgRole, StopReason, StreamDecoder, StreamEvent,
+};
+use super::{CompletionRequest, ProviderError, ProviderSpec, ThinkingLevel};
 use serde_json::json;
 
 pub const API_VERSION: &str = "2023-06-01";
@@ -105,8 +107,48 @@ fn block(block: &MsgBlock) -> Option<serde_json::Value> {
     }
 }
 
-/// Decodes `text/event-stream` chunks from `/v1/messages`.
+/// One non-streaming request with no tools and no history: what a session title needs.
 ///
+/// The Messages API accepts a whole answer in one JSON body when `stream` is false. It reuses the
+/// same endpoint and auth as a turn, so a title call cannot drift from the session client.
+pub async fn complete(
+    http: &reqwest::Client,
+    spec: &ProviderSpec,
+    key: &str,
+    request: &CompletionRequest,
+) -> Result<String, ProviderError> {
+    let body = json!({
+        "model": request.model,
+        "max_tokens": request.max_tokens,
+        "system": request.system,
+        "messages": [{
+            "role": "user",
+            "content": [{ "type": "text", "text": request.prompt }],
+        }],
+        "stream": false,
+    });
+    let value = send_json(
+        authorize(http.post(endpoint(spec)), super::Wire::Anthropic, key).json(&body),
+        &spec.name,
+    )
+    .await?;
+    value
+        .get("content")
+        .and_then(|content| content.as_array())
+        .and_then(|blocks| {
+            blocks.iter().find_map(|block| {
+                (block.get("type").and_then(|kind| kind.as_str()) == Some("text"))
+                    .then(|| block.get("text").and_then(|text| text.as_str()))
+                    .flatten()
+            })
+        })
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ProviderError::Protocol(format!("{} completion returned no text", spec.name))
+        })
+}
+
+/// Decodes `text/event-stream` chunks from `/v1/messages`.
 /// The stream names each content block by index; a tool call is only emitted at `content_block_stop`,
 /// once its accumulated JSON parses.
 #[derive(Default)]
@@ -401,5 +443,50 @@ mod tests {
         assert!(off.get("thinking").is_none());
         let none = body("claude", "system", &[], &[], ThinkingLevel::None);
         assert!(none.get("thinking").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_completion_sends_no_tools_or_history() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/messages"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "content": [
+                    { "type": "thinking", "thinking": "hmm" },
+                    { "type": "text", "text": "Fix the login bug" }
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let mut spec = crate::providers::catalog::find("anthropic").unwrap();
+        spec.base_url = server.uri();
+        let request = crate::providers::CompletionRequest {
+            model: "claude-haiku-4-5".into(),
+            system: "You name conversations.".into(),
+            prompt: "First exchange".into(),
+            max_tokens: 64,
+        };
+
+        let answer = complete(&reqwest::Client::new(), &spec, "test-key", &request)
+            .await
+            .expect("the first text block is the answer");
+        assert_eq!(answer, "Fix the login bug");
+
+        let sent = server.received_requests().await.unwrap();
+        assert_eq!(sent.len(), 1, "one request, not a session");
+        let body: serde_json::Value = serde_json::from_slice(&sent[0].body).unwrap();
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["max_tokens"], 64);
+        assert!(
+            body.get("tools").is_none(),
+            "the title prompt must not see tools"
+        );
+        assert_eq!(
+            body["messages"].as_array().unwrap().len(),
+            1,
+            "only the one-shot prompt, no conversation history"
+        );
+        assert!(body.get("thinking").is_none(), "thinking is off");
+        assert_eq!(sent[0].headers.get("x-api-key").unwrap(), "test-key");
     }
 }

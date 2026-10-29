@@ -2,7 +2,7 @@
 //! (`packages/contract/test/settings.test.ts`), so either side drifting breaks a test.
 
 use grove_core::secrets::{SecretStatus, GITHUB_TOKEN};
-use grove_core::settings::{SecretStatusView, Settings, Theme};
+use grove_core::settings::{SecretStatusView, Settings, Theme, TitleModel};
 use std::collections::BTreeMap;
 
 fn fixture(name: &str) -> serde_json::Value {
@@ -22,6 +22,11 @@ fn settings_matches_fixture() {
             "mattpocock/skills".to_string(),
         ],
         theme: Theme::Dark,
+        auto_titles: false,
+        title_model: Some(TitleModel {
+            provider: "anthropic".into(),
+            model: "claude-haiku-4-5".into(),
+        }),
         extra: BTreeMap::from([("futureFlag".to_string(), serde_json::json!(true))]),
     };
     assert_eq!(

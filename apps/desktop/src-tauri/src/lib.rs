@@ -4,6 +4,7 @@
 pub mod commands;
 pub mod events;
 pub mod state;
+pub mod tray;
 
 use grove_core::paths::AppPaths;
 use state::AppState;
@@ -51,6 +52,9 @@ pub fn run() {
             commands::app::adopt(&state, project_root);
 
             app.manage(state);
+            if let Err(error) = tray::install(app.handle()) {
+                tracing::warn!(%error, "tray icon unavailable");
+            }
             Ok(())
         })
         .invoke_handler(commands::handlers())

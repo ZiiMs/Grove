@@ -7,6 +7,7 @@ pub mod types;
 pub use crate::providers::credentials::ProviderStatus;
 pub use error::{ErrorCode, IpcError, IpcResult};
 pub use types::{
-    AppInfo, CreateSessionRequest, DirEntry, DirListing, EventEnvelope, Project, ProjectDetection,
-    Session, SessionDetail, SessionSummary, SubagentSummary,
+    AppInfo, CreateSessionRequest, DirEntry, DirListing, EventEnvelope, FsRoot, FsRootKind,
+    FsRoots, PlanUsage, PlanUsageWindow, Project, ProjectDetection, Session, SessionDetail,
+    SessionSummary, SubagentSummary,
 };

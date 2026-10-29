@@ -8,8 +8,8 @@
 //! user can never pick "offline" and mistake it for a model.
 
 use super::{
-    AgentProvider, AgentSession, AuthMethod, Capabilities, Detection, ProviderDeps, ProviderError,
-    ProviderSpec, StartContext, UserInput, Wire,
+    AgentProvider, AgentSession, AuthMethod, Capabilities, CompletionRequest, Detection,
+    ProviderDeps, ProviderError, ProviderSpec, StartContext, UserInput, Wire,
 };
 use crate::sessions::event::{
     Block, Decision, EventKind, Role, SessionEvent, SessionState, ToolStatus,
@@ -72,6 +72,15 @@ impl AgentProvider for OfflineProvider {
         Detection::ready(AuthMethod::ApiKey, spec().default_model)
     }
 
+    /// A deterministic title for tests and previews: the same script every time, with no network.
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+        _deps: ProviderDeps,
+    ) -> Result<String, ProviderError> {
+        Ok("Offline session".to_string())
+    }
+
     async fn start(
         &self,
         ctx: StartContext,
@@ -82,11 +91,18 @@ impl AgentProvider for OfflineProvider {
             .get("chunkDelayMs")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        let session = OfflineSession::new(ctx.cwd, ctx.resume_token.is_some(), delay);
+        let model = ctx
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| spec().default_model);
+        let session = OfflineSession::new(ctx.cwd, model, ctx.resume_token.is_some(), delay);
         session
             .emit(EventKind::SessionStarted {
                 provider: ID.to_string(),
-                model: Some(spec().default_model),
+                model: Some(session.model.clone()),
                 resumed: session.resumed,
             })
             .await;
@@ -101,6 +117,8 @@ impl AgentProvider for OfflineProvider {
 
 struct OfflineSession {
     cwd: PathBuf,
+    /// The model the next turn reports; a hot swap only changes this field.
+    model: String,
     resumed: bool,
     delay_ms: u64,
     events: Option<mpsc::Receiver<SessionEvent>>,
@@ -109,10 +127,11 @@ struct OfflineSession {
 }
 
 impl OfflineSession {
-    fn new(cwd: PathBuf, resumed: bool, delay_ms: u64) -> Self {
+    fn new(cwd: PathBuf, model: String, resumed: bool, delay_ms: u64) -> Self {
         let (tx, rx) = mpsc::channel(256);
         Self {
             cwd,
+            model,
             resumed,
             delay_ms,
             events: Some(rx),
@@ -225,6 +244,18 @@ impl AgentSession for OfflineSession {
         Ok(())
     }
 
+    async fn set_model(&mut self, model: String) -> Result<(), ProviderError> {
+        self.model = model;
+        Ok(())
+    }
+
+    async fn set_permission_mode(
+        &mut self,
+        _mode: crate::providers::PermissionMode,
+    ) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
     async fn cancel(&mut self) -> Result<(), ProviderError> {
         if let Some(turn) = self.turn.lock().await.take() {
             turn.abort();
@@ -262,6 +293,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changing_the_model_updates_the_offline_session() {
+        let mut session = OfflineSession::new(std::env::temp_dir(), "mock-1".into(), false, 0);
+        session.set_model("mock-2".into()).await.unwrap();
+        assert_eq!(session.model, "mock-2");
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_completion_is_deterministic() {
+        let provider = OfflineProvider;
+        let answer = provider
+            .complete(
+                CompletionRequest {
+                    model: "mock-1".into(),
+                    system: "system".into(),
+                    prompt: "prompt".into(),
+                    max_tokens: 64,
+                },
+                ProviderDeps {
+                    paths: crate::paths::AppPaths::new(std::env::temp_dir().join("grove-offline")),
+                    http: reqwest::Client::new(),
+                    secrets: Arc::new(crate::secrets::MemorySecretStore::new()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "Offline session");
+    }
+
+    #[tokio::test]
     async fn a_turn_streams_then_ends_idle() {
         let provider = OfflineProvider;
         let mut session = provider
@@ -274,6 +334,7 @@ mod tests {
                     resume_token: None,
                     config: serde_json::json!({}),
                     context_files: Vec::new(),
+                    history: Vec::new(),
                 },
                 ProviderDeps {
                     paths: crate::paths::AppPaths::new(std::env::temp_dir().join("grove-offline")),

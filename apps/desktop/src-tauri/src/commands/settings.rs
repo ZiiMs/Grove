@@ -5,7 +5,7 @@
 //! handler logs one.
 
 use crate::state::AppState;
-use grove_core::ipc::{IpcError, IpcResult, ProviderStatus};
+use grove_core::ipc::{IpcError, IpcResult, PlanUsage, ProviderStatus};
 use grove_core::providers::ProviderError;
 use grove_core::secrets::SecretError;
 use grove_core::settings::{SecretStatusView, Settings, SettingsPatch};
@@ -97,6 +97,15 @@ pub async fn provider_statuses(
     Ok(state.core.credentials.statuses())
 }
 
+/// The provider's remaining plan usage, or `null` when that provider has no plan endpoint.
+#[tauri::command]
+pub async fn plan_usage(
+    state: tauri::State<'_, AppState>,
+    provider: String,
+) -> IpcResult<Option<PlanUsage>> {
+    Ok(state.core.sessions.plan_usage(&provider).await?)
+}
+
 /// Store an API key for one provider. Returns the refreshed row; the value never comes back.
 #[tauri::command]
 pub async fn provider_key_set(
@@ -147,6 +156,22 @@ pub async fn provider_thinking(
     state: tauri::State<'_, AppState>,
 ) -> IpcResult<grove_core::providers::model_catalog::ThinkingMap> {
     Ok(state.core.provider_thinking().await)
+}
+
+/// The small model that should name sessions when the user has not chosen one.
+///
+/// The caller passes the live model lists it already holds (`provider_models` refreshed them); the
+/// OpenRouter suggestion depends on whether the account offers the preferred route. Nothing here
+/// persists the suggestion: Settings shows it and a save writes the choice.
+#[tauri::command]
+pub fn title_model_suggest(
+    state: tauri::State<'_, AppState>,
+    live_models: Option<std::collections::BTreeMap<String, Vec<String>>>,
+) -> IpcResult<Option<grove_core::settings::TitleModel>> {
+    Ok(grove_core::settings::suggest_title_model(
+        &state.core.credentials.statuses(),
+        &live_models.unwrap_or_default(),
+    ))
 }
 
 fn provider_error(error: ProviderError) -> IpcError {

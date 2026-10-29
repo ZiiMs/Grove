@@ -19,6 +19,7 @@ pub mod offline;
 pub mod openai;
 pub mod probe;
 pub mod tools;
+pub mod usage;
 pub mod wire;
 
 use crate::paths::AppPaths;
@@ -117,6 +118,32 @@ impl ThinkingLevel {
             "xhigh" => ThinkingLevel::XHigh,
             "max" => ThinkingLevel::Max,
             _ => ThinkingLevel::Off,
+        }
+    }
+}
+
+/// Whether a mutating tool asks before it runs. `ask` is the default; `full` lets every tool run
+/// without a permission card, while `ask_user` questions still reach the user.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    #[default]
+    Ask,
+    Full,
+}
+
+impl PermissionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PermissionMode::Ask => "ask",
+            PermissionMode::Full => "full",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "full" => PermissionMode::Full,
+            _ => PermissionMode::Ask,
         }
     }
 }
@@ -220,6 +247,10 @@ pub struct StartContext {
     pub resume_token: Option<String>,
     pub config: serde_json::Value,
     pub context_files: Vec<ContextDoc>,
+    /// The full normalized conversation, when a live session is handed to another provider. A
+    /// non-empty history seeds the agent directly and replaces the transcript replay; empty keeps
+    /// the [`Self::prompt`] path.
+    pub history: Vec<wire::Message>,
 }
 
 /// The services the agent runtime may use. Sessions require the network: a provider call is the
@@ -229,6 +260,18 @@ pub struct ProviderDeps {
     pub paths: AppPaths,
     pub http: reqwest::Client,
     pub secrets: Arc<dyn SecretStore>,
+}
+
+/// One non-streaming request outside the agent loop: a model, a system instruction, one prompt and a
+/// small output budget. It deliberately has no history, tools or transcript, so a title call cannot
+/// leak a conversation or reach a mutating tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionRequest {
+    pub model: String,
+    pub system: String,
+    pub prompt: String,
+    pub max_tokens: u32,
 }
 
 /// What the settings pane reports about a provider's readiness. Replaces the old binary doctor: there
@@ -296,6 +339,9 @@ pub enum ProviderError {
     Api(String),
     #[error("provider io: {0}")]
     Io(#[from] std::io::Error),
+    /// The provider (or its running session) cannot perform this operation.
+    #[error("unsupported: {0}")]
+    Unsupported(String),
     #[error("{0}")]
     Other(String),
 }
@@ -322,6 +368,20 @@ pub trait AgentProvider: Send + Sync {
     /// Whether a usable credential exists right now.
     fn detect(&self, deps: &ProviderDeps) -> Detection;
 
+    /// One small non-streaming request with no tools and no history.
+    ///
+    /// This exists for work that is not a conversation, such as naming a session. The default says
+    /// so instead of pretending: a provider that has no one-shot path is never picked silently.
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+        _deps: ProviderDeps,
+    ) -> Result<String, ProviderError> {
+        Err(ProviderError::Unsupported(
+            "this provider cannot run a one-shot completion".into(),
+        ))
+    }
+
     async fn start(
         &self,
         ctx: StartContext,
@@ -338,6 +398,31 @@ pub trait AgentProvider: Send + Sync {
 pub trait AgentSession: Send {
     fn take_events(&mut self) -> tokio::sync::mpsc::Receiver<SessionEvent>;
     async fn send(&mut self, input: UserInput) -> Result<(), ProviderError>;
+    /// Change the model used by the next turn. The running turn keeps the model it started with.
+    ///
+    /// Most providers can hot-swap a model because their wire client is stateless per turn; one that
+    /// cannot says so instead of pretending the change landed.
+    async fn set_model(&mut self, _model: String) -> Result<(), ProviderError> {
+        Err(ProviderError::Unsupported(
+            "this provider cannot change models mid-session".into(),
+        ))
+    }
+    /// Change whether mutating tools ask before they run. Applies to the next tool call; a parked
+    /// request keeps waiting for an answer.
+    async fn set_permission_mode(&mut self, _mode: PermissionMode) -> Result<(), ProviderError> {
+        Err(ProviderError::Unsupported(
+            "this provider cannot change approval mode mid-session".into(),
+        ))
+    }
+    /// The conversation as neutral messages, so a live session can be handed to another provider
+    /// instead of being summed up. Empty means the provider keeps no in-process history, and the
+    /// manager falls back to replaying the transcript tail.
+    ///
+    /// `&mut self` because a session is only ever read behind the manager's command mutex; the trait
+    /// is `Send` rather than `Sync`, which an `&self` future would demand.
+    async fn history(&mut self) -> Vec<wire::Message> {
+        Vec::new()
+    }
     /// Answer a tool permission request. Until it is answered the tool call is parked.
     async fn respond_permission(
         &mut self,
@@ -366,7 +451,113 @@ pub trait AgentSession: Send {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalog, ThinkingLevel};
+    use super::{catalog, AgentProvider as _, AgentSession as _, ThinkingLevel};
+
+    /// A session that implements only the required methods, so the default `set_model` is exercised.
+    struct PlainSession;
+
+    #[async_trait::async_trait]
+    impl super::AgentSession for PlainSession {
+        fn take_events(
+            &mut self,
+        ) -> tokio::sync::mpsc::Receiver<crate::sessions::event::SessionEvent> {
+            tokio::sync::mpsc::channel(1).1
+        }
+
+        async fn send(&mut self, _input: super::UserInput) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn respond_permission(
+            &mut self,
+            _request_id: &str,
+            _decision: crate::sessions::event::Decision,
+        ) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn respond_question(
+            &mut self,
+            _request_id: &str,
+            _answers: Vec<crate::sessions::event::QuestionAnswer>,
+        ) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn set_thinking(
+            &mut self,
+            _level: super::ThinkingLevel,
+        ) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn cancel(&mut self) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), super::ProviderError> {
+            Ok(())
+        }
+
+        fn resume_token(&self) -> Option<String> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_without_hot_swap_reports_unsupported() {
+        let mut session = PlainSession;
+        let error = session.set_model("another-model".into()).await.unwrap_err();
+        assert!(matches!(error, super::ProviderError::Unsupported(_)));
+    }
+
+    /// A provider implementing only the required methods: the default `complete` must say so rather
+    /// than pretend a one-shot request was sent.
+    struct PlainProvider;
+
+    #[async_trait::async_trait]
+    impl super::AgentProvider for PlainProvider {
+        fn id(&self) -> &str {
+            "plain"
+        }
+
+        fn spec(&self) -> &super::ProviderSpec {
+            unimplemented!("only the default methods are under test")
+        }
+
+        fn detect(&self, _deps: &super::ProviderDeps) -> super::Detection {
+            unimplemented!("only the default methods are under test")
+        }
+
+        async fn start(
+            &self,
+            _ctx: super::StartContext,
+            _deps: super::ProviderDeps,
+        ) -> Result<Box<dyn super::AgentSession>, super::ProviderError> {
+            unimplemented!("only the default methods are under test")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_provider_without_a_one_shot_path_reports_unsupported() {
+        let error = PlainProvider
+            .complete(
+                super::CompletionRequest {
+                    model: "small".into(),
+                    system: "system".into(),
+                    prompt: "prompt".into(),
+                    max_tokens: 64,
+                },
+                super::ProviderDeps {
+                    paths: crate::paths::AppPaths::new(std::env::temp_dir().join("grove-provider")),
+                    http: reqwest::Client::new(),
+                    secrets: std::sync::Arc::new(crate::secrets::MemorySecretStore::new()),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, super::ProviderError::Unsupported(_)));
+    }
 
     #[test]
     fn thinking_levels_use_the_same_names_on_the_wire_as_in_the_config() {

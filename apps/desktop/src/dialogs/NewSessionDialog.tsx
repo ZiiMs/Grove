@@ -1,5 +1,5 @@
 import type { GitWorktree } from "@grove/contract";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBridge } from "../ipc/context";
 import { errorText } from "../ipc/errors";
 import { useSessionStore } from "../state/sessionStore";
@@ -17,6 +17,7 @@ import { knownThinkingLevels, nearestThinkingLevel } from "../workspace/thinking
 import { Icon } from "../workspace/Icon";
 import { Combo } from "../shell/Combo";
 import { basename, dirname } from "../workspace/tree";
+import { generateWorktreeName } from "../workspace/worktreeName";
 import { Dialog } from "./Dialog";
 
 function slug(text: string): string {
@@ -34,6 +35,7 @@ export function NewSessionDialog() {
   const notify = useUiStore((state) => state.notify);
   const projects = useWorkspaceStore((state) => state.projects);
   const worktrees = useWorkspaceStore((state) => state.worktrees);
+  const branches = useWorkspaceStore((state) => state.branches);
   const prefs = useWorkspaceStore((state) => state.prefs);
   const refreshProjectGit = useWorkspaceStore((state) => state.refreshProjectGit);
   const create = useSessionStore((state) => state.create);
@@ -48,7 +50,6 @@ export function NewSessionDialog() {
   const [originWorktree, setOriginWorktree] = useState<string | null>(null);
   const [useWorktree, setUseWorktree] = useState(false);
   const [branch, setBranch] = useState("");
-  const [branchDirty, setBranchDirty] = useState(false);
   const [base, setBase] = useState("main");
   const [model, setModel] = useState(prefs.defaultModel);
   const [root, setRoot] = useState("");
@@ -63,6 +64,29 @@ export function NewSessionDialog() {
   const originBranch =
     projectWorktrees.find((worktree) => worktree.path === originWorktree)?.branch ??
     (originWorktree ? basename(originWorktree) : null);
+
+  const generateBranch = useCallback(
+    (exclude?: string) => {
+      if (!project) return "";
+      const prefix = slug(project.name) || "project";
+      const taken = new Set<string>();
+      for (const worktree of worktrees[project.id] ?? []) {
+        const tail = basename(worktree.path).toLowerCase();
+        if (tail) taken.add(tail);
+      }
+      for (const entry of branches[project.id] ?? []) {
+        const ref = (
+          entry.remote ? entry.name.slice(entry.remote.length + 1) : entry.name
+        ).toLowerCase();
+        if (!ref.startsWith(`${prefix}/`)) continue;
+        const handle = ref.slice(prefix.length + 1).split("/")[0];
+        if (handle) taken.add(handle);
+      }
+      if (exclude) taken.add(exclude.toLowerCase());
+      return `${prefix}/${generateWorktreeName(taken)}`;
+    },
+    [branches, project, worktrees],
+  );
 
   const available = useMemo(
     () => availableProviderIds(registered, providerStatuses),
@@ -107,7 +131,6 @@ export function NewSessionDialog() {
     setOriginWorktree(found?.path ?? null);
     setUseWorktree(Boolean(requestedProject?.isGit) && !found);
     setBranch("");
-    setBranchDirty(false);
     setBase(
       found?.branch ??
         requestedWorktrees[0]?.branch ??
@@ -163,9 +186,9 @@ export function NewSessionDialog() {
   }, [bridge, isGit, open, prefs.worktreeRoot, project]);
 
   useEffect(() => {
-    if (!useWorktree || !project) return;
-    if (!branchDirty) setBranch(`${project.name}/${slug(title) || "session"}`);
-  }, [branchDirty, project, title, useWorktree]);
+    if (!open || !useWorktree || !project || !isGit || branch) return;
+    setBranch(generateBranch());
+  }, [branch, generateBranch, isGit, open, project, useWorktree]);
 
   const branchTail = slug(branch.split("/").pop() ?? "") || "session";
   const previewRoot = root || (project ? dirname(project.path) : "");
@@ -181,15 +204,10 @@ export function NewSessionDialog() {
     setUseWorktree(Boolean(next?.isGit));
     setBase(nextWorktrees[0]?.branch ?? next?.defaultBranch ?? "main");
     setBranch("");
-    setBranchDirty(false);
     setError(null);
   };
 
   const submit = async () => {
-    if (!title.trim()) {
-      setError("Give the session a name so you can find it in the tree.");
-      return;
-    }
     if (useWorktree && !branch.trim()) {
       setError("A worktree needs a branch name.");
       return;
@@ -224,10 +242,13 @@ export function NewSessionDialog() {
       const created = await create(bridge, {
         provider,
         model,
-        title: title.trim(),
+        title: title.trim() || null,
         projectId: project?.id ?? null,
         worktreePath,
-        config: { thinkingLevel },
+        config: {
+          thinkingLevel,
+          permissionMode: prefs.permissionMode === "bypass" ? "full" : "ask",
+        },
       });
       if (!created) {
         setError(useSessionStore.getState().error ?? "The session could not be created.");
@@ -270,7 +291,7 @@ export function NewSessionDialog() {
         <input
           id="nd-task"
           type="text"
-          placeholder="e.g. Add a worktree picker to the new-session flow"
+          placeholder="Auto from first message"
           autoComplete="off"
           autoFocus
           value={title}
@@ -279,11 +300,9 @@ export function NewSessionDialog() {
             setError(null);
           }}
         />
-        {error && !title.trim() ? (
-          <p className="field-err" role="alert">
-            {error}
-          </p>
-        ) : null}
+        <p className="field-hint" id="nd-task-hint">
+          Leave blank to name this session from its first message, then let a small model refine it.
+        </p>
       </div>
 
       <div className="field">
@@ -327,20 +346,31 @@ export function NewSessionDialog() {
           {useWorktree ? (
             <div className="wt-detail">
               <div className="field-tight">
-                <label htmlFor="nd-branch">Branch name</label>
+                <div className="field-label-row">
+                  <label htmlFor="nd-branch">Worktree branch</label>
+                  <button
+                    className="icon-btn sm"
+                    type="button"
+                    aria-label="Generate another worktree name"
+                    onClick={() => {
+                      setBranch(generateBranch(branch.split("/").pop() ?? ""));
+                      setError(null);
+                    }}
+                  >
+                    <Icon name="sparkle" size="sm" />
+                  </button>
+                </div>
                 <input
                   id="nd-branch"
                   className="mono-input"
                   type="text"
-                  autoComplete="off"
-                  spellCheck={false}
+                  readOnly
                   value={branch}
-                  onChange={(event) => {
-                    setBranchDirty(true);
-                    setBranch(event.target.value);
-                    setError(null);
-                  }}
+                  aria-describedby="nd-branch-hint"
                 />
+                <p className="field-hint" id="nd-branch-hint">
+                  Generated for this worktree. The session title stays separate.
+                </p>
                 {error && useWorktree && !branch.trim() ? (
                   <p className="field-err" role="alert">
                     {error}
@@ -403,7 +433,7 @@ export function NewSessionDialog() {
       </div>
 
       {storeError ? <p className="field-err">{storeError}</p> : null}
-      {error && title.trim() ? (
+      {error ? (
         <p className="field-err" role="alert">
           {error}
         </p>

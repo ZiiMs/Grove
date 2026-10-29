@@ -849,6 +849,91 @@ fn create_worktree_makes_a_new_branch_and_refuses_a_non_empty_folder() {
 }
 
 #[test]
+fn remove_worktree_keeps_or_deletes_the_branch_and_refuses_the_main_checkout() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit_all("init");
+    let git = Git::system();
+    let checkout = tempfile::tempdir().expect("checkout parent");
+
+    let clean = checkout.path().join("clean");
+    let clean_path = clean.to_str().expect("utf-8 path");
+    git.create_worktree(Some(repo.path()), "feature/clean", "main", clean_path)
+        .expect("worktree");
+    git.remove_worktree(Some(repo.path()), clean_path, false, false, false)
+        .expect("clean worktree removed");
+    assert!(!clean.exists());
+    assert!(
+        !run_git(repo.path(), &["branch", "--list", "feature/clean"]).is_empty(),
+        "the branch stays unless it was asked for"
+    );
+
+    let merged = checkout.path().join("merged");
+    let merged_path = merged.to_str().expect("utf-8 path");
+    git.create_worktree(Some(repo.path()), "feature/merged", "main", merged_path)
+        .expect("worktree");
+    git.remove_worktree(Some(repo.path()), merged_path, true, false, false)
+        .expect("merged branch deleted with its worktree");
+    assert!(!merged.exists());
+    assert!(run_git(repo.path(), &["branch", "--list", "feature/merged"]).is_empty());
+
+    let main = git
+        .remove_worktree(
+            Some(repo.path()),
+            repo.path().to_str().expect("utf-8 path"),
+            false,
+            false,
+            false,
+        )
+        .expect_err("the main checkout is not a deletable worktree");
+    assert_eq!(main.code, ErrorCode::Invalid);
+}
+
+#[test]
+fn remove_worktree_preflights_dirty_and_unmerged_branches() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit_all("init");
+    let git = Git::system();
+    let checkout = tempfile::tempdir().expect("checkout parent");
+
+    let dirty = checkout.path().join("dirty");
+    let dirty_path = dirty.to_str().expect("utf-8 path");
+    git.create_worktree(Some(repo.path()), "feature/dirty", "main", dirty_path)
+        .expect("worktree");
+    std::fs::write(dirty.join("b.txt"), "b\n").expect("dirty file");
+    let refused = git
+        .remove_worktree(Some(repo.path()), dirty_path, true, false, false)
+        .expect_err("a dirty worktree is refused");
+    assert!(refused.message.contains("uncommitted"));
+    assert!(dirty.exists(), "nothing is removed by a refused preflight");
+
+    git.remove_worktree(Some(repo.path()), dirty_path, true, true, false)
+        .expect("force removes the dirty worktree and its merged branch");
+    assert!(!dirty.exists());
+    assert!(run_git(repo.path(), &["branch", "--list", "feature/dirty"]).is_empty());
+
+    let unmerged = checkout.path().join("unmerged");
+    let unmerged_path = unmerged.to_str().expect("utf-8 path");
+    git.create_worktree(Some(repo.path()), "feature/unmerged", "main", unmerged_path)
+        .expect("worktree");
+    std::fs::write(unmerged.join("c.txt"), "c\n").expect("worktree file");
+    run_git(&unmerged, &["add", "c.txt"]);
+    run_git(&unmerged, &["commit", "-m", "work only on this branch"]);
+
+    let refused = git
+        .remove_worktree(Some(repo.path()), unmerged_path, true, false, false)
+        .expect_err("an unmerged branch is refused");
+    assert!(refused.message.contains("not in the main"));
+    assert!(unmerged.exists());
+
+    git.remove_worktree(Some(repo.path()), unmerged_path, true, false, true)
+        .expect("force-branch removes the unmerged branch");
+    assert!(!unmerged.exists());
+    assert!(run_git(repo.path(), &["branch", "--list", "feature/unmerged"]).is_empty());
+}
+
+#[test]
 fn an_untracked_file_gets_a_new_file_patch_for_the_inspector() {
     let repo = Repo::new();
     repo.write("src/new.rs", "fn main() {\n    println!(\"hi\");\n}\n");

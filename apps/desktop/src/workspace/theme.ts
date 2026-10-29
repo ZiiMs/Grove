@@ -157,9 +157,15 @@ export const THEMES: ThemeMeta[] = [
 ];
 
 export const THEME_STORAGE_KEY = "grove.theme";
+/** The shipped default; a fresh install starts here until the user picks another language. */
+export const DEFAULT_THEME_ID: ThemeId = "signal";
 
 export function findTheme(id: string | null | undefined): ThemeMeta {
-  return THEMES.find((theme) => theme.id === id) ?? THEMES[0];
+  return (
+    THEMES.find((theme) => theme.id === id) ??
+    THEMES.find((theme) => theme.id === DEFAULT_THEME_ID) ??
+    THEMES[0]
+  );
 }
 
 /** Read the theme the inline boot script found, so React starts on the same one. */
@@ -171,7 +177,7 @@ export function readBootTheme(): { id: ThemeId; mode: ThemeMode } {
     const theme = findTheme(raw?.id);
     return { id: theme.id, mode: raw?.mode === "light" ? "light" : "dark" };
   } catch {
-    return { id: "house", mode: "dark" };
+    return { id: DEFAULT_THEME_ID, mode: "dark" };
   }
 }
 

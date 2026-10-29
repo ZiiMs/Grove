@@ -5,7 +5,9 @@
 //! validation (exists, is a folder, unique name and path) in one place.
 
 use crate::gitops::{Git, GitWorktree};
-use crate::ipc::{DirEntry, DirListing, IpcError, Project, ProjectDetection};
+use crate::ipc::{
+    DirEntry, DirListing, FsRoot, FsRootKind, FsRoots, IpcError, Project, ProjectDetection,
+};
 use crate::paths::display_path;
 use crate::sessions::event::now;
 use crate::store::{Store, StoreError};
@@ -161,6 +163,17 @@ impl ProjectService {
         Ok(project)
     }
 
+    /// Remove a project from the workspace.
+    ///
+    /// Only the row is deleted: the sessions that ran there stay, and the database's
+    /// `ON DELETE SET NULL` turns them into chats. The folder on disk is untouched.
+    pub fn remove(&self, id: &str) -> ProjectResult<()> {
+        if self.store.remove_project(id)? == 0 {
+            return Err(ProjectError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
     pub fn create_worktree(
         &self,
         repo_path: &str,
@@ -177,10 +190,10 @@ impl ProjectService {
 /// Resolve a user-typed folder to an existing canonical directory. `None` or an empty string means
 /// the home folder, which is where the picker opens.
 pub fn resolve_folder(requested: Option<&str>) -> ProjectResult<PathBuf> {
-    let raw = requested.map(str::trim).unwrap_or_default();
+    let raw = normalize_path(requested.unwrap_or_default());
     let expanded = if raw.is_empty() || raw == "~" {
         home_dir()
-    } else if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+    } else if let Some(rest) = raw.strip_prefix("~/") {
         home_dir().join(rest)
     } else {
         PathBuf::from(raw)
@@ -253,11 +266,171 @@ pub fn list_dirs(requested: Option<&str>) -> ProjectResult<DirListing> {
     Ok(DirListing { path, parent, dirs })
 }
 
+/// Every root the add-project picker offers: the home folder first, then mounted drives on Windows
+/// (and readable `/Volumes` entries on macOS) or `/` on Unix. Paths are forward-slash display paths
+/// so the UI can compare them with `DirListing.path`.
+pub fn list_roots() -> FsRoots {
+    let mut roots = Vec::new();
+    let home = home_dir();
+    if !home.as_os_str().is_empty() && home.is_dir() {
+        roots.push(FsRoot {
+            name: "Home".into(),
+            path: normalize_path(&home.to_string_lossy()),
+            kind: FsRootKind::Home,
+        });
+    }
+
+    #[cfg(windows)]
+    {
+        for letter in b'A'..=b'Z' {
+            let path = format!("{}:/", letter as char);
+            if std::path::Path::new(&path).is_dir() {
+                roots.push(FsRoot {
+                    name: format!("{}:", letter as char),
+                    path,
+                    kind: FsRootKind::Drive,
+                });
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        roots.push(FsRoot {
+            name: "/".into(),
+            path: "/".into(),
+            kind: FsRootKind::Filesystem,
+        });
+        #[cfg(target_os = "macos")]
+        if let Ok(entries) = std::fs::read_dir("/Volumes") {
+            let mut volumes: Vec<FsRoot> = entries
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') || !entry.path().is_dir() {
+                        return None;
+                    }
+                    Some(FsRoot {
+                        name,
+                        path: display_path(&entry.path()),
+                        kind: FsRootKind::Drive,
+                    })
+                })
+                .collect();
+            volumes.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+            roots.extend(volumes);
+        }
+    }
+
+    let home = roots
+        .iter()
+        .find(|root| root.kind == FsRootKind::Home)
+        .map(|root| root.path.clone());
+    FsRoots { home, roots }
+}
+
+/// Create one folder under `parent` for the add-project picker. The name must be a single path
+/// segment; nothing is created recursively and an existing path is never reused.
+pub fn create_dir(parent: &str, name: &str) -> ProjectResult<DirEntry> {
+    let folder = resolve_folder(Some(parent))?;
+    let name = name.trim();
+    validate_folder_name(name)?;
+    let path = folder.join(name);
+    if path.exists() {
+        return Err(ProjectError::Invalid(format!("'{name}' already exists")));
+    }
+    std::fs::create_dir(&path).map_err(|error| {
+        ProjectError::Invalid(format!("cannot create {}: {error}", path.display()))
+    })?;
+    Ok(DirEntry {
+        name: name.to_string(),
+        path: display_path(&path),
+    })
+}
+
+fn validate_folder_name(name: &str) -> ProjectResult<()> {
+    if name.is_empty() {
+        return Err(ProjectError::Invalid("a folder name is required".into()));
+    }
+    if name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        return Err(ProjectError::Invalid(
+            "a folder name must be a single path segment".into(),
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(ProjectError::Invalid(
+            "a folder name cannot contain control characters".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn home_dir() -> PathBuf {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Normalize a folder path the user typed or pasted: trim whitespace and a matching pair of
+/// surrounding quotes, use forward slashes, collapse repeated separators, and keep a root's trailing
+/// separator. `~` is left for [`resolve_folder`] to expand. This is not URL parsing: a `file://`
+/// string is treated as a literal path, as the plan requires.
+pub fn normalize_path(raw: &str) -> String {
+    let mut value = raw.trim();
+    if let Some(unquoted) = strip_quotes(value) {
+        value = unquoted.trim();
+    }
+    if value.is_empty() {
+        return String::new();
+    }
+
+    let unified = value.replace('\\', "/");
+    let unc = unified.starts_with("//");
+    let absolute = unified.starts_with('/');
+    let parts: Vec<&str> = unified.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.is_empty() {
+        return if unc {
+            "//".to_string()
+        } else if absolute {
+            "/".to_string()
+        } else {
+            String::new()
+        };
+    }
+
+    // A drive path always uses forward slashes; a bare drive is its root (`C:/`).
+    if let Some((drive, rest)) = parts.split_first() {
+        if is_drive(drive) && rest.is_empty() {
+            return format!("{drive}/");
+        }
+        if is_drive(drive) {
+            return format!("{drive}/{}", rest.join("/"));
+        }
+    }
+
+    let prefix = if unc {
+        "//"
+    } else if absolute {
+        "/"
+    } else {
+        ""
+    };
+    format!("{prefix}{}", parts.join("/"))
+}
+
+fn is_drive(part: &str) -> bool {
+    let bytes = part.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn strip_quotes(value: &str) -> Option<&str> {
+    let first = value.chars().next()?;
+    let last = value.chars().next_back()?;
+    if value.len() >= 2 && first == last && (first == '"' || first == '\'') {
+        Some(&value[1..value.len() - 1])
+    } else {
+        None
+    }
 }
 
 fn validate_label(field: &str, value: &str) -> ProjectResult<()> {
@@ -272,4 +445,41 @@ fn validate_label(field: &str, value: &str) -> ProjectResult<()> {
 /// The project a path belongs to, for a session whose `project_id` predates this build.
 pub fn project_for_path(store: &Store, path: &str) -> Option<Project> {
     store.project_for_path(path).ok().flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_path_handles_pasted_windows_paths() {
+        for raw in [
+            r"D:\Dev\grove\",
+            "D:/Dev/grove",
+            "  D:/Dev/grove  ",
+            "\"D:\\Dev\\grove\"",
+        ] {
+            assert_eq!(normalize_path(raw), "D:/Dev/grove", "raw: {raw}");
+        }
+    }
+
+    #[test]
+    fn normalize_path_collapses_separators_but_keeps_roots() {
+        assert_eq!(normalize_path("D:///Dev//grove"), "D:/Dev/grove");
+        assert_eq!(normalize_path("D:/"), "D:/");
+        assert_eq!(normalize_path("D:\\"), "D:/");
+        assert_eq!(normalize_path("/"), "/");
+        assert_eq!(normalize_path("//server/share/"), "//server/share");
+    }
+
+    #[test]
+    fn normalize_path_keeps_home_shorthand() {
+        assert_eq!(normalize_path("~"), "~");
+        assert_eq!(normalize_path("~\\dev\\grove"), "~/dev/grove");
+    }
+
+    #[test]
+    fn normalize_path_trims_quotes_and_whitespace() {
+        assert_eq!(normalize_path("  \"/tmp/grove\"  "), "/tmp/grove");
+    }
 }

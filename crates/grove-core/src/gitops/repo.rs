@@ -245,6 +245,99 @@ impl Git {
             })
     }
 
+    /// Remove a linked worktree, optionally deleting its local branch.
+    ///
+    /// Every refusal happens before `worktree remove`, so a dirty checkout or an unmerged branch
+    /// cannot leave a half-deleted worktree. The main checkout is never removable.
+    pub fn remove_worktree(
+        &self,
+        repo: Option<&Path>,
+        worktree_path: &str,
+        delete_branch: bool,
+        force: bool,
+        force_branch: bool,
+    ) -> IpcResult<()> {
+        let root = self.discover(repo)?;
+        let path = worktree_path.trim();
+        if path.is_empty() {
+            return Err(IpcError::invalid("a worktree path is required"));
+        }
+        let wanted = display_path(Path::new(path));
+        let worktrees = self.worktrees(Some(&root))?;
+        let entry = worktrees
+            .iter()
+            .find(|worktree| same_path(&worktree.path, &wanted))
+            .ok_or_else(|| {
+                IpcError::invalid(format!("not a worktree of this repository: {path}"))
+            })?;
+        if entry.current {
+            return Err(IpcError::invalid(
+                "the main checkout cannot be deleted as a worktree",
+            ));
+        }
+
+        let branch = entry.branch.as_deref();
+        if delete_branch {
+            let branch = branch.ok_or_else(|| {
+                IpcError::invalid(
+                    "this worktree has a detached HEAD; there is no local branch to delete",
+                )
+            })?;
+            validate_ref("branch", branch)?;
+            if !force_branch {
+                let main = self.run(&root, &["symbolic-ref", "--short", "HEAD"])?;
+                let main = non_empty(&main.stdout);
+                let merged = match main {
+                    Some(main) => self
+                        .run(&root, &["merge-base", "--is-ancestor", branch, &main])?
+                        .success(),
+                    None => false,
+                };
+                if !merged {
+                    return Err(IpcError::invalid(format!(
+                        "the branch {branch} has commits that are not in the main checkout"
+                    ))
+                    .with_detail(
+                        "tick \"delete the branch even if it is unmerged\" to discard them",
+                    ));
+                }
+            }
+        }
+
+        let status = self.run(Path::new(path), &["status", "--porcelain"])?;
+        if !status.success() {
+            return Err(git_failure("status", &status));
+        }
+        if !status.stdout.trim().is_empty() && !force {
+            return Err(IpcError::invalid("the worktree has uncommitted changes")
+                .with_detail("tick \"discard uncommitted changes\" to remove it"));
+        }
+
+        let mut args = vec!["worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        args.push(path);
+        let output = self.run(&root, &args)?;
+        if !output.success() {
+            return Err(IpcError::invalid("could not remove the worktree")
+                .with_detail(tail(&output.stderr, 500)));
+        }
+
+        if delete_branch {
+            let branch = branch.expect("a branch was required above");
+            let flag = if force_branch { "-D" } else { "-d" };
+            let output = self.run(&root, &["branch", flag, branch])?;
+            if !output.success() {
+                return Err(IpcError::invalid(format!(
+                    "the worktree was removed, but the branch {branch} could not be deleted"
+                ))
+                .with_detail(tail(&output.stderr, 500)));
+            }
+        }
+        Ok(())
+    }
+
     /// What the add-project form needs before saving: whether this is a repository, its branches,
     /// current/default branch, and the normalized `owner/name` remote (if one exists).
     pub fn detect(&self, path: &Path) -> IpcResult<GitDetection> {

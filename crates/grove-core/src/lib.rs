@@ -11,6 +11,7 @@ pub mod paths;
 pub mod plan;
 pub mod projects;
 pub mod providers;
+pub mod reveal;
 pub mod secrets;
 pub mod sessions;
 pub mod settings;

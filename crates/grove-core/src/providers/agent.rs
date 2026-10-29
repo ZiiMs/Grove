@@ -26,8 +26,8 @@ use super::wire::{
 };
 use super::{
     anthropic, catalog, google, openai, tools, AgentProvider, AgentSession, Capabilities,
-    ContextDoc, Detection, ProviderDeps, ProviderError, ProviderSpec, StartContext, ThinkingLevel,
-    UserInput, Wire,
+    CompletionRequest, ContextDoc, Detection, PermissionMode, ProviderDeps, ProviderError,
+    ProviderSpec, StartContext, ThinkingLevel, UserInput, Wire,
 };
 use crate::sessions::event::{
     Block, Decision, EventKind, Question, QuestionAnswer, Role, SessionEvent, SessionState,
@@ -96,6 +96,21 @@ impl AgentProvider for WireProvider {
         Credentials::new(Arc::clone(&deps.secrets)).detect(&self.spec.id)
     }
 
+    /// Dispatch to the vendor module that owns this spec's wire format. Auth, endpoint and body shape
+    /// stay inside that module; nothing here knows a vendor field.
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+        deps: ProviderDeps,
+    ) -> Result<String, ProviderError> {
+        let (key, _source) = Credentials::new(Arc::clone(&deps.secrets)).key(&self.spec.id)?;
+        match self.spec.wire {
+            Wire::Anthropic => anthropic::complete(&deps.http, &self.spec, &key, &request).await,
+            Wire::OpenAi => openai::complete(&deps.http, &self.spec, &key, &request).await,
+            Wire::Google => google::complete(&deps.http, &self.spec, &key, &request).await,
+        }
+    }
+
     async fn start(
         &self,
         ctx: StartContext,
@@ -118,17 +133,27 @@ impl AgentProvider for WireProvider {
             .and_then(Value::as_str)
             .map(ThinkingLevel::parse)
             .unwrap_or_default();
+        let permission = ctx
+            .config
+            .get("permissionMode")
+            .and_then(Value::as_str)
+            .map(PermissionMode::parse)
+            .unwrap_or_default();
         let system = system_prompt(&ctx);
-        let mut history: Vec<Message> = Vec::new();
-        if let Some(prompt) = ctx
-            .prompt
-            .as_deref()
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-        {
-            history.push(Message::user(format!(
-                "Earlier in this conversation:\n\n{prompt}\n\nContinue from there."
-            )));
+        // A live conversation handed over by another provider is already normalized: seed it as-is.
+        // Otherwise a resumed session replays its transcript tail as one opening message.
+        let mut history: Vec<Message> = ctx.history.clone();
+        if history.is_empty() {
+            if let Some(prompt) = ctx
+                .prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+            {
+                history.push(Message::user(format!(
+                    "Earlier in this conversation:\n\n{prompt}\n\nContinue from there."
+                )));
+            }
         }
         let session = AgentSessionImpl::new(
             self.spec.clone(),
@@ -142,6 +167,7 @@ impl AgentProvider for WireProvider {
             ctx.session_id,
         );
         *session.thinking.lock().await = thinking;
+        *session.permission.lock().await = permission;
         Ok(Box::new(session))
     }
 }
@@ -190,6 +216,8 @@ pub struct AgentSessionImpl {
     questions: Arc<Mutex<HashMap<String, oneshot::Sender<Vec<QuestionAnswer>>>>>,
     /// Reasoning level applied to the next provider request.
     thinking: Arc<Mutex<ThinkingLevel>>,
+    /// Whether mutating tools ask before they run.
+    permission: Arc<Mutex<PermissionMode>>,
     /// Serializes turns. `send` returns as soon as the turn is queued.
     gate: Arc<Mutex<()>>,
     turn: Option<JoinHandle<()>>,
@@ -230,6 +258,7 @@ impl AgentSessionImpl {
             permits: Arc::new(Mutex::new(HashMap::new())),
             questions: Arc::new(Mutex::new(HashMap::new())),
             thinking: Arc::new(Mutex::new(ThinkingLevel::Off)),
+            permission: Arc::new(Mutex::new(PermissionMode::Ask)),
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps,
@@ -440,7 +469,7 @@ impl AgentSessionImpl {
         });
 
         let mut allowed = true;
-        if tools::needs_approval(name) {
+        if tools::needs_approval(name) && *self.permission.lock().await == PermissionMode::Ask {
             let request_id = format!("perm-{call_id}");
             let (sender, receiver) = oneshot::channel();
             self.permits.lock().await.insert(request_id.clone(), sender);
@@ -582,7 +611,9 @@ impl AgentSessionImpl {
     }
 
     /// A worker session: same dependencies and limits as this one, but a fresh conversation and the
-    /// no-recursion tool set. It gets its own event channel; the parent forwards what matters.
+    /// no-recursion tool set. It gets its own event channel; the parent forwards what matters. The
+    /// permission mode is shared with the parent so tightening approval applies to the worker's next
+    /// tool call too.
     fn worker_session(
         &self,
         system: String,
@@ -606,6 +637,7 @@ impl AgentSessionImpl {
             permits: Arc::new(Mutex::new(HashMap::new())),
             questions: Arc::new(Mutex::new(HashMap::new())),
             thinking: Arc::new(Mutex::new(thinking)),
+            permission: Arc::clone(&self.permission),
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps: self.max_steps,
@@ -851,6 +883,7 @@ impl AgentSession for AgentSessionImpl {
         let permits = Arc::clone(&self.permits);
         let questions = Arc::clone(&self.questions);
         let thinking = Arc::clone(&self.thinking);
+        let permission = Arc::clone(&self.permission);
         let gate = Arc::clone(&self.gate);
         let max_steps = self.max_steps;
         let tool_seq = Arc::clone(&self.tool_seq);
@@ -870,6 +903,7 @@ impl AgentSession for AgentSessionImpl {
                 permits,
                 questions,
                 thinking,
+                permission,
                 gate,
                 turn: None,
                 max_steps,
@@ -881,6 +915,21 @@ impl AgentSession for AgentSessionImpl {
         // A previous turn that already finished leaves a stale handle; dropping it is enough.
         self.turn = Some(turn);
         Ok(())
+    }
+
+    async fn set_model(&mut self, model: String) -> Result<(), ProviderError> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(ProviderError::Other("model is empty".into()));
+        }
+        // `send` clones the model into the spawned turn, so the turn already in flight keeps the
+        // model it started with and only the next one sees this assignment.
+        self.model = model.to_string();
+        Ok(())
+    }
+
+    async fn history(&mut self) -> Vec<Message> {
+        self.history.lock().await.clone()
     }
 
     async fn respond_permission(
@@ -901,6 +950,11 @@ impl AgentSession for AgentSessionImpl {
 
     async fn set_thinking(&mut self, level: ThinkingLevel) -> Result<(), ProviderError> {
         *self.thinking.lock().await = level;
+        Ok(())
+    }
+
+    async fn set_permission_mode(&mut self, mode: PermissionMode) -> Result<(), ProviderError> {
+        *self.permission.lock().await = mode;
         Ok(())
     }
 
@@ -988,6 +1042,7 @@ fn is_retryable(error: &ProviderError) -> bool {
             message.contains("rate limited") || message.starts_with("HTTP 5")
         }
         ProviderError::Unavailable(_) => false,
+        ProviderError::Unsupported(_) => false,
         _ => true,
     }
 }
@@ -1034,7 +1089,23 @@ fn system_prompt(ctx: &StartContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets::MemorySecretStore;
+    use crate::secrets::{MemorySecretStore, SecretStore};
+
+    /// A keyed OpenAI provider deps, so a `start` resolves a credential before requesting.
+    fn provider_deps() -> ProviderDeps {
+        let secrets = Arc::new(MemorySecretStore::new());
+        secrets
+            .set(
+                &crate::providers::credentials::api_key_name("openai"),
+                "test-key",
+            )
+            .expect("the memory store accepts a key");
+        ProviderDeps {
+            paths: crate::paths::AppPaths::new(std::env::temp_dir().join("grove-agent-tests")),
+            http: reqwest::Client::new(),
+            secrets,
+        }
+    }
 
     #[test]
     fn the_registry_has_one_entry_per_catalogued_provider() {
@@ -1061,6 +1132,7 @@ mod tests {
                 title: "Grove — architecture".into(),
                 body: "the design".into(),
             }],
+            history: Vec::new(),
         };
         let prompt = system_prompt(&ctx);
         assert!(prompt.contains("C:/work/project"));
@@ -1102,6 +1174,7 @@ mod tests {
                     resume_token: None,
                     config: Value::Null,
                     context_files: Vec::new(),
+                    history: Vec::new(),
                 },
                 deps,
             )
@@ -1110,6 +1183,50 @@ mod tests {
             .expect("no key, no session");
         assert!(matches!(error, ProviderError::Unavailable(_)), "{error}");
         assert!(error.to_string().contains("Settings → Providers"));
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_completion_dispatches_to_the_vendors_wire_format() {
+        use crate::secrets::SecretStore as _;
+        use serde_json::json;
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/messages"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "content": [{ "type": "text", "text": "Fix the login bug" }]
+            })))
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("anthropic").unwrap();
+        spec.base_url = server.uri();
+        let secrets = Arc::new(MemorySecretStore::new());
+        secrets
+            .set("provider.anthropic.api_key", "test-key")
+            .unwrap();
+        let provider = WireProvider::new(spec);
+
+        let answer = provider
+            .complete(
+                CompletionRequest {
+                    model: "claude-haiku-4-5".into(),
+                    system: "You name conversations.".into(),
+                    prompt: "First exchange".into(),
+                    max_tokens: 64,
+                },
+                ProviderDeps {
+                    paths: crate::paths::AppPaths::new(
+                        std::env::temp_dir().join("grove-agent-tests"),
+                    ),
+                    http: reqwest::Client::new(),
+                    secrets,
+                },
+            )
+            .await
+            .expect("the anthropic spec goes through the anthropic client");
+
+        assert_eq!(answer, "Fix the login bug");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1325,6 +1442,185 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changing_the_model_applies_to_the_next_turn_and_keeps_history() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "gpt-5".into(),
+            "system".into(),
+            vec![Message::user("first")],
+            MAX_STEPS,
+            "session-model".into(),
+        );
+        let mut events = session.take_events();
+
+        session.send(UserInput::text("second")).await.unwrap();
+        wait_until_idle(&mut events).await;
+
+        session.set_model("gpt-5-mini".into()).await.unwrap();
+        session.send(UserInput::text("third")).await.unwrap();
+        wait_until_idle(&mut events).await;
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2, "neither turn restarted the session");
+        let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+        assert_eq!(first["model"], "gpt-5", "the running turn keeps its model");
+        assert_eq!(
+            second["model"], "gpt-5-mini",
+            "the next turn uses the new model"
+        );
+
+        let history = second["messages"].to_string();
+        for text in ["first", "second", "third"] {
+            assert!(
+                history.contains(text),
+                "the history lost {text:?}: {history}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn history_is_the_normalized_conversation_the_agent_ran() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "gpt-5".into(),
+            "system".into(),
+            vec![Message::user("first")],
+            MAX_STEPS,
+            "session-history".into(),
+        );
+        let mut events = session.take_events();
+        session.send(UserInput::text("second")).await.unwrap();
+        wait_until_idle(&mut events).await;
+        session.send(UserInput::text("third")).await.unwrap();
+        wait_until_idle(&mut events).await;
+
+        // What a handoff exports: every message, in order, in the neutral shape — not the vendor JSON.
+        let history = session.history().await;
+        assert_eq!(history.len(), 5, "{history:?}");
+        assert_eq!(history[0], Message::user("first"));
+        assert_eq!(history[1], Message::user("second"));
+        assert_eq!(history[2].role, MsgRole::Assistant);
+        assert_eq!(history[2].text_of(), "ok");
+        assert_eq!(history[3], Message::user("third"));
+        assert_eq!(history[4].role, MsgRole::Assistant);
+    }
+
+    #[tokio::test]
+    async fn a_handoff_start_seeds_the_history_instead_of_replaying_the_prompt() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let mut session = WireProvider::new(spec)
+            .start(
+                StartContext {
+                    cwd: std::env::temp_dir(),
+                    model: None,
+                    session_id: "handoff".into(),
+                    // The stopped-session fallback. When history is present it must not be sent.
+                    prompt: Some("Earlier in this conversation: user: stale summary".into()),
+                    resume_token: None,
+                    config: Value::Null,
+                    context_files: Vec::new(),
+                    history: vec![
+                        Message::user("first task"),
+                        Message::assistant(vec![MsgBlock::Text {
+                            text: "first reply".into(),
+                        }]),
+                    ],
+                },
+                provider_deps(),
+            )
+            .await
+            .expect("the provider starts");
+        let mut events = session.take_events();
+        session.send(UserInput::text("next")).await.unwrap();
+        wait_until_idle(&mut events).await;
+
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let messages = body["messages"].to_string();
+        assert!(messages.contains("first task"), "{messages}");
+        assert!(messages.contains("first reply"), "{messages}");
+        assert!(
+            !messages.contains("stale summary"),
+            "a handoff must not replay the transcript summary: {messages}"
+        );
+    }
+
+    /// Drain the event stream until the turn reports it is done.
+    async fn wait_until_idle(events: &mut mpsc::Receiver<SessionEvent>) {
+        while let Some(event) = events.recv().await {
+            if matches!(
+                event.kind,
+                EventKind::Status {
+                    state: SessionState::Idle
+                }
+            ) {
+                return;
+            }
+        }
+        panic!("the turn ended without an idle status");
+    }
+
+    #[tokio::test]
     async fn changing_thinking_level_reaches_the_next_request() {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1462,6 +1758,83 @@ mod tests {
 
         let requests = server.received_requests().await.unwrap();
         assert!(requests[0].headers.get("x-opencode-session").is_none());
+    }
+
+    #[tokio::test]
+    async fn full_access_runs_a_mutating_tool_without_asking() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn sse(body: &str) -> ResponseTemplate {
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("WRITE-MARKER"))
+            .respond_with(sse(
+                r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-write","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"out.txt\",\"content\":\"hi\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#,
+            ))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("wrote out.txt"))
+            .respond_with(sse(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            ))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            dir.path().to_path_buf(),
+            "gpt-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "session-full".into(),
+        );
+        session
+            .set_permission_mode(PermissionMode::Full)
+            .await
+            .unwrap();
+        let mut events = session.take_events();
+        session
+            .send(UserInput::text("WRITE-MARKER: write out.txt"))
+            .await
+            .unwrap();
+
+        let mut asked = false;
+        loop {
+            let event = events.recv().await.expect("an event");
+            match &event.kind {
+                EventKind::PermissionRequest { .. } => asked = true,
+                EventKind::Status {
+                    state: SessionState::Idle,
+                } => break,
+                _ => {}
+            }
+        }
+        assert!(!asked, "full access must not open a permission card");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "hi"
+        );
     }
 
     #[tokio::test]
@@ -1622,6 +1995,86 @@ data: [DONE]
             (!text.is_empty()).then_some(text)
         });
         assert_eq!(final_text.as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
+    async fn a_worker_sees_the_parents_live_permission_mode() {
+        let parent = AgentSessionImpl::new(
+            catalog::find("anthropic").unwrap(),
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "claude-sonnet-4-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "session-worker-permission".into(),
+        );
+        let (worker, _events) = parent.worker_session("system".into(), ThinkingLevel::Off);
+
+        assert!(Arc::ptr_eq(&parent.permission, &worker.permission));
+        *parent.permission.lock().await = PermissionMode::Full;
+        assert_eq!(*worker.permission.lock().await, PermissionMode::Full);
+        *parent.permission.lock().await = PermissionMode::Ask;
+        assert_eq!(*worker.permission.lock().await, PermissionMode::Ask);
+    }
+
+    #[tokio::test]
+    async fn a_worker_asks_when_the_parent_tightens_permission_mid_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = AgentSessionImpl::new(
+            catalog::find("anthropic").unwrap(),
+            reqwest::Client::new(),
+            "key".into(),
+            dir.path().to_path_buf(),
+            "claude-sonnet-4-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "session-worker-ask".into(),
+        );
+
+        // The worker starts under Full, then the user tightens the parent to Ask.
+        *parent.permission.lock().await = PermissionMode::Full;
+        let (worker, mut events) = parent.worker_session("system".into(), ThinkingLevel::Off);
+        *parent.permission.lock().await = PermissionMode::Ask;
+
+        let call = MsgBlock::ToolUse {
+            id: "call-write".into(),
+            name: "write_file".into(),
+            input: serde_json::json!({ "path": "out.txt", "content": "hi" }),
+        };
+        let permits = Arc::clone(&worker.permits);
+        let approve = async move {
+            loop {
+                if let Some(sender) = permits.lock().await.remove("perm-call-write") {
+                    let _ = sender.send(Decision::Approve);
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        let (result, _) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(worker.run_tool(&call), approve)
+        })
+        .await
+        .expect("the worker must ask after the parent tightens approval");
+
+        let MsgBlock::ToolResult { is_error, .. } = result else {
+            panic!("the tool should return a result");
+        };
+        assert!(!is_error, "the approved write should succeed");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "hi"
+        );
+        let mut asked = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event.kind, EventKind::PermissionRequest { .. }) {
+                asked = true;
+            }
+        }
+        assert!(asked, "the worker's next mutating call asked for approval");
     }
 
     #[tokio::test]

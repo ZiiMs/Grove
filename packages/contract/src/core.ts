@@ -50,6 +50,7 @@ export const eventKinds = [
   "question_resolved",
   "usage",
   "status",
+  "title_changed",
   "error",
   "context_refreshed",
 ] as const;

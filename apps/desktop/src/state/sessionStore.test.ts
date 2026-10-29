@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEvent } from "@grove/contract";
+import type { SessionDetail, SessionEvent } from "@grove/contract";
 import {
   DEFAULT_PROVIDERS,
   createFakeBridge,
@@ -71,8 +71,246 @@ describe("session store model refresh", () => {
   });
 });
 
-describe("session store subagents", () => {
-  const start: SessionEvent = {
+describe("session store model changes", () => {
+  it("hot-swaps the active session's model without touching its transcript", async () => {
+    useSessionStore.getState().reset();
+    const detail: SessionDetail = {
+      ...fakeSession({
+        id: "s1",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+      }),
+      thinkingLevel: "off",
+      events: [],
+    };
+    const bridge = createFakeBridge(
+      {},
+      {
+        sessions: [fakeSummary(detail)],
+        details: { [detail.id]: detail },
+      },
+    );
+    useSessionStore.setState({
+      activeId: detail.id,
+      detail,
+      events: [],
+      sessions: [fakeSummary(detail)],
+    });
+
+    const changed = await useSessionStore
+      .getState()
+      .setModel(bridge, "claude-opus-4-1", "high");
+
+    expect(changed).toBe(true);
+    expect(useSessionStore.getState().detail?.model).toBe("claude-opus-4-1");
+    expect(useSessionStore.getState().detail?.thinkingLevel).toBe("high");
+    expect(useSessionStore.getState().sessions[0].model).toBe("claude-opus-4-1");
+    expect(useSessionStore.getState().events).toEqual([]);
+    expect(bridge.invocations).toContain("session_set_model");
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+    expect(bridge.calls.find((call) => call.command === "session_set_model")?.args).toEqual({
+      id: "s1",
+      model: "claude-opus-4-1",
+      thinking: "high",
+    });
+  });
+});
+
+describe("session store cross-provider switches", () => {
+  const baseSession = (overrides: Partial<SessionDetail> = {}): SessionDetail => ({
+    ...fakeSession({
+      id: "s1",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      status: "idle",
+    }),
+    thinkingLevel: "off",
+    events: [],
+    ...overrides,
+  });
+
+  function seed(detail: SessionDetail) {
+    useSessionStore.setState({
+      activeId: detail.id,
+      detail,
+      events: [],
+      sessions: [fakeSummary(detail)],
+    });
+  }
+
+  function bridgeFor(detail: SessionDetail) {
+    return createFakeBridge(
+      {},
+      {
+        sessions: [fakeSummary(detail)],
+        details: { [detail.id]: detail },
+      },
+    );
+  }
+
+  const status = (state: SessionDetail["status"]): SessionEvent => ({
+    at: "2025-01-01T00:00:05.000Z",
+    kind: "status",
+    state,
+  });
+
+  beforeEach(() => {
+    useSessionStore.getState().reset();
+  });
+
+  it("switches immediately when the session is idle", async () => {
+    const detail = baseSession();
+    const bridge = bridgeFor(detail);
+    seed(detail);
+
+    const landed = await useSessionStore
+      .getState()
+      .switchModel(bridge, "openai", "gpt-5-mini");
+
+    expect(landed).toBe(true);
+    expect(bridge.invocations).toContain("session_switch_provider");
+    expect(
+      bridge.calls.find((call) => call.command === "session_switch_provider")?.args,
+    ).toMatchObject({ id: "s1", provider: "openai", model: "gpt-5-mini" });
+    expect(useSessionStore.getState().pendingModel).toBeNull();
+    expect(useSessionStore.getState().detail?.provider).toBe("openai");
+  });
+
+  it("queues a cross-provider switch while the turn is running", async () => {
+    const detail = baseSession({ status: "busy" });
+    const bridge = bridgeFor(detail);
+    seed(detail);
+
+    const landed = await useSessionStore
+      .getState()
+      .switchModel(bridge, "openai", "gpt-5-mini");
+
+    expect(landed).toBe(false);
+    expect(useSessionStore.getState().pendingModel).toEqual({
+      sessionId: "s1",
+      provider: "openai",
+      model: "gpt-5-mini",
+    });
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+    expect(useSessionStore.getState().detail?.provider).toBe("anthropic");
+  });
+
+  it("keeps a queued switch waiting while a permission is open", async () => {
+    const detail = baseSession({ status: "idle", awaiting: true });
+    const bridge = bridgeFor(detail);
+    seed(detail);
+
+    await useSessionStore.getState().switchModel(bridge, "openai", "gpt-5-mini");
+    const applied = await useSessionStore.getState().flushPendingModel(bridge);
+
+    expect(applied).toBeNull();
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+    expect(useSessionStore.getState().pendingModel).not.toBeNull();
+  });
+
+  it("applies the queued switch when the session reaches idle", async () => {
+    const detail = baseSession({ status: "busy" });
+    const bridge = bridgeFor(detail);
+    seed(detail);
+    await useSessionStore.getState().switchModel(bridge, "openai", "gpt-5-mini");
+
+    // The status stream lands idle; the shell then retries the queued switch.
+    useSessionStore.getState().applyEvent("s1", status("idle"));
+    const applied = await useSessionStore.getState().flushPendingModel(bridge);
+
+    expect(applied).toEqual({
+      sessionId: "s1",
+      provider: "openai",
+      model: "gpt-5-mini",
+    });
+    expect(bridge.invocations).toContain("session_switch_provider");
+    expect(useSessionStore.getState().pendingModel).toBeNull();
+    expect(useSessionStore.getState().detail?.provider).toBe("openai");
+    expect(useSessionStore.getState().sessions[0].provider).toBe("openai");
+  });
+
+  it("keeps a switch queued when the core answers conflict", async () => {
+    const detail = baseSession();
+    const switched = baseSession({ provider: "openai", model: "gpt-5-mini" });
+    const bridge = bridgeFor(detail);
+    let attempts = 0;
+    bridge.on("session_switch_provider", () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Promise.reject({
+          code: "conflict",
+          message: "session s1 is running a turn; switch providers when it is idle",
+        });
+      }
+      return switched;
+    });
+    seed(detail);
+
+    const landed = await useSessionStore
+      .getState()
+      .switchModel(bridge, "openai", "gpt-5-mini");
+
+    // The core refused because the turn was still running: the change must survive for the retry.
+    expect(landed).toBe(false);
+    expect(useSessionStore.getState().pendingModel).toEqual({
+      sessionId: "s1",
+      provider: "openai",
+      model: "gpt-5-mini",
+    });
+    expect(useSessionStore.getState().error).toBeNull();
+
+    useSessionStore.getState().applyEvent("s1", status("idle"));
+    const applied = await useSessionStore.getState().flushPendingModel(bridge);
+
+    expect(applied).toEqual({
+      sessionId: "s1",
+      provider: "openai",
+      model: "gpt-5-mini",
+    });
+    expect(bridge.invocations.filter((name) => name === "session_switch_provider")).toHaveLength(2);
+    expect(useSessionStore.getState().pendingModel).toBeNull();
+    expect(useSessionStore.getState().detail?.provider).toBe("openai");
+  });
+
+  it("drops a queued switch when the session exits", async () => {
+    const detail = baseSession({ status: "busy" });
+    const bridge = bridgeFor(detail);
+    seed(detail);
+    await useSessionStore.getState().switchModel(bridge, "openai", "gpt-5-mini");
+
+    useSessionStore.getState().applyEvent("s1", status("exited"));
+
+    expect(useSessionStore.getState().pendingModel).toBeNull();
+    expect(await useSessionStore.getState().flushPendingModel(bridge)).toBeNull();
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+  });
+
+  it("clears a pending switch when its session is archived", async () => {
+    const detail = baseSession({ status: "busy" });
+    const bridge = bridgeFor(detail);
+    seed(detail);
+    await useSessionStore.getState().switchModel(bridge, "openai", "gpt-5-mini");
+    expect(useSessionStore.getState().pendingModel).not.toBeNull();
+
+    expect(await useSessionStore.getState().archive(bridge, "s1")).toBe(true);
+
+    expect(useSessionStore.getState().pendingModel).toBeNull();
+  });
+
+  it("clears a pending switch when its session is deleted", async () => {
+    const detail = baseSession({ status: "busy" });
+    const bridge = bridgeFor(detail);
+    seed(detail);
+    await useSessionStore.getState().switchModel(bridge, "openai", "gpt-5-mini");
+
+    expect(await useSessionStore.getState().deleteSession(bridge, "s1")).toBe(true);
+
+    expect(useSessionStore.getState().pendingModel).toBeNull();
+    expect(useSessionStore.getState().sessions).toEqual([]);
+  });
+});
+
+describe("session store subagents", () => {  const start: SessionEvent = {
     at: "2025-01-01T00:00:00.000Z",
     kind: "tool_call",
     call_id: "call-1",

@@ -1,5 +1,7 @@
 {
   "awaiting": false,
+  "archivedAt": null,
+  "pinned": false,
   "createdAt": "2025-01-01T00:00:00.000Z",
   "cwd": "C:/projects/grove",
   "events": [
@@ -37,6 +39,8 @@
   "projectId": null,
   "status": "idle",
   "thinkingLevel": "high",
+  "permissionMode": "ask",
   "title": "Refactor the store",
+  "titleSource": "manual",
   "updatedAt": "2025-01-01T00:00:05.000Z"
 }

@@ -3,12 +3,12 @@
 
 use super::{Store, StoreError};
 use crate::ipc::{Session, SessionDetail, SessionSummary, SubagentSummary};
-use crate::sessions::event::{now, EventKind, SessionEvent, SessionState};
+use crate::sessions::event::{now, EventKind, SessionEvent, SessionState, TitleSource};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::BTreeMap;
 
 const SESSION_COLUMNS: &str =
-    "s.id, s.provider, s.cwd, s.model, s.title, s.status, s.created_at, s.updated_at, s.project_id, s.awaiting";
+    "s.id, s.provider, s.cwd, s.model, s.title, s.status, s.created_at, s.updated_at, s.project_id, s.awaiting, s.archived_at, s.title_source, s.pinned";
 
 fn row_to_session(row: &Row<'_>) -> rusqlite::Result<Session> {
     Ok(Session {
@@ -22,6 +22,9 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<Session> {
         updated_at: row.get(7)?,
         project_id: row.get(8)?,
         awaiting: row.get::<_, i64>(9)? != 0,
+        archived_at: row.get(10)?,
+        title_source: TitleSource::parse(&row.get::<_, String>(11)?),
+        pinned: row.get::<_, i64>(12)? != 0,
     })
 }
 
@@ -34,8 +37,8 @@ impl Store {
         self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO sessions
-                     (id, provider, cwd, model, title, status, adapter_config, resume_token, created_at, updated_at, project_id, awaiting)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11)",
+                     (id, provider, cwd, model, title, status, adapter_config, resume_token, created_at, updated_at, project_id, awaiting, archived_at, title_source, pinned)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     &session.id,
                     &session.provider,
@@ -48,6 +51,9 @@ impl Store {
                     &session.updated_at,
                     session.project_id.as_deref(),
                     i64::from(session.awaiting),
+                    session.archived_at.as_deref(),
+                    session.title_source.as_str(),
+                    i64::from(session.pinned),
                 ],
             )?;
             Ok(())
@@ -99,7 +105,7 @@ impl Store {
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], |row| {
-                let event_count: i64 = row.get(10)?;
+                let event_count: i64 = row.get(13)?;
                 let session = row_to_session(row)?;
                 let subagents = by_session.remove(&session.id).unwrap_or_default();
                 Ok(SessionSummary {
@@ -162,15 +168,21 @@ impl Store {
         let Some(session) = self.session(id)? else {
             return Ok(None);
         };
-        let thinking_level = self
-            .adapter_config(id)?
+        let config = self.adapter_config(id)?;
+        let thinking_level = config
             .get("thinkingLevel")
             .and_then(serde_json::Value::as_str)
             .map(crate::providers::ThinkingLevel::parse)
             .unwrap_or_default();
+        let permission_mode = config
+            .get("permissionMode")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::providers::PermissionMode::parse)
+            .unwrap_or_default();
         Ok(Some(SessionDetail {
             session,
             thinking_level,
+            permission_mode,
             events: self.session_events(id)?,
         }))
     }
@@ -239,6 +251,43 @@ impl Store {
         })
     }
 
+    /// Move a session between the active tree and the Archive section. `None` restores it; `Some`
+    /// stamps when it was archived. Both touch `updated_at`, because moving is a change.
+    pub fn set_session_archived(
+        &self,
+        id: &str,
+        archived_at: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET archived_at = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id, archived_at, now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Pin or unpin a session. Deliberately does not bump `updated_at`: pinning is a preference, not
+    /// activity, so it must not move the row in the recent list.
+    pub fn set_session_pinned(&self, id: &str, pinned: bool) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET pinned = ?2 WHERE id = ?1",
+                params![id, i64::from(pinned)],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Remove a session row. `events`, `plans`, `pins` and `subagents` cascade; the caller stops a
+    /// live agent first. Returns whether a row was actually deleted.
+    pub fn delete_session(&self, id: &str) -> Result<bool, StoreError> {
+        self.with_conn(|conn| {
+            let removed = conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+            Ok(removed > 0)
+        })
+    }
+
     /// Point an existing session at another provider. The model and the resume token belong to the
     /// provider that produced them, so a switch writes both through separate calls.
     pub fn set_session_provider(
@@ -252,6 +301,68 @@ impl Store {
                 "UPDATE sessions SET provider = ?2, model = ?3, updated_at = ?4 WHERE id = ?1",
                 params![id, provider, model, now()],
             )?;
+            Ok(())
+        })
+    }
+
+    /// Rename a session, recording who wrote the title. `updated_at` moves with the title, so a
+    /// rename reads as activity in the list's `updated_at DESC` order; nothing else on the row moves.
+    pub fn set_session_title(
+        &self,
+        id: &str,
+        title: &str,
+        source: TitleSource,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE sessions SET title = ?2, title_source = ?3, updated_at = ?4 WHERE id = ?1",
+                params![id, title, source.as_str(), now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Change the model a session runs, and optionally the reasoning level that goes with it, in one
+    /// row update. A model swap is not a provider swap: the resume token stays valid.
+    pub fn set_session_model(
+        &self,
+        id: &str,
+        model: &str,
+        thinking: Option<crate::providers::ThinkingLevel>,
+    ) -> Result<(), StoreError> {
+        self.with_conn(|conn| {
+            let updated_at = now();
+            match thinking {
+                Some(level) => {
+                    let raw: Option<String> = conn
+                        .query_row(
+                            "SELECT adapter_config FROM sessions WHERE id = ?1",
+                            params![id],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    let Some(raw) = raw else {
+                        return Ok(());
+                    };
+                    let mut config: serde_json::Value =
+                        serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+                    if !config.is_object() {
+                        config = serde_json::json!({});
+                    }
+                    config["thinkingLevel"] = serde_json::json!(level.as_str());
+                    conn.execute(
+                        "UPDATE sessions SET model = ?2, adapter_config = ?3, updated_at = ?4
+                         WHERE id = ?1",
+                        params![id, model, config.to_string(), updated_at],
+                    )?;
+                }
+                None => {
+                    conn.execute(
+                        "UPDATE sessions SET model = ?2, updated_at = ?3 WHERE id = ?1",
+                        params![id, model, updated_at],
+                    )?;
+                }
+            }
             Ok(())
         })
     }
@@ -398,7 +509,7 @@ fn read_settings(conn: &Connection) -> Result<BTreeMap<String, serde_json::Value
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sessions::event::{Block, Role};
+    use crate::sessions::event::{Block, Role, TitleSource};
 
     fn session(id: &str) -> Session {
         Session {
@@ -410,6 +521,9 @@ mod tests {
             status: SessionState::Starting,
             project_id: None,
             awaiting: false,
+            archived_at: None,
+            pinned: false,
+            title_source: TitleSource::Manual,
             created_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-01T00:00:00.000Z".into(),
         }
@@ -500,6 +614,47 @@ mod tests {
     }
 
     #[test]
+    fn setting_the_model_persists_it_with_an_optional_thinking_level() {
+        use crate::providers::ThinkingLevel;
+
+        let store = Store::open_in_memory().unwrap();
+        let row = session("session-1");
+        store.insert_session(&row, &serde_json::json!({})).unwrap();
+
+        store
+            .set_session_model("session-1", "mock-2", Some(ThinkingLevel::High))
+            .unwrap();
+        let updated = store.session("session-1").unwrap().unwrap();
+        assert_eq!(updated.model.as_deref(), Some("mock-2"));
+        assert!(
+            updated.updated_at >= row.updated_at,
+            "the row's sort order follows the change"
+        );
+        assert_eq!(
+            store
+                .session_detail("session-1")
+                .unwrap()
+                .unwrap()
+                .thinking_level,
+            ThinkingLevel::High,
+            "the model and the level land together"
+        );
+
+        // A model-only change keeps the chosen level: the caller leaves it alone.
+        store
+            .set_session_model("session-1", "mock-3", None)
+            .unwrap();
+        assert_eq!(
+            store
+                .session_detail("session-1")
+                .unwrap()
+                .unwrap()
+                .thinking_level,
+            ThinkingLevel::High
+        );
+    }
+
+    #[test]
     fn orphaned_sessions_become_exited_but_terminal_ones_stay() {
         let store = Store::open_in_memory().unwrap();
         for (id, status) in [
@@ -530,6 +685,105 @@ mod tests {
         assert_eq!(
             store.session("e").unwrap().unwrap().status,
             SessionState::Error
+        );
+    }
+
+    #[test]
+    fn archiving_keeps_the_row_and_transcript_and_restore_clears_the_stamp() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .insert_session(&session("session-1"), &serde_json::json!({}))
+            .unwrap();
+        store.append_event("session-1", &message("hi")).unwrap();
+
+        store
+            .set_session_archived("session-1", Some("2025-01-02T00:00:00.000Z"))
+            .unwrap();
+        let row = store.session("session-1").unwrap().unwrap();
+        assert_eq!(row.archived_at.as_deref(), Some("2025-01-02T00:00:00.000Z"));
+        assert_eq!(
+            store.session_events("session-1").unwrap(),
+            vec![message("hi")],
+            "archiving never deletes the transcript"
+        );
+        assert_eq!(
+            store.list_sessions().unwrap().len(),
+            1,
+            "an archived session is still a row in the list"
+        );
+
+        store.set_session_archived("session-1", None).unwrap();
+        assert_eq!(
+            store.session("session-1").unwrap().unwrap().archived_at,
+            None
+        );
+    }
+
+    #[test]
+    fn an_archived_session_is_still_archived_after_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+        {
+            let store = Store::open(&path).unwrap();
+            store
+                .insert_session(&session("session-1"), &serde_json::json!({}))
+                .unwrap();
+            store
+                .set_session_archived("session-1", Some("2025-01-02T00:00:00.000Z"))
+                .unwrap();
+        }
+
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .session("session-1")
+                .unwrap()
+                .unwrap()
+                .archived_at
+                .as_deref(),
+            Some("2025-01-02T00:00:00.000Z"),
+            "archive is durable state, not a render-time filter"
+        );
+    }
+
+    #[test]
+    fn deleting_a_session_cascades_events_plans_pins_and_subagents() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .insert_session(&session("session-1"), &serde_json::json!({}))
+            .unwrap();
+        store.append_event("session-1", &message("hi")).unwrap();
+        store
+            .write_plan("session-1", "# Plan\n", 0, "hash")
+            .unwrap();
+        store.add_pin("session-1", "grove-architecture").unwrap();
+        store
+            .start_subagent(
+                "session-1",
+                "call-1",
+                "audit the store",
+                "2025-01-01T00:00:00.000Z",
+            )
+            .unwrap();
+
+        assert!(store.delete_session("session-1").unwrap());
+        assert!(store.session("session-1").unwrap().is_none());
+        assert!(store.session_events("session-1").unwrap().is_empty());
+        assert!(store.plan_row("session-1").unwrap().is_none());
+        assert!(store.pins("session-1").unwrap().is_empty());
+        let subagents: i64 = store
+            .with_conn(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM subagents WHERE session_id = ?1",
+                    params!["session-1"],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(subagents, 0, "the worker trace goes with its parent");
+        assert!(
+            !store.delete_session("session-1").unwrap(),
+            "deleting a missing row reports that nothing was removed"
         );
     }
 }
