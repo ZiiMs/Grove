@@ -48,7 +48,7 @@ No check can settle these; they are the reviewer's opinion and should be stated 
 
 ## What the gates cover
 
-There is no CI, so the gates are the landing change's responsibility: `npm run typecheck`,
-`npm test`, `npm run build`, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`. Review
+There is no CI, so the gates are the landing change's responsibility: `bun run typecheck`,
+`bun run test`, `bun run build`, `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`. Review
 checks that they were run and reported, then spends its budget on what the gates cannot see — a green
 gate is evidence the build works, never evidence the change is right.

@@ -5,13 +5,14 @@
   "description": "One desktop home for every AI coding harness",
   "workspaces": ["apps/desktop", "packages/contract"],
   "scripts": {
-    "dev": "npm run dev -w @grove/desktop",
-    "build": "npm run build --workspaces --if-present && node scripts/check-bundle.mjs",
+    "dev": "bun run --cwd apps/desktop tauri dev",
+    "dev:web": "bun run --cwd apps/desktop dev",
+    "build": "bun run --workspaces --if-present build && node scripts/check-bundle.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "bun run --workspaces --if-present typecheck",
     "check:rust": "node scripts/check-rust.mjs",
-    "test": "npm run test --workspaces --if-present",
-    "tauri": "npm run tauri -w @grove/desktop"
+    "test": "bun run --workspaces --if-present test",
+    "tauri": "bun run --cwd apps/desktop tauri"
   },
   "devDependencies": {
     "typescript": "^5.6.3"

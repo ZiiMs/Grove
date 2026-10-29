@@ -5,7 +5,7 @@
 // the entry chunk must stay small enough to parse at window launch, and Monaco must not quietly come
 // back into it. Lazy feature chunks are still allowed for the parts that need them.
 //
-// Run it directly (`npm run check:bundle`, or as the last step of `npm run build`).
+// Run it directly (`bun run check:bundle`, or as the last step of `bun run build`).
 
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -29,7 +29,7 @@ let html;
 try {
   html = readFileSync(indexHtml, "utf8");
 } catch (error) {
-  fail(`cannot read ${indexHtml}: ${error.message}\nRun \`npm run build\` first.`);
+  fail(`cannot read ${indexHtml}: ${error.message}\nRun \`bun run build\` first.`);
 }
 
 // Vite writes the entry as <script type="module" src="/assets/index-<hash>.js">.

@@ -35,15 +35,18 @@ Single-context: one root `GLOSSARY.md` and ADRs under `docs/adr/`. See `docs/age
 
 ```
 npm ci                 # workspace install (apps/desktop, packages/contract)
-npm run typecheck      # tsc --noEmit across workspaces
-npm run check:rust     # fast incremental core check for the edit loop (bypasses sccache)
-npm test               # vitest (UI, contract)
-npm run build          # vite production build + the entry-size bundle guard
+bun run typecheck      # tsc --noEmit across workspaces
+bun run check:rust     # fast incremental core check for the edit loop (bypasses sccache)
+bun run test           # vitest (UI, contract)
+bun run build          # vite production build + the entry-size bundle guard
 cargo nextest run -p grove-core
 cargo test -p grove-core --doc   # nextest does not run doctests
 cargo check -p grove-desktop
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+Every JS script runs under Bun; `npm ci` is the only npm command left. Use `bun run test`, not
+`bun test` — the latter is Bun's own runner and ignores the workspace scripts.
 
 Rust builds go through sccache (`.cargo/config.toml`) and tests through nextest; both must be on
 `PATH`. `cargo nextest run` does not run doctests, so run the separate `--doc` command when a crate

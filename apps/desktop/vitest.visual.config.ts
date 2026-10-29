@@ -5,9 +5,9 @@ import { defineConfig } from "vitest/config";
 const fromHere = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 /**
- * The visual comparison harness. It is not part of `npm test`: it renders the built shell into
+ * The visual comparison harness. It is not part of `bun run test`: it renders the built shell into
  * `dist/visual-*.html` so a headless browser can screenshot it at the contract's viewports.
- * Run with `npm run visual -w @grove/desktop` (which builds first).
+ * Run with `bun run visual` from `apps/desktop` (which builds first).
  */
 export default defineConfig({
   plugins: [react()],

@@ -24,7 +24,7 @@ there is no CI — and the manual smoke checklist is the part no test can paint 
 ## Prerequisites
 
 - Windows 10/11 (the supported build; macOS/Linux are unverified)
-- Node.js 22 and npm 10+
+- Node.js 22, Bun 1.3+ and npm 10+ (npm only runs `npm ci`; every script runs under Bun)
 - Rust stable with the MSVC target (`rustup default stable-msvc`)
 - WebView2 runtime (preinstalled on Windows 11)
 - `git` on `PATH` (the Git panel shells out to it); `gh` is optional and only needed to open a draft PR
@@ -38,10 +38,11 @@ there is no CI — and the manual smoke checklist is the part no test can paint 
 
 ```sh
 npm ci               # install the workspaces: apps/desktop, packages/contract
-npm run tauri dev    # builds the Rust shell and opens the desktop window
+bun run dev          # builds the Rust shell and opens the desktop window
 ```
 
-`npm run dev` alone serves the webview at http://localhost:1420 for UI work; it is not a desktop app.
+`bun run dev:web` alone serves the webview at http://localhost:1420 for UI work; it is not a desktop
+app.
 
 1. **Add a project.** `Add project` in the tree opens the folder picker; a git repository is detected
    and its default branch and remote are filled in. A plain folder is added as a workspace with no
@@ -75,18 +76,18 @@ describe reasoning levels touch the network; everything else runs locally.
 ## Develop
 
 ```sh
-npm ci            # install the workspaces: apps/desktop, packages/contract
-npm run dev       # Vite dev server on http://localhost:1420
-npm run tauri dev # the desktop window (runs the dev server for you)
+npm ci              # install the workspaces: apps/desktop, packages/contract
+bun run dev:web     # Vite dev server on http://localhost:1420
+bun run dev         # the desktop window (runs the dev server for you)
 ```
 
 ## Build and verify
 
 ```sh
-npm run typecheck
-npm test
-npm run build        # Vite production build + the bundle guard
-npm run check:bundle # the bundle guard alone, against an existing dist
+bun run typecheck
+bun run test
+bun run build        # Vite production build + the bundle guard
+bun run check:bundle # the bundle guard alone, against an existing dist
 
 cargo nextest run -p grove-core
 cargo test -p grove-core --doc # nextest does not run doctests
@@ -113,11 +114,11 @@ the profiles keep incremental off while the wrapper is configured. To go back to
 local loop, remove `rustc-wrapper` and the `CARGO_INCREMENTAL` pin from `.cargo/config.toml` and set
 `incremental = true` in the dev and test profiles.
 
-For the edit loop without changing that setup, run `npm run check:rust` (or
-`npm run check:rust -- -p grove-desktop`). It typechecks incrementally with the wrapper disabled;
+For the edit loop without changing that setup, run `bun run check:rust` (or
+`bun run check:rust -- -p grove-desktop`). It typechecks incrementally with the wrapper disabled;
 the full gates above still use sccache.
 
-`npm run build` ends with `scripts/check-bundle.mjs`: it fails if Monaco reappears in the entry
+`bun run build` ends with `scripts/check-bundle.mjs`: it fails if Monaco reappears in the entry
 chunk or the entry chunk exceeds its size budget.
 There is no CI. Run these gates yourself before landing a change, in this order: install,
 typecheck, vitest, build (with the bundle guard), rustfmt `--check`, clippy with `-D warnings`,
@@ -136,7 +137,7 @@ The cross-cutting Rust suites that pin the release promise:
 
 Automated tests cover the core and the webview in isolation; the window itself needs a human:
 
-- [ ] `npm run tauri dev` opens a window with no native frame, a custom titlebar (Grove, git chip,
+- [ ] `bun run dev` opens a window with no native frame, a custom titlebar (Grove, git chip,
       awaiting chip and minimize/maximize/close), the project tree, the centre conversation, the
       context column and the status bar. Dragging the titlebar moves the window.
 - [ ] `Add project` detects a git folder's branches/remote and adds a plain folder without git.
@@ -164,7 +165,7 @@ The ~200 MB idle-memory goal is a design constraint, not an afterthought:
   `markdown-it` are not dependencies and never parse at launch.
 - **Theme fonts are local.** The seven theme families ship as latin WOFF2 subsets in
   `apps/desktop/src/styles/fonts/`, so a launch has no font request and every theme renders offline.
-- **The bundle guards it.** `scripts/check-bundle.mjs` runs after `npm run build` and fails if
+- **The bundle guards it.** `scripts/check-bundle.mjs` runs after `bun run build` and fails if
   `monaco-editor` appears in the entry chunk or the entry exceeds 600 kB, then reports the largest
   lazy chunks. The successful output ends with a line like
   `Bundle guard: entry index-…js 299.7 kB (budget 600 kB); lazy …`.
@@ -182,7 +183,7 @@ The ~200 MB idle-memory goal is a design constraint, not an afterthought:
 | `apps/desktop/src` | React webview: shell, chat, context column, settings, dialogs, stores, typed IPC bridge. |
 | `packages/contract` | zod schemas + TS types for the IPC contract, validated against `contract/fixtures/`. |
 | `contract/fixtures` | Golden JSON written by Rust tests and parsed by TS tests — the drift alarm. |
-| `apps/desktop/tools` | Screenshot harness for visual comparison (not part of `npm test`). |
+| `apps/desktop/tools` | Screenshot harness for visual comparison (not part of `bun run test`). |
 | `scripts/check-bundle.mjs` | Post-build performance guard (entry budget; no editor at launch). |
 
 ## Local state
