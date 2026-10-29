@@ -5,6 +5,7 @@ import App from "./App";
 import type {
   GitBranch,
   GitWorktree,
+  ProviderSpec,
   SessionEvent,
   Project,
   SessionDetail,
@@ -12,6 +13,8 @@ import type {
 import { BridgeProvider } from "./ipc/context";
 import {
   DEFAULT_PROVIDERS,
+  FAKE_PROVIDER_ROSTER,
+  MOCK_CAPABILITIES,
   createFakeBridge,
   fakeProviderStatus,
   fakeSession,
@@ -101,6 +104,32 @@ const events: SessionEvent[] = [
 
 const detail: SessionDetail = { ...session, events };
 
+/** The shipped roster, with Anthropic and OpenAI connected and the two gateways not. */
+const PROVIDER_ROSTER: ProviderSpec[] = [
+  ...FAKE_PROVIDER_ROSTER.map((row) => ({
+    id: row.id,
+    name: row.name,
+    short: row.short,
+    tint: row.tint,
+    wire: "open_ai" as const,
+    baseUrl: "https://example.invalid",
+    auth: "api_key" as const,
+    keyUrl: row.keyUrl,
+    envVar: row.envVar,
+    models: row.models,
+    defaultModel: row.defaultModel,
+    capabilities: MOCK_CAPABILITIES,
+  })),
+  ...DEFAULT_PROVIDERS,
+];
+
+const anthropicSession = { ...session, provider: "anthropic", model: "claude-sonnet-4-5" };
+const anthropicDetail: SessionDetail = {
+  ...detail,
+  provider: "anthropic",
+  model: "claude-sonnet-4-5",
+};
+
 function seed() {
   return {
     providers: DEFAULT_PROVIDERS,
@@ -173,6 +202,22 @@ async function ready() {
   const bridge = renderApp();
   await screen.findByRole("heading", { name: "OAuth device flow" });
   return bridge;
+}
+
+/** The shell with the full provider roster on an Anthropic session. */
+async function readyOnAnthropic() {
+  const bridge = renderApp({
+    providers: PROVIDER_ROSTER,
+    providerStatuses: FAKE_PROVIDER_ROSTER,
+    sessions: [fakeSummary(anthropicSession, events.length)],
+    details: { [session.id]: anthropicDetail },
+  });
+  await screen.findByRole("heading", { name: "OAuth device flow" });
+  return bridge;
+}
+
+function modelTrigger() {
+  return screen.getByRole("combobox", { name: "Model for this session" });
 }
 
 beforeEach(() => {
@@ -267,16 +312,102 @@ describe("redesigned shell", () => {
     await userEvent.click(screen.getByRole("combobox", { name: "Model for this session" }));
     const search = screen.getByRole("searchbox", { name: "Search Model for this session" });
     await userEvent.type(search, "mock");
-    expect(screen.getByRole("option", { name: "mock-1" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "claude-sonnet-4-5" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Mock 1/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Sonnet 4.5/ })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("option", { name: "mock-1" }));
+    await userEvent.click(screen.getByRole("option", { name: /Mock 1/ }));
     await waitFor(() => expect(bridge.invocations).toContain("session_switch_provider"));
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Model for this session" })).toHaveTextContent(
-        "mock-1",
+        "Mock 1",
       ),
     );
+  });
+
+  it("shows the thinking level and the model name inline, without dropdown chrome", async () => {
+    await readyOnAnthropic();
+
+    const thinking = screen.getByRole("combobox", { name: "Thinking level for this session" });
+    expect(thinking).toHaveTextContent("Off");
+    expect(thinking.querySelector(".combo-trigger-icon svg")).not.toBeNull();
+    expect(thinking.querySelector(".combo-chevron")).toBeNull();
+
+    const model = modelTrigger();
+    expect(model).toHaveTextContent("Sonnet 4.5");
+    expect(model).toHaveAttribute("title", "claude-sonnet-4-5");
+    expect(model.querySelector(".combo-trigger-icon svg.provider-glyph")).not.toBeNull();
+    expect(model.querySelector(".combo-chevron")).toBeNull();
+
+    expect(document.querySelector(".composer-pickers .thinking-picker")).not.toBeNull();
+    expect(document.querySelector(".composer-pickers .model-picker")).not.toBeNull();
+  });
+
+  it("groups the model menu by provider and keeps the exact id as the option hint", async () => {
+    await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+
+    const listbox = screen.getByRole("listbox", { name: "Model for this session" });
+    expect(within(listbox).getByRole("group", { name: "Anthropic" })).toBeInTheDocument();
+    expect(within(listbox).getByRole("group", { name: "OpenAI" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Sonnet 4.5 claude-sonnet-4-5" })).toHaveTextContent(
+      "claude-sonnet-4-5",
+    );
+  });
+
+  it("disables an unconfigured provider and opens Providers from the menu footer", async () => {
+    await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+
+    const google = screen.getByRole("option", { name: /Gemini 2.5 Pro/ });
+    expect(google).toBeDisabled();
+    expect(google).toHaveTextContent("Add a key in Settings");
+
+    await userEvent.click(screen.getByRole("button", { name: "Providers" }));
+    const tab = await screen.findByRole("tab", { name: "Providers" });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("searches the model menu across providers", async () => {
+    await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+    const search = screen.getByRole("searchbox", { name: "Search Model for this session" });
+    await userEvent.type(search, "gpt");
+
+    expect(screen.getByRole("option", { name: /GPT-5 Mini/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Sonnet 4.5/ })).not.toBeInTheDocument();
+  });
+
+  it("lists remembered models first and prunes ids the catalog no longer has", async () => {
+    localStorage.setItem(
+      "grove.recentModels",
+      JSON.stringify(["claude-opus-4-1", "retired-model"]),
+    );
+    await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+
+    const listbox = screen.getByRole("listbox", { name: "Model for this session" });
+    const recent = within(listbox).getAllByRole("group")[0];
+    expect(recent).toHaveAccessibleName("Recent");
+    expect(within(recent).getByRole("option", { name: /Opus 4.1/ })).toBeInTheDocument();
+    expect(screen.queryByText(/retired-model/)).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem("grove.recentModels") ?? "[]")).toEqual([
+        "claude-opus-4-1",
+      ]),
+    );
+  });
+
+  it("switches provider through the existing path, remembers the choice and toasts the label", async () => {
+    const bridge = await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /GPT-5 Mini/ }));
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_switch_provider"));
+    expect(
+      bridge.calls.find((call) => call.command === "session_switch_provider")?.args,
+    ).toMatchObject({ provider: "openai", model: "gpt-5-mini" });
+    expect(await screen.findByText("Session now runs on OpenAI · GPT-5 Mini")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("grove.recentModels") ?? "[]")[0]).toBe("gpt-5-mini");
   });
 
   it("opens settings on the requested tab and applies a theme", async () => {

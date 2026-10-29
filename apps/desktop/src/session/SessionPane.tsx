@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 
 const EMPTY_QUEUE: string[] = [];
 
+
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useBridge } from "../ipc/context";
 import { errorText } from "../ipc/errors";
@@ -22,18 +23,22 @@ import {
   firstAvailableProvider,
   providerMeta,
   turnInFlight,
-  modelGroupsFor,
   sessionVisual,
   SESSION_UI_STATE,
+  PROVIDERS,
+  type ProviderMeta,
 } from "../workspace/models";
 import { Icon } from "../workspace/Icon";
+import { ProviderGlyph } from "../workspace/ProviderGlyph";
+import { modelLabel } from "../workspace/modelLabel";
 import {
   knownThinkingLevels,
   nearestThinkingLevel,
   thinkingGroups,
+  thinkingLabel,
   thinkingLevelsFor,
 } from "../workspace/thinking";
-import { Combo } from "../shell/Combo";
+import { Combo, type ComboGroup, type ComboOption } from "../shell/Combo";
 import {
   clockLabel,
   durationLabel,
@@ -41,6 +46,38 @@ import {
   footerIndexes,
   type TranscriptItem,
 } from "../session/transcript";
+
+const RECENT_MODELS_KEY = "grove.recentModels";
+const RECENT_LIMIT = 5;
+
+/** One model and the provider it runs through, as the picker menus see it. */
+interface ModelChoice {
+  id: string;
+  meta: ProviderMeta;
+  ready: boolean;
+}
+
+function readRecentModels(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_MODELS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    // Storage can be blocked or hold an older value; recents are a convenience, not state.
+    return [];
+  }
+}
+
+function writeRecentModels(models: string[]): void {
+  try {
+    localStorage.setItem(RECENT_MODELS_KEY, JSON.stringify(models));
+  } catch {
+    // Same: the picker still works without remembering anything.
+  }
+}
 
 interface SessionPaneProps {
   active: boolean;
@@ -854,7 +891,9 @@ function Composer({
   const providerStatuses = useSessionStore((state) => state.providerStatuses);
   const modelThinking = useSessionStore((state) => state.modelThinking);
   const notify = useUiStore((state) => state.notify);
+  const openSettings = useUiStore((state) => state.openSettings);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [recentModels, setRecentModels] = useState<string[]>(readRecentModels);
 
   const live = detail ? detail.status !== "exited" && detail.status !== "error" : false;
   const working = turnInFlight(detail);
@@ -864,7 +903,6 @@ function Composer({
     () => Object.fromEntries(registered.map((spec) => [spec.id, spec.models])),
     [registered],
   );
-  const modelGroups = modelGroupsFor(prefs.enabledProviders, available, modelsByProvider);
   const fallbackProvider = firstAvailableProvider(prefs.enabledProviders, available, prefs.defaultProvider);
   const currentProvider = detail?.provider ?? fallbackProvider;
   const currentModel = model ?? defaultModelFor(currentProvider, modelsByProvider[currentProvider]);
@@ -874,6 +912,76 @@ function Composer({
     [currentModel, currentProvider, modelThinking],
   );
   const thinkingLevels = knownLevels ?? thinkingLevelsFor(currentProvider, currentModel, modelThinking);
+
+  /**
+   * Every provider the menu can list, with whether it has a credential. The shipped catalog is the
+   * fallback until `provider_list` answers, so the picker is never empty on first paint.
+   */
+  const catalog = useMemo(() => {
+    const ids = registered.length > 0 ? registered.map((spec) => spec.id) : Object.keys(PROVIDERS);
+    const configured = new Set(availableProviderIds(registered, providerStatuses));
+    const groups = ids
+      .filter((id) => prefs.enabledProviders[id] !== false)
+      .map((id) => {
+        const meta = providerMeta(id);
+        const models = modelsByProvider[id]?.length ? modelsByProvider[id] : meta.models;
+        return { id, meta, models, ready: configured.has(id) };
+      });
+    const owners = new Map<string, ModelChoice>();
+    for (const group of groups) {
+      for (const entry of group.models) {
+        if (!owners.has(entry)) {
+          owners.set(entry, { id: group.id, meta: group.meta, ready: group.ready });
+        }
+      }
+    }
+    return { groups, owners };
+  }, [modelsByProvider, prefs.enabledProviders, providerStatuses, registered]);
+
+  // A recent model that no longer exists, or whose provider lost its key, is not a choice any more.
+  useEffect(() => {
+    setRecentModels((current) => {
+      const next = current
+        .filter((id) => catalog.owners.get(id)?.ready)
+        .filter((id, index, list) => list.indexOf(id) === index)
+        .slice(0, RECENT_LIMIT);
+      const same =
+        next.length === current.length && next.every((id, index) => id === current[index]);
+      return same ? current : next;
+    });
+  }, [catalog]);
+
+  useEffect(() => {
+    writeRecentModels(recentModels);
+  }, [recentModels]);
+
+  const modelMenu = useMemo(() => {
+    const option = (value: string, owner: ModelChoice): ComboOption => ({
+      value,
+      label: modelLabel(value, owner.id),
+      hint: owner.ready ? value : "Add a key in Settings",
+      disabled: !owner.ready,
+      icon: <ProviderGlyph provider={owner.id} />,
+    });
+    const groups: ComboGroup[] = [];
+    const recent = recentModels.flatMap((id) => {
+      const owner = catalog.owners.get(id);
+      return owner ? [{ id, owner }] : [];
+    });
+    if (recent.length > 0) {
+      groups.push({
+        label: "Recent",
+        options: recent.map((entry) => option(entry.id, entry.owner)),
+      });
+    }
+    for (const entry of catalog.groups) {
+      groups.push({
+        label: entry.meta.name,
+        options: entry.models.map((id) => option(id, entry)),
+      });
+    }
+    return groups;
+  }, [catalog, recentModels]);
 
   useEffect(() => {
     const node = inputRef.current;
@@ -902,11 +1010,16 @@ function Composer({
 
   const changeModel = async (value: string) => {
     if (!detail || value === currentModel) return;
-    const next = modelGroups.find((group) => group.models.includes(value))?.provider.id;
-    if (!next) return;
+    const owner = catalog.owners.get(value);
+    if (!owner?.ready) return;
     try {
-      await switchProvider(bridge, next, value);
-      notify(`Session now runs on ${providerMeta(next).name} · ${value}`);
+      // Same-provider hot swap arrives in the next slice; every choice still goes through the
+      // provider switch the session already supports.
+      await switchProvider(bridge, owner.id, value);
+      notify(`Session now runs on ${owner.meta.name} · ${modelLabel(value, owner.id)}`);
+      setRecentModels((current) =>
+        [value, ...current.filter((id) => id !== value)].slice(0, RECENT_LIMIT),
+      );
     } catch {
       // The store already carries the error message.
     }
@@ -977,31 +1090,47 @@ function Composer({
             }}
           />
           <div className="composer-foot">
-            <Combo
-              className="combo-model"
-              id="model-select"
-              label="Model for this session"
-              value={currentModel}
-              groups={modelGroups.map(({ provider: entry, models }) => ({
-                label: entry.name,
-                options: models.map((value) => ({ value })),
-              }))}
-              disabled={busy}
-              searchable
-              placement="up"
-              onChange={(value) => void changeModel(value)}
-            />
-            <Combo
-              className="combo-thinking"
-              id="thinking-select"
-              label="Thinking level for this session"
-              value={currentThinking}
-              groups={thinkingGroups(thinkingLevels)}
-              disabled={busy}
-              placement="up"
-              title="Thinking level for the next turn"
-              onChange={(value) => void setThinking(bridge, value as ThinkingLevel)}
-            />
+            <div className="composer-pickers">
+              <Combo
+                className="inline-picker thinking-picker"
+                id="thinking-select"
+                label="Thinking level for this session"
+                value={currentThinking}
+                groups={thinkingGroups(thinkingLevels)}
+                disabled={busy}
+                placement="up"
+                title="Thinking level for the next turn"
+                triggerIcon={<Icon name="brain" />}
+                renderTriggerValue={(level) => thinkingLabel(level as ThinkingLevel)}
+                hideChevron
+                onChange={(value) => void setThinking(bridge, value as ThinkingLevel)}
+              />
+              <Combo
+                className="inline-picker model-picker"
+                id="model-select"
+                label="Model for this session"
+                value={currentModel}
+                groups={modelMenu}
+                disabled={busy}
+                searchable
+                placement="up"
+                title={currentModel}
+                triggerIcon={<ProviderGlyph provider={currentProvider} />}
+                renderTriggerValue={(value) => modelLabel(value, currentProvider)}
+                hideChevron
+                footer={
+                  <button
+                    className="combo-footer-action"
+                    type="button"
+                    onClick={() => openSettings("providers")}
+                  >
+                    <Icon name="settings" size="xs" />
+                    Providers
+                  </button>
+                }
+                onChange={(value) => void changeModel(value)}
+              />
+            </div>
             <div className="foot-actions">
               {working ? (
                 <button className="btn-stop" type="button" onClick={() => void cancel(bridge)}>
