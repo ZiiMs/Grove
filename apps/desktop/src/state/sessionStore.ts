@@ -736,6 +736,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       return null;
     }
     if (row.awaiting || row.status === "busy" || row.status === "starting") return null;
+    // Claim the queue before awaiting: two idle transitions in a row must not launch two switches.
+    set({ pendingModel: null });
     const landed = await switchSession(
       set,
       bridge,

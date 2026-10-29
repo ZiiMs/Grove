@@ -51,7 +51,7 @@ pub enum SessionError {
     NotFound(String),
     #[error("session is not running: {0} (resume it first)")]
     NotRunning(String),
-    #[error("session is busy: {0}")]
+    #[error("{0}")]
     Conflict(String),
     #[error("invalid request: {0}")]
     Invalid(String),
@@ -82,7 +82,8 @@ impl From<SessionError> for IpcError {
     }
 }
 
-/// How many transcript lines a provider switch replays as the new provider's opening prompt.
+/// How many transcript lines a stopped session replays as the new provider's opening prompt. A live
+/// switch hands over the normalized history instead; this is the fallback when there is none.
 pub const TRANSCRIPT_SUMMARY_LINES: usize = 24;
 
 /// The longest a session title may be: long enough for a sentence, short enough for a tree row.
@@ -671,8 +672,13 @@ impl SessionManager {
         let handoff = match self.live.lock().await.get(id).cloned() {
             Some(live) => {
                 if session.awaiting || session.status == SessionState::Busy {
+                    let state = if session.awaiting {
+                        "waiting for an answer"
+                    } else {
+                        "running a turn"
+                    };
                     return Err(SessionError::Conflict(format!(
-                        "session {id} is running; switch it when the turn finishes"
+                        "session {id} is {state}; switch providers when it is idle"
                     )));
                 }
                 let mut handle = live.commands.lock().await;
