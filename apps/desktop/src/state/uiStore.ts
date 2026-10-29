@@ -32,6 +32,9 @@ interface UiState {
   setView: (view: PaneView) => void;
   contextOpen: boolean;
   setContextOpen: (open: boolean) => void;
+  /** The floating session-info panel. Never shown while the context column is open. */
+  infoOpen: boolean;
+  setInfoOpen: (open: boolean) => void;
   contextTab: ContextTab;
   setContextTab: (tab: ContextTab) => void;
   settingsTab: SettingsTab | null;
@@ -68,6 +71,8 @@ export const useUiStore = create<UiState>((set) => ({
   setView: (view) => set({ view }),
   contextOpen: true,
   setContextOpen: (contextOpen) => set({ contextOpen }),
+  infoOpen: false,
+  setInfoOpen: (infoOpen) => set({ infoOpen }),
   contextTab: "git",
   setContextTab: (contextTab) => set({ contextTab }),
   settingsTab: null,
@@ -105,6 +110,7 @@ export const useUiStore = create<UiState>((set) => ({
     set({
       view: "session",
       contextOpen: true,
+      infoOpen: false,
       contextTab: "git",
       settingsTab: null,
       newSession: null,

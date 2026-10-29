@@ -371,6 +371,24 @@ describe("redesigned shell", () => {
     expect(localStorage.getItem("grove.navWidth")).toBeNull();
   });
 
+  it("opens the floating session info and hides it when the context column opens", async () => {
+    await ready();
+    const titlebar = document.querySelector(".titlebar") as HTMLElement;
+    await userEvent.click(within(titlebar).getByRole("button", { name: "Session info" }));
+
+    const panel = screen.getByRole("complementary", { name: "Session info" });
+    expect(within(panel).getByText("Model")).toBeInTheDocument();
+    expect(within(panel).getByText("Context")).toBeInTheDocument();
+    expect(within(panel).getByText("Usage")).toBeInTheDocument();
+    expect(within(panel).getByText("Ask before changes")).toBeInTheDocument();
+
+    // Only one right sidebar at a time: opening the context column closes the floating panel.
+    await userEvent.click(screen.getByRole("button", { name: "Show context panel" }));
+    expect(screen.queryByRole("complementary", { name: "Session info" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Hide context panel" }));
+    expect(screen.queryByRole("complementary", { name: "Session info" })).not.toBeInTheDocument();
+  });
+
   it("toggles approval mode from the composer and keeps send icon-only", async () => {
     const bridge = await ready();
     const approval = screen.getByRole("button", {

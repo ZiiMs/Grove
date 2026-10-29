@@ -43,6 +43,12 @@ const PATHS: Record<string, ReactNode> = {
     </>
   ),
   circle: <circle cx="8" cy="8" r="4.6" />,
+  panelRight: (
+    <>
+      <rect x="2.5" y="3" width="11" height="10" rx="1.6" />
+      <path d="M9.5 3v10" />
+    </>
+  ),
   shield: <path d="M8 2.2 12.8 3.9v3.6c0 2.9-2 4.9-4.8 5.9-2.8-1-4.8-3-4.8-5.9V3.9z" />,
   shieldCheck: (
     <>

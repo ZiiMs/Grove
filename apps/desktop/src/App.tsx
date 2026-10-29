@@ -14,6 +14,7 @@ import { useWorkspaceStore } from "./state/workspaceStore";
 import { NavTree } from "./shell/NavTree";
 import { NavResizer, useNavWidth } from "./shell/NavResizer";
 import { ContextMenuHost } from "./shell/ContextMenu";
+import { SessionInfoPanel } from "./session/SessionInfoPanel";
 import {
   archiveSession,
   projectMenuItems,
@@ -60,6 +61,8 @@ export default function App() {
   const openMenu = useMenuStore((state) => state.openMenu);
   const contextOpen = useUiStore((state) => state.contextOpen);
   const setContextOpen = useUiStore((state) => state.setContextOpen);
+  const infoOpen = useUiStore((state) => state.infoOpen);
+  const setInfoOpen = useUiStore((state) => state.setInfoOpen);
   const setContextTab = useUiStore((state) => state.setContextTab);
   const openNewSession = useUiStore((state) => state.openNewSession);
   const openAddProject = useUiStore((state) => state.openAddProject);
@@ -78,6 +81,7 @@ export default function App() {
   const activeProject = activeSummary ? projectForSession(activeSummary, projects) : null;
   const activeWorktrees = activeProject ? (worktrees[activeProject.id] ?? []) : [];
   const activeWorktree = activeSummary ? worktreeForSession(activeSummary, activeWorktrees) : null;
+  const currentBranch = git?.branch ?? activeWorktree?.branch ?? null;
   const branches = activeProject ? (branchesByProject[activeProject.id] ?? []) : [];
   const planStats = plan ? planProgress(plan.markdown) : { done: 0, total: 0 };
   // Archived sessions are hidden from the tree; they must not summon the "needs you" badge either.
@@ -174,9 +178,24 @@ export default function App() {
     setView("session");
   };
 
+  /** Only one right sidebar is visible: opening the context column puts the floating panel away. */
+  const openContext = () => {
+    setInfoOpen(false);
+    setContextOpen(true);
+  };
+  const infoVisible = infoOpen && !contextOpen;
+  const toggleInfo = () => {
+    if (infoVisible) {
+      setInfoOpen(false);
+      return;
+    }
+    setInfoOpen(true);
+    setContextOpen(false);
+  };
+
   const onGit = () => {
     setContextTab("git");
-    setContextOpen(true);
+    openContext();
     setView(window.matchMedia("(max-width: 899px)").matches ? "context" : "session");
   };
 
@@ -212,6 +231,8 @@ export default function App() {
         awaitingCount={awaiting.length}
         onGit={onGit}
         onAwaiting={onAwaiting}
+        infoOpen={infoVisible}
+        onInfo={toggleInfo}
       />
 
       <nav className="mobile-nav" role="tablist" aria-label="Workspace pane">
@@ -224,7 +245,7 @@ export default function App() {
             aria-controls={`panel-${entry.id}`}
             aria-selected={view === entry.id}
             onClick={() => {
-              if (entry.id === "context") setContextOpen(true);
+              if (entry.id === "context") openContext();
               setView(entry.id);
             }}
           >
@@ -277,7 +298,7 @@ export default function App() {
               aria-expanded={false}
               aria-label="Show context panel"
               title="Show context panel"
-              onClick={() => setContextOpen(true)}
+              onClick={openContext}
             >
               <Icon name="chevronLeft" />
             </button>
@@ -292,11 +313,21 @@ export default function App() {
         sessions={sessions}
         session={detail}
         project={activeProject}
-        branch={git?.branch ?? activeWorktree?.branch ?? null}
+        branch={currentBranch}
         events={events}
         plan={planStats}
         prefs={prefs}
       />
+
+      {infoVisible ? (
+        <SessionInfoPanel
+          project={activeProject}
+          worktree={activeWorktree}
+          branch={currentBranch}
+          plan={planStats}
+          onClose={() => setInfoOpen(false)}
+        />
+      ) : null}
 
       <NewSessionDialog />
       <AddProjectDialog />
