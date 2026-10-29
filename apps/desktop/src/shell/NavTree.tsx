@@ -1,6 +1,7 @@
-import type { Project, SessionSummary, SubagentSummary } from "@grove/contract";
-import { useMemo, useState } from "react";
+import type { GitWorktree, Project, SessionSummary, SubagentSummary } from "@grove/contract";
+import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useSessionStore } from "../state/sessionStore";
+import type { MenuAnchor } from "../state/menuStore";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
 import { providerMeta, sessionVisual } from "../workspace/models";
@@ -17,6 +18,14 @@ interface NavTreeProps {
   onNewChat: () => void;
   onAddProject: () => void;
   onSettings: () => void;
+  /** Surfaces open the app-level menu; the shell owns the items and their actions. */
+  onSessionMenu?: (session: SessionSummary, anchor: MenuAnchor) => void;
+  onProjectMenu?: (project: Project, anchor: MenuAnchor) => void;
+  onWorktreeMenu?: (project: Project, worktree: GitWorktree, anchor: MenuAnchor) => void;
+}
+
+function anchorOf(event: ReactMouseEvent<HTMLElement>): MenuAnchor {
+  return { x: event.clientX, y: event.clientY, returnFocus: event.currentTarget };
 }
 
 function ProviderMark({ provider, small }: { provider: string; small?: boolean }) {
@@ -93,10 +102,12 @@ function SessionRow({
   session,
   active,
   onSelect,
+  onMenu,
 }: {
   session: SessionSummary;
   active: boolean;
   onSelect: (id: string) => void;
+  onMenu?: (session: SessionSummary, anchor: MenuAnchor) => void;
 }) {
   const closeSubagent = useUiStore((state) => state.closeSubagent);
   const visual = sessionVisual(session);
@@ -111,6 +122,11 @@ function SessionRow({
         onClick={() => {
           closeSubagent();
           onSelect(session.id);
+        }}
+        onContextMenu={(event) => {
+          if (!onMenu) return;
+          event.preventDefault();
+          onMenu(session, anchorOf(event));
         }}
         title={session.title}
       >
@@ -127,6 +143,31 @@ function SessionRow({
         <span className="sr-only">{visual}</span>
         <ProviderMark provider={session.provider} small />
       </button>
+      {onMenu ? (
+        <div className="session-actions">
+          <button
+            className="icon-btn sm"
+            type="button"
+            aria-label="Session actions"
+            title="Session actions"
+            onClick={(event) => {
+              event.stopPropagation();
+              const box = event.currentTarget.getBoundingClientRect();
+              onMenu(session, {
+                x: box.left,
+                y: box.bottom + 2,
+                returnFocus: event.currentTarget,
+              });
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onMenu(session, anchorOf(event));
+            }}
+          >
+            <Icon name="more" size="sm" />
+          </button>
+        </div>
+      ) : null}
       {subagents.length ? (
         <div className="subagent-list">
           {subagents.map((subagent) => (
@@ -177,6 +218,9 @@ export function NavTree({
   onNewChat,
   onAddProject,
   onSettings,
+  onSessionMenu,
+  onProjectMenu,
+  onWorktreeMenu,
 }: NavTreeProps) {
   const sessions = useSessionStore((state) => state.sessions);
   const projects = useWorkspaceStore((state) => state.projects);
@@ -252,6 +296,11 @@ export function NavTree({
             aria-expanded={open}
             aria-controls={`kids-p-${project.id}`}
             onClick={() => toggle(`p-${project.id}`)}
+            onContextMenu={(event) => {
+              if (!onProjectMenu) return;
+              event.preventDefault();
+              onProjectMenu(project, anchorOf(event));
+            }}
           >
             <span className="node-ico">
               <Icon name="folder" size="sm" />
@@ -303,6 +352,11 @@ export function NavTree({
                         aria-expanded={worktreeOpen}
                         aria-controls={`kids-${worktreeId}`}
                         onClick={() => toggle(worktreeId)}
+                        onContextMenu={(event) => {
+                          if (!onWorktreeMenu) return;
+                          event.preventDefault();
+                          onWorktreeMenu(project, worktree, anchorOf(event));
+                        }}
                       >
                         <span className="node-ico">
                           <Icon name="branch" size="sm" />
@@ -334,6 +388,7 @@ export function NavTree({
                             session={session}
                             active={session.id === activeId}
                             onSelect={onSelect}
+                            onMenu={onSessionMenu}
                           />
                         ))
                       ) : (
@@ -351,6 +406,7 @@ export function NavTree({
                 session={session}
                 active={session.id === activeId}
                 onSelect={onSelect}
+                onMenu={onSessionMenu}
               />
             ))
           ) : project.isGit ? null : (
@@ -426,6 +482,7 @@ export function NavTree({
                     session={session}
                     active={session.id === activeId}
                     onSelect={onSelect}
+                    onMenu={onSessionMenu}
                   />
                 ))
               ) : (

@@ -43,6 +43,8 @@ interface WorkspaceState {
   refreshProjects: (bridge: GroveBridge) => Promise<void>;
   refreshProjectGit: (bridge: GroveBridge, project: Project) => Promise<void>;
   addProject: (bridge: GroveBridge, request: AddProjectRequest) => Promise<Project>;
+  /** Delete the project row; its sessions stay and come back as chats. The folder is untouched. */
+  removeProject: (bridge: GroveBridge, id: string) => Promise<void>;
   setTheme: (id: ThemeId, mode: ThemeMode) => void;
   saveSettings: (bridge: GroveBridge, patch: SettingsPatch) => Promise<void>;
   setPrefs: (patch: Partial<Preferences>) => void;
@@ -170,6 +172,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((state) => ({ projects: [...state.projects, project] }));
     await get().refreshProjectGit(bridge, project);
     return project;
+  },
+
+  removeProject: async (bridge, id) => {
+    await bridge.invoke("project_remove", { id });
+    set((state) => {
+      const worktrees = { ...state.worktrees };
+      const branches = { ...state.branches };
+      const gitErrors = { ...state.gitErrors };
+      delete worktrees[id];
+      delete branches[id];
+      delete gitErrors[id];
+      return {
+        projects: state.projects.filter((project) => project.id !== id),
+        worktrees,
+        branches,
+        gitErrors,
+      };
+    });
   },
 
   setTheme: (id, mode) => {

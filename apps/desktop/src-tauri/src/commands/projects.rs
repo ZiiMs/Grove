@@ -44,6 +44,16 @@ pub async fn project_add(
 }
 
 #[tauri::command]
+pub async fn project_remove(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || -> IpcResult<()> {
+        Ok(core.projects.remove(&id)?)
+    })
+    .await
+    .map_err(|error| IpcError::io(format!("project task failed: {error}")))?
+}
+
+#[tauri::command]
 pub async fn fs_list_dirs(path: Option<String>) -> IpcResult<DirListing> {
     tauri::async_runtime::spawn_blocking(move || -> IpcResult<DirListing> {
         Ok(grove_core::projects::list_dirs(path.as_deref())?)

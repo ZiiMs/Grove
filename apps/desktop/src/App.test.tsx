@@ -1,6 +1,6 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { fsRootsSchema } from "@grove/contract";
 import type {
@@ -27,6 +27,7 @@ import {
 import { useSessionStore } from "./state/sessionStore";
 import { useWorkspaceStore } from "./state/workspaceStore";
 import { useContextStore } from "./state/contextStore";
+import { useMenuStore } from "./state/menuStore";
 import { useUiStore } from "./state/uiStore";
 
 const project: Project = {
@@ -276,6 +277,7 @@ beforeEach(() => {
   useSessionStore.getState().reset();
   useWorkspaceStore.getState().reset();
   useContextStore.getState().reset();
+  useMenuStore.getState().reset();
   useUiStore.getState().reset();
 });
 
@@ -854,5 +856,374 @@ describe("redesigned shell", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Session" }));
     expect(await screen.findByRole("heading", { name: "OAuth device flow" })).toBeInTheDocument();
+  });
+});
+
+describe("context menu", () => {
+  const clipboard = {
+    writeText: vi.fn(async (_text: string) => {}),
+    readText: vi.fn(async () => ""),
+  };
+
+  beforeEach(() => {
+    clipboard.writeText.mockClear();
+    clipboard.readText.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(navigator, "clipboard");
+  });
+
+  function useClipboard() {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard });
+  }
+
+  function sessionRow(): HTMLElement {
+    return screen.getByRole("button", { name: /OAuth device flow/ });
+  }
+
+  it("opens the session menu on right-click and runs its actions", async () => {
+    useClipboard();
+    const bridge = await ready();
+
+    const dispatched = fireEvent.contextMenu(sessionRow(), { clientX: 120, clientY: 160 });
+    expect(dispatched).toBe(false);
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu).getByRole("menuitem", { name: "Copy working directory" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Copy working directory" }));
+    await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith(session.cwd));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(sessionRow(), { clientX: 120, clientY: 160 });
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Reveal in Explorer" }),
+    );
+    await waitFor(() =>
+      expect(
+        bridge.calls.some(
+          (call) =>
+            call.command === "app_reveal_path" &&
+            (call.args as { path: string }).path === session.cwd,
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("moves with the arrow keys, Home and End, and Escape closes back to the row", async () => {
+    await ready();
+    const row = sessionRow();
+    fireEvent.contextMenu(row, { clientX: 100, clientY: 100 });
+    const menu = await screen.findByRole("menu");
+    const items = within(menu).getAllByRole("menuitem");
+
+    await waitFor(() => expect(items[0]).toHaveFocus());
+    await userEvent.keyboard("{ArrowDown}");
+    expect(items[1]).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(items[0]).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(items[items.length - 1]).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
+    expect(items[items.length - 2]).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(row).toHaveFocus();
+
+    fireEvent.contextMenu(row, { clientX: 100, clientY: 100 });
+    await screen.findByRole("menu");
+    await userEvent.keyboard("{Tab}");
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  });
+
+  it("activates the focused item with Enter", async () => {
+    const bridge = await ready();
+    fireEvent.contextMenu(sessionRow(), { clientX: 100, clientY: 100 });
+    const menu = await screen.findByRole("menu");
+    await waitFor(() => expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus());
+
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    await waitFor(() =>
+      expect(
+        bridge.calls.some(
+          (call) =>
+            call.command === "app_reveal_path" &&
+            (call.args as { path: string }).path === session.cwd,
+        ),
+      ).toBe(true),
+    );
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("closes on an outside pointer press and returns focus to the row", async () => {
+    await ready();
+    const row = sessionRow();
+    fireEvent.contextMenu(row, { clientX: 100, clientY: 100 });
+    await screen.findByRole("menu");
+
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    expect(row).toHaveFocus();
+  });
+
+  it("opens from the hover-only, keyboard-focusable session actions button", async () => {
+    await ready();
+    const actions = screen.getByRole("button", { name: "Session actions" });
+    actions.focus();
+    expect(actions).toHaveFocus();
+
+    await userEvent.click(actions);
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy working directory" })).toBeInTheDocument();
+  });
+
+  it("offers the text edit actions and omits Paste when clipboard read is denied", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async () => {}),
+        readText: vi.fn(async () => {
+          throw new Error("denied");
+        }),
+      },
+    });
+    await ready();
+    const composer = screen.getByLabelText("Message the active session");
+
+    fireEvent.contextMenu(composer, { clientX: 40, clientY: 40 });
+    const menu = await screen.findByRole("menu");
+    for (const label of ["Undo", "Redo", "Cut", "Copy", "Select all"]) {
+      expect(within(menu).getByRole("menuitem", { name: label })).toBeInTheDocument();
+    }
+    expect(within(menu).queryByRole("menuitem", { name: "Paste" })).not.toBeInTheDocument();
+  });
+
+  it("copies selected text when execCommand is unavailable", async () => {
+    useClipboard();
+    await ready();
+    const filter = screen.getByLabelText(/Filter projects/);
+    await userEvent.type(filter, "oauth");
+    (filter as HTMLInputElement).setSelectionRange(0, 5);
+
+    fireEvent.contextMenu(filter, { clientX: 40, clientY: 40 });
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Copy" }),
+    );
+    await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith("oauth"));
+  });
+
+  it("pastes clipboard text into the composer when execCommand is unavailable", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: vi.fn(async () => {}),
+        readText: vi.fn(async () => "pasted text"),
+      },
+    });
+    await ready();
+    const composer = screen.getByLabelText("Message the active session");
+
+    fireEvent.contextMenu(composer, { clientX: 40, clientY: 40 });
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Paste" }),
+    );
+
+    await waitFor(() =>
+      expect(useSessionStore.getState().drafts[session.id]).toBe("pasted text"),
+    );
+    expect(composer).toHaveValue("pasted text");
+  });
+
+  it("opens the project menu and removes only the project row", async () => {
+    const bridge = await ready();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+
+    fireEvent.contextMenu(within(nav).getByText("grove"), { clientX: 40, clientY: 60 });
+    const menu = await screen.findByRole("menu");
+    for (const label of ["New session", "Copy path", "Reveal in Explorer", "Refresh"]) {
+      expect(within(menu).getByRole("menuitem", { name: label })).toBeInTheDocument();
+    }
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Remove project" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(
+        bridge.calls.some(
+          (call) =>
+            call.command === "project_remove" &&
+            (call.args as { id: string }).id === project.id,
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(within(nav).queryByText("grove")).not.toBeInTheDocument());
+    expect(within(nav).getByText("Chats")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /OAuth device flow/ })).toBeInTheDocument();
+  });
+
+  it("opens the worktree menu and starts a session there", async () => {
+    await ready();
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+
+    fireEvent.contextMenu(within(nav).getByText("feat/ui"), { clientX: 40, clientY: 60 });
+    const menu = await screen.findByRole("menu");
+    for (const label of ["New session", "Copy path", "Reveal in Explorer", "Refresh"]) {
+      expect(within(menu).getByRole("menuitem", { name: label })).toBeInTheDocument();
+    }
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "New session" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText(/joins feat\/ui/)).toBeInTheDocument();
+  });
+
+  it("opens the background menu on empty tree space", async () => {
+    await ready();
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+    const scroller = nav.querySelector(".nav-scroll") as HTMLElement;
+
+    fireEvent.contextMenu(scroller, { clientX: 20, clientY: 400 });
+    const menu = await screen.findByRole("menu");
+    for (const label of ["New chat", "Add project", "Refresh"]) {
+      expect(within(menu).getByRole("menuitem", { name: label })).toBeInTheDocument();
+    }
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "New chat" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("portals the menu into the topmost open dialog", async () => {
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: /Add project/ }));
+    const addDialog = screen.getByRole("dialog");
+
+    fireEvent.contextMenu(addDialog, { clientX: 20, clientY: 20 });
+    expect((await screen.findByRole("menu")).closest("dialog")).toBe(addDialog);
+
+    act(() => useUiStore.getState().openSettings("general"));
+    await waitFor(() => expect(document.querySelectorAll("dialog[open]")).toHaveLength(2));
+    const dialogs = document.querySelectorAll<HTMLDialogElement>("dialog[open]");
+    const topmost = dialogs[dialogs.length - 1];
+
+    fireEvent.contextMenu(topmost, { clientX: 20, clientY: 20 });
+    const menu = await screen.findByRole("menu");
+    expect(menu.closest("dialog")).toBe(topmost);
+  });
+
+  it("keeps the menu inside the viewport when opened near an edge", async () => {
+    await ready();
+    const box = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 240,
+      bottom: 160,
+      width: 240,
+      height: 160,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.contextMenu(sessionRow(), { clientX: 1000, clientY: 760 });
+    const menu = await screen.findByRole("menu");
+    await waitFor(() => expect(menu.style.left).toBe("760px"));
+    expect(menu.style.top).toBe("600px");
+    box.mockRestore();
+  });
+
+  it("closes on scroll, resize and window blur", async () => {
+    await ready();
+    for (const close of [
+      () => window.dispatchEvent(new Event("scroll")),
+      () => window.dispatchEvent(new Event("resize")),
+      () => window.dispatchEvent(new Event("blur")),
+    ]) {
+      fireEvent.contextMenu(sessionRow(), { clientX: 60, clientY: 60 });
+      await screen.findByRole("menu");
+      act(close);
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    }
+  });
+
+  it("opens the message menu and copies the message", async () => {
+    useClipboard();
+    await ready();
+
+    fireEvent.contextMenu(screen.getByText("Wire up the GitHub OAuth device flow."), {
+      clientX: 50,
+      clientY: 50,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Copy" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Copy as Markdown" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Copy code" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Copy" }));
+    await waitFor(() =>
+      expect(clipboard.writeText).toHaveBeenCalledWith("Wire up the GitHub OAuth device flow."),
+    );
+  });
+
+  it("offers Copy code when the message contains a code block", async () => {
+    useClipboard();
+    const coded: SessionEvent[] = [
+      {
+        at: "2025-01-01T00:00:02.000Z",
+        kind: "message",
+        role: "assistant",
+        blocks: [
+          { type: "text", text: "Here it is." },
+          { type: "code", language: "rust", text: "fn main() {}" },
+        ],
+      },
+    ];
+    renderApp({
+      sessions: [fakeSummary({ ...session, awaiting: false }, coded.length)],
+      details: { [session.id]: { ...detail, events: coded, awaiting: false } },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+
+    fireEvent.contextMenu(screen.getByText("Here it is."), { clientX: 50, clientY: 50 });
+    const menu = await screen.findByRole("menu");
+    await userEvent.click(
+      within(menu).getByRole("menuitem", { name: "Copy as Markdown" }),
+    );
+    await waitFor(() =>
+      expect(clipboard.writeText).toHaveBeenCalledWith(
+        "Here it is.\n\n```rust\nfn main() {}\n```",
+      ),
+    );
+
+    fireEvent.contextMenu(screen.getByText("Here it is."), { clientX: 50, clientY: 50 });
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Copy code" }),
+    );
+    await waitFor(() => expect(clipboard.writeText).toHaveBeenCalledWith("fn main() {}"));
+  });
+
+  it("opens the tool row menu and reveals the resolved path", async () => {
+    const bridge = await ready();
+
+    fireEvent.contextMenu(screen.getByText("apps/desktop/src/session.rs"), {
+      clientX: 50,
+      clientY: 50,
+    });
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Copy path" })).toBeInTheDocument();
+
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Reveal in Explorer" }));
+    await waitFor(() =>
+      expect(
+        bridge.calls.some(
+          (call) =>
+            call.command === "app_reveal_path" &&
+            (call.args as { path: string }).path ===
+              "C:/code/grove/apps/desktop/src/session.rs",
+        ),
+      ).toBe(true),
+    );
   });
 });

@@ -395,6 +395,9 @@ export function createFakeBridge(
       if (command === "app_window_minimize" || command === "app_window_close") {
         return null as CommandMap[K]["result"];
       }
+      if (command === "app_reveal_path") {
+        return null as CommandMap[K]["result"];
+      }
       if (command === "app_window_is_maximized") {
         return windowMaximized as CommandMap[K]["result"];
       }
@@ -624,6 +627,20 @@ export function createFakeBridge(
         };
         projects.push(project);
         return structuredClone(project) as CommandMap[K]["result"];
+      }
+      if (command === "project_remove") {
+        const { id } = args as { id: string };
+        const index = projects.findIndex((project) => project.id === id);
+        if (index === -1) throw new Error(`FakeBridge has no project: ${id}`);
+        projects.splice(index, 1);
+        // The real store's `ON DELETE SET NULL` turns the project's sessions into chats.
+        for (const row of sessions) {
+          if (row.projectId === id) row.projectId = null;
+        }
+        for (const detail of Object.values(details)) {
+          if (detail.projectId === id) detail.projectId = null;
+        }
+        return null as CommandMap[K]["result"];
       }
       if (command === "fs_list_roots") {
         return fsRoots() as CommandMap[K]["result"];
