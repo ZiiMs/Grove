@@ -1,11 +1,15 @@
 import type {
+  CreateDirRequest,
   Decision,
   DetectedSkill,
+  DirListing,
+  FsRoots,
   ProviderStatus,
   EventEnvelope,
   GitBranch,
   GitStatus,
   GitWorktree,
+  ProjectDetection,
   QuestionAnswer,
   SessionEvent,
   ProviderSpec,
@@ -68,6 +72,12 @@ export interface FakeBridgeSeed {
     path: string;
     installedAt: string;
   }>;
+  /** Roots `fs_list_roots` returns; defaults to a home folder on `C:`. */
+  fsRoots?: FsRoots;
+  /** Folder listings by display path, as `fs_list_dirs` returns them. */
+  fsListings?: Record<string, DirListing>;
+  /** Detection by path; a path that is absent looks like a plain, non-git folder. */
+  detections?: Record<string, ProjectDetection>;
 }
 
 export interface FakeBridge extends GroveBridge {
@@ -203,6 +213,23 @@ export const DEFAULT_PROVIDER_STATUSES: ProviderStatus[] = [
   }),
 ];
 
+const DEFAULT_FS_ROOTS: FsRoots = {
+  home: "C:/Users/demo",
+  roots: [
+    { name: "Home", path: "C:/Users/demo", kind: "home" },
+    { name: "C:", path: "C:/", kind: "drive" },
+  ],
+};
+
+/** The folder above a display path, or null at a filesystem root. */
+function parentFolder(path: string): string | null {
+  const trimmed = path.replace(/\/+$/, "");
+  if (!trimmed || /^[A-Za-z]:$/.test(trimmed)) return null;
+  const index = trimmed.lastIndexOf("/");
+  if (index < 0) return null;
+  return index === 0 ? "/" : trimmed.slice(0, index);
+}
+
 export function fakeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: "session-1",
@@ -270,6 +297,9 @@ export function createFakeBridge(
   const branches = structuredClone(seed.branches ?? []);
   const installs = structuredClone(seed.installs ?? []);
   const inventory = structuredClone(seed.skillInventory ?? []);
+  const fsRoots = () => structuredClone(seed.fsRoots ?? DEFAULT_FS_ROOTS);
+  const fsListings: Record<string, DirListing> = structuredClone(seed.fsListings ?? {});
+  const detections = seed.detections ?? {};
   const defaultGit = (): GitStatus => ({
     repoRoot: projectRoot,
     branch: "main",
@@ -560,6 +590,8 @@ export function createFakeBridge(
       }
       if (command === "project_detect") {
         const { path } = args as { path: string };
+        const detected = detections[path];
+        if (detected) return structuredClone(detected) as CommandMap[K]["result"];
         return {
           path,
           isGit: false,
@@ -593,13 +625,42 @@ export function createFakeBridge(
         projects.push(project);
         return structuredClone(project) as CommandMap[K]["result"];
       }
+      if (command === "fs_list_roots") {
+        return fsRoots() as CommandMap[K]["result"];
+      }
       if (command === "fs_list_dirs") {
         const { path } = (args ?? {}) as { path?: string };
+        const target = path || fsRoots().home || "C:/Users/demo";
+        const listing = fsListings[target];
+        if (listing) return structuredClone(listing) as CommandMap[K]["result"];
+        if (Object.keys(seed.fsListings ?? {}).length > 0) {
+          throw new Error(`cannot open ${target}: the folder does not exist`);
+        }
         return {
-          path: path ?? "C:/Users/demo",
-          parent: null,
+          path: target,
+          parent: parentFolder(target),
           dirs: [],
         } as CommandMap[K]["result"];
+      }
+      if (command === "fs_create_dir") {
+        const { parent, name } = args as CreateDirRequest;
+        const trimmed = name.trim();
+        if (
+          !trimmed ||
+          trimmed === "." ||
+          trimmed === ".." ||
+          /[\\/]/.test(trimmed) ||
+          /[\u0000-\u001f]/.test(trimmed)
+        ) {
+          throw new Error("a folder name must be a single path segment");
+        }
+        if (fsListings[parent]?.dirs.some((dir) => dir.name === trimmed)) {
+          throw new Error(`'${trimmed}' already exists`);
+        }
+        const path = `${parent.replace(/\/+$/, "")}/${trimmed}`;
+        fsListings[parent]?.dirs.push({ name: trimmed, path });
+        fsListings[path] = { path, parent: parentFolder(path), dirs: [] };
+        return { name: trimmed, path } as CommandMap[K]["result"];
       }
       if (command === "git_status") {
         return structuredClone(gitStatus) as CommandMap[K]["result"];

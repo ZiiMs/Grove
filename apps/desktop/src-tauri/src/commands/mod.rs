@@ -37,6 +37,8 @@ pub fn handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sy
         projects::project_detect,
         projects::project_add,
         projects::fs_list_dirs,
+        projects::fs_list_roots,
+        projects::fs_create_dir,
         sessions::provider_list,
         sessions::session_list,
         sessions::session_get,

@@ -171,3 +171,30 @@ pub struct DirListing {
     pub parent: Option<String>,
     pub dirs: Vec<DirEntry>,
 }
+
+/// What a picker shortcut points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FsRootKind {
+    Home,
+    Drive,
+    Filesystem,
+}
+
+/// One place the add-project picker can jump to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRoot {
+    pub name: String,
+    /// Forward-slash display path.
+    pub path: String,
+    pub kind: FsRootKind,
+}
+
+/// Every root the picker offers. `home` is where a fresh picker opens; `roots` is the chip list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsRoots {
+    pub home: Option<String>,
+    pub roots: Vec<FsRoot>,
+}
