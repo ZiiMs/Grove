@@ -1647,7 +1647,10 @@ describe("archive and delete", () => {
 
     expect(within(nav()).getByText("Old spike")).toBeInTheDocument();
     expect(within(nav()).getByText("1 archived")).toBeInTheDocument();
+    expect(within(nav()).getByText("Archived sessions")).toBeInTheDocument();
+    expect(within(nav()).getByText("Older")).toBeInTheDocument();
     expect(within(nav()).getByText("grove")).toBeInTheDocument();
+    expect(within(nav()).getByRole("button", { name: "Back to active" })).toBeInTheDocument();
     expect(
       within(nav()).getByRole("button", { name: "Show active sessions" }),
     ).toHaveAttribute("aria-pressed", "true");
@@ -1763,15 +1766,20 @@ describe("archive and delete", () => {
     await screen.findByRole("heading", { name: "OAuth device flow" });
     await openArchived();
 
-    expect(screen.getByText("Archived")).toBeInTheDocument();
+    const pane = screen.getByRole("main", { name: "Active session" });
+    expect(within(pane).getByText("Archived")).toBeInTheDocument();
     await userEvent.click(
-      within(screen.getByRole("main", { name: "Active session" })).getByRole("button", {
+      within(pane).getByRole("button", {
         name: "Restore session",
       }),
     );
 
     await waitFor(() => expect(bridge.invocations).toContain("session_restore"));
-    await waitFor(() => expect(screen.queryByText("Archived")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("main", { name: "Active session" })).queryByText("Archived"),
+      ).not.toBeInTheDocument(),
+    );
     expect(await screen.findByText("Session restored")).toBeInTheDocument();
   });
 
@@ -1791,7 +1799,9 @@ describe("archive and delete", () => {
     expect(restoreAt).toBeGreaterThanOrEqual(0);
     expect(restoreAt).toBeLessThan(sendAt);
     expect(await screen.findByText("Session restored")).toBeInTheDocument();
-    expect(screen.queryByText("Archived")).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("main", { name: "Active session" })).queryByText("Archived"),
+    ).not.toBeInTheDocument();
   });
 
   it("archives a running session only after confirmation, then moves it to Archive", async () => {
@@ -1847,7 +1857,9 @@ describe("archive and delete", () => {
       id: archivedSession.id,
     });
     await waitFor(() => expect(within(nav()).queryByText("Old spike")).not.toBeInTheDocument());
-    expect(screen.queryByText("Archived")).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("main", { name: "Active session" })).queryByText("Archived"),
+    ).not.toBeInTheDocument();
     await screen.findByRole("heading", { name: "OAuth device flow" });
   });
 

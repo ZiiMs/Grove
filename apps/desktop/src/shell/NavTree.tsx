@@ -633,17 +633,28 @@ export function NavTree({
   const worktreeIds = projects.flatMap((project) =>
     (worktrees[project.id] ?? []).map((worktree) => `w-${project.id}-${worktree.path}`),
   );
-  const archiveGroupIds = (() => {
-    const ids = new Set<string>();
-    if (shown.some((session) => !projectForSession(session, projects))) ids.add("a-chats");
-    for (const session of shown) {
-      const project = projectForSession(session, projects);
-      if (project) ids.add(`a-${project.id}`);
-    }
-    return [...ids];
-  })();
+  const day = 24 * 60 * 60 * 1000;
+  const archiveBuckets = [
+    { id: "a-today", label: "Today", rows: [] as SessionSummary[] },
+    { id: "a-yesterday", label: "Yesterday", rows: [] as SessionSummary[] },
+    { id: "a-week", label: "Previous 7 days", rows: [] as SessionSummary[] },
+    { id: "a-older", label: "Older", rows: [] as SessionSummary[] },
+  ];
+  for (const session of shown) {
+    const when = Date.parse(session.archivedAt ?? session.updatedAt);
+    const bucket =
+      !Number.isFinite(when) || when < today - 7 * day
+        ? archiveBuckets[3]
+        : when < today - day
+          ? archiveBuckets[2]
+          : when < today
+            ? archiveBuckets[1]
+            : archiveBuckets[0];
+    bucket.rows.push(session);
+  }
+  for (const bucket of archiveBuckets) bucket.rows = sortSessions(bucket.rows);
   const groupIds = view.archive
-    ? archiveGroupIds
+    ? archiveBuckets.map((bucket) => bucket.id)
     : view.flat
       ? []
       : ["chats", "pinned", "recent", ...projects.map((project) => `p-${project.id}`), ...worktreeIds];
@@ -839,22 +850,8 @@ export function NavTree({
     );
   };
 
-  const archiveProjects = orderedProjects
-    .map((project) => ({
-      project,
-      rows: sortSessions(
-        shown.filter((session) => projectForSession(session, projects)?.id === project.id),
-      ),
-    }))
-    .filter((group) => group.rows.length > 0);
-
-  const archiveChats = sortSessions(
-    shown.filter((session) => !projectForSession(session, projects)),
-  );
-
   const noResults =
     shown.length === 0 && (query.length > 0 || filterCount > 0 || view.archive || view.flat);
-  const archiveGroupsOpen = isOpen("a-chats");
 
   return (
     <aside
@@ -865,7 +862,7 @@ export function NavTree({
       <div className="nav-top" ref={topRef}>
         <div className="nav-head">
           <div className="nav-title">
-            <strong>{view.archive ? "Archive" : "Sessions"}</strong>
+            <strong>{view.archive ? "Archived" : "Sessions"}</strong>
             <span className="nav-count">
               {view.archive ? archivedSessions.length : activeSessions.length}
             </span>
@@ -895,7 +892,7 @@ export function NavTree({
               <Icon name="folderPlus" size="sm" />
             </button>
             <button
-              className="nav-btn"
+              className="nav-btn archive-toggle"
               type="button"
               aria-label={view.archive ? "Show active sessions" : "Show archived sessions"}
               title={view.archive ? "Active sessions" : "Archived sessions"}
@@ -969,12 +966,31 @@ export function NavTree({
           <input
             id="nav-filter"
             type="search"
-            placeholder="Filter sessions"
+            placeholder={view.archive ? "Search archived sessions" : "Filter sessions"}
             autoComplete="off"
             value={filter}
             onChange={(event) => onFilter(event.target.value)}
           />
         </div>
+
+        {view.archive ? (
+          <div className="archive-banner">
+            <span className="archive-banner-icon">
+              <Icon name="archive" size="sm" />
+            </span>
+            <div className="archive-banner-copy">
+              <strong>Archived sessions</strong>
+              <span>{archivedSessions.length} total · grouped by when they were archived</span>
+            </div>
+            <button
+              className="btn-ghost sm"
+              type="button"
+              onClick={() => setView((current) => ({ ...current, archive: false }))}
+            >
+              Back to active
+            </button>
+          </div>
+        ) : null}
 
         {filterOpen ? (
           <div className="nav-pop" role="group" aria-label="Session filters">
@@ -1101,55 +1117,16 @@ export function NavTree({
       <div className="nav-scroll od-scroll">
         <div className="tree">
           {view.archive ? (
-            <>
-              {archiveChats.length ? (
-                <div className="tree-group">
-                  <div className="row-line">
-                    <Caret
-                      nodeId="a-chats"
-                      label="Toggle archived chats"
-                      expanded={archiveGroupsOpen}
-                      onToggle={toggle}
-                    />
-                    <button
-                      className="node-row is-root"
-                      type="button"
-                      aria-expanded={archiveGroupsOpen}
-                      aria-controls="kids-a-chats"
-                      onClick={() => toggle("a-chats")}
-                    >
-                      <span className="node-ico">
-                        <Icon name="message" size="sm" />
-                      </span>
-                      <span className="node-name">Chats</span>
-                      <span className="node-count">{archiveChats.length}</span>
-                    </button>
-                  </div>
-                  <div className="kids" id="kids-a-chats" hidden={!archiveGroupsOpen}>
-                    {archiveChats.map((session) => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        active={session.id === activeId}
-                        archived
-                        onSelect={onSelect}
-                        onMenu={onSessionMenu}
-                        onArchive={onArchiveSession}
-                        onRestore={onRestoreSession}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              {archiveProjects.map(({ project, rows }) => {
-                const id = `a-${project.id}`;
-                const open = isOpen(id);
+            archiveBuckets
+              .filter((bucket) => bucket.rows.length > 0)
+              .map((bucket) => {
+                const open = isOpen(bucket.id);
                 return (
-                  <div className="tree-group" key={id}>
+                  <div className="tree-group" key={bucket.id}>
                     <div className="row-line">
                       <Caret
-                        nodeId={id}
-                        label={`Toggle archived ${project.name}`}
+                        nodeId={bucket.id}
+                        label={`Toggle ${bucket.label}`}
                         expanded={open}
                         onToggle={toggle}
                       />
@@ -1157,23 +1134,24 @@ export function NavTree({
                         className="node-row is-root"
                         type="button"
                         aria-expanded={open}
-                        aria-controls={`kids-${id}`}
-                        onClick={() => toggle(id)}
+                        aria-controls={`kids-${bucket.id}`}
+                        onClick={() => toggle(bucket.id)}
                       >
                         <span className="node-ico">
-                          <Icon name="folder" size="sm" />
+                          <Icon name="clock" size="sm" />
                         </span>
-                        <span className="node-name">{project.name}</span>
-                        <span className="node-count">{rows.length}</span>
+                        <span className="node-name">{bucket.label}</span>
+                        <span className="node-count">{bucket.rows.length}</span>
                       </button>
                     </div>
-                    <div className="kids" id={`kids-${id}`} hidden={!open}>
-                      {rows.map((session) => (
+                    <div className="kids" id={`kids-${bucket.id}`} hidden={!open}>
+                      {bucket.rows.map((session) => (
                         <SessionRow
                           key={session.id}
                           session={session}
                           active={session.id === activeId}
                           archived
+                          suffix={projectForSession(session, projects)?.name ?? "Chat"}
                           onSelect={onSelect}
                           onMenu={onSessionMenu}
                           onArchive={onArchiveSession}
@@ -1183,8 +1161,7 @@ export function NavTree({
                     </div>
                   </div>
                 );
-              })}
-            </>
+              })
           ) : view.flat ? (
             flatRows.map((session) => (
               <SessionRow
