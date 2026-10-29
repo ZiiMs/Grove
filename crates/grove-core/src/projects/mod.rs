@@ -163,6 +163,17 @@ impl ProjectService {
         Ok(project)
     }
 
+    /// Remove a project from the workspace.
+    ///
+    /// Only the row is deleted: the sessions that ran there stay, and the database's
+    /// `ON DELETE SET NULL` turns them into chats. The folder on disk is untouched.
+    pub fn remove(&self, id: &str) -> ProjectResult<()> {
+        if self.store.remove_project(id)? == 0 {
+            return Err(ProjectError::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
     pub fn create_worktree(
         &self,
         repo_path: &str,

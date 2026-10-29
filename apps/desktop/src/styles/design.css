@@ -1211,3 +1211,33 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
   transition:background var(--dur) var(--ease),color var(--dur) var(--ease);
 }
 .combo-footer-action:hover{background:var(--elev);color:var(--fg)}
+
+/* ---------- context menu (ticket C1) ---------- */
+.ctx-menu{
+  position:fixed;z-index:90;min-width:196px;max-width:300px;padding:4px;
+  display:flex;flex-direction:column;gap:1px;
+  background:var(--elev);border:1px solid var(--line-2);border-radius:var(--r);
+  box-shadow:var(--panel-shadow);
+}
+.ctx-item{
+  display:flex;align-items:center;gap:8px;width:100%;height:29px;padding:0 8px;
+  border-radius:calc(var(--r) - 2px);text-align:left;font-size:12.5px;color:var(--fg-2);
+}
+.ctx-item:hover,.ctx-item:focus-visible{background:var(--hover);color:var(--fg);outline:none}
+.ctx-item:disabled{opacity:.45;color:var(--fg-3)}
+.ctx-item[data-danger="true"]{color:var(--red)}
+.ctx-item[data-danger="true"]:hover,.ctx-item[data-danger="true"]:focus-visible{background:var(--red-soft)}
+.ctx-ico{flex:none;width:14px;display:flex;color:var(--fg-3)}
+.ctx-item[data-danger="true"] .ctx-ico{color:var(--red)}
+.ctx-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ctx-shortcut{flex:none;font-family:var(--mono);font-size:10px;color:var(--fg-3)}
+.ctx-sep{height:1px;margin:4px 6px;background:var(--line)}
+.session-block{position:relative}
+.session-block .session-row{padding-right:26px}
+.session-actions{
+  position:absolute;right:3px;top:3px;display:flex;gap:1px;
+  opacity:0;transition:opacity var(--dur) var(--ease);
+}
+.session-block:hover .session-actions,.session-block:focus-within .session-actions{opacity:1}
+.session-actions .icon-btn{width:20px;height:20px}
+@media (hover:none){.session-actions{opacity:1}}

@@ -100,6 +100,19 @@ const PATHS: Record<string, ReactNode> = {
     </>
   ),
   check: <path d="M3.6 8.4 6.4 11.2 12.4 4.8" />,
+  more: (
+    <>
+      <circle cx="3.6" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="12.4" cy="8" r="0.9" fill="currentColor" stroke="none" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="5.4" y="5.4" width="7.2" height="7.2" rx="1.2" />
+      <path d="M10.2 5.4V4.2A1.2 1.2 0 0 0 9 3H4.2A1.2 1.2 0 0 0 3 4.2V9a1.2 1.2 0 0 0 1.2 1.2h1.2" />
+    </>
+  ),
   diff: (
     <>
       <path d="M3.2 4.8h9.6M3.2 11.2h9.6" />

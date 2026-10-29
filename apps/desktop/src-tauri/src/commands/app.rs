@@ -33,6 +33,17 @@ pub async fn app_set_project_root(
     Ok(adopt(&state, path))
 }
 
+/// Show a file or folder in the platform's file manager.
+///
+/// The path is resolved by `grove_core::reveal` without a shell, so spaces and quotes in a path stay
+/// one argument. Blocking process spawns stay off the async runtime.
+#[tauri::command]
+pub async fn app_reveal_path(path: String) -> IpcResult<()> {
+    tauri::async_runtime::spawn_blocking(move || grove_core::reveal::reveal(&path))
+        .await
+        .map_err(|error| IpcError::io(format!("reveal task failed: {error}")))?
+}
+
 fn window_error(error: tauri::Error) -> IpcError {
     IpcError::unavailable(format!("window control failed: {error}"))
 }
