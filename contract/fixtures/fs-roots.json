@@ -1,0 +1,8 @@
+{
+  "home": "C:/Users/ada",
+  "roots": [
+    { "name": "Home", "path": "C:/Users/ada", "kind": "home" },
+    { "name": "C:", "path": "C:/", "kind": "drive" },
+    { "name": "D:", "path": "D:/", "kind": "drive" }
+  ]
+}
