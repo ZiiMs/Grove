@@ -1331,7 +1331,6 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
   background:color-mix(in srgb, var(--panel) 86%, transparent);
   -webkit-backdrop-filter:blur(18px) saturate(1.06);backdrop-filter:blur(18px) saturate(1.06);
   border:1px solid var(--line-2);border-radius:var(--r-lg);
-  box-shadow:0 24px 70px rgba(0,0,0,.55);
 }
 .si-head{display:flex;align-items:flex-start;gap:8px;padding:10px 10px 9px 12px;border-bottom:1px solid var(--line);flex:none}
 .si-heading{flex:1;min-width:0}
