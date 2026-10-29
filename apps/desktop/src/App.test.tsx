@@ -380,6 +380,7 @@ describe("redesigned shell", () => {
   });
 
   it("shows the session info by default and brings it back after the context column closes", async () => {
+    localStorage.removeItem("grove.sessionInfoCollapsed");
     await ready();
     const titlebar = document.querySelector(".titlebar") as HTMLElement;
     const panel = screen.getByRole("complementary", { name: "Session info" });
@@ -389,12 +390,19 @@ describe("redesigned shell", () => {
     expect(within(panel).getByText("This session")).toBeInTheDocument();
     expect(within(panel).getByText("Ask before changes")).toBeInTheDocument();
 
-    // Every category collapses from its header.
+    // Categories collapse from their header, and the state is remembered across a remount.
     const modelHeader = within(panel).getByRole("button", { name: /Model/ });
     await userEvent.click(modelHeader);
     expect(modelHeader).toHaveAttribute("aria-expanded", "false");
-    await userEvent.click(modelHeader);
-    expect(modelHeader).toHaveAttribute("aria-expanded", "true");
+    expect(localStorage.getItem("grove.sessionInfoCollapsed")).toContain("model");
+
+    await userEvent.click(within(panel).getByRole("button", { name: "Close session info" }));
+    await userEvent.click(within(titlebar).getByRole("button", { name: "Session info" }));
+    const reopened = screen.getByRole("complementary", { name: "Session info" });
+    const reopenedModel = within(reopened).getByRole("button", { name: /Model/ });
+    expect(reopenedModel).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(reopenedModel);
+    expect(reopenedModel).toHaveAttribute("aria-expanded", "true");
 
     // Opening the context column covers the floating panel; closing it brings the panel back.
     await userEvent.click(screen.getByRole("button", { name: "Show context panel" }));
@@ -413,6 +421,7 @@ describe("redesigned shell", () => {
     await userEvent.click(within(titlebar).getByRole("button", { name: "Session info" }));
     expect(screen.getByRole("complementary", { name: "Session info" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show context panel" })).toBeInTheDocument();
+    localStorage.removeItem("grove.sessionInfoCollapsed");
   });
 
   it("shows the remaining OpenCode Go plan usage in the session panel", async () => {

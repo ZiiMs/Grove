@@ -10,6 +10,24 @@ import { providerMeta } from "../workspace/models";
 import { thinkingLabel } from "../workspace/thinking";
 
 /**
+ * Which panel categories are folded shut, remembered across mounts and restarts. Keys are the
+ * section ids, so a future section starts open until the user closes it.
+ */
+const COLLAPSED_KEY = "grove.sessionInfoCollapsed";
+
+function readCollapsed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_KEY);
+    if (!raw) return new Set();
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return new Set();
+    return new Set(value.filter((entry): entry is string => typeof entry === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * The floating right-hand card: everything about the active session that is not the transcript.
  * It is an overlay, not a grid column, and the shell shows it only while the context column is
  * closed, so the two right sidebars never stack.
@@ -39,6 +57,21 @@ export function SessionInfoPanel({
   const [mcp, setMcp] = useState<McpDiscovery | null>(null);
   const [planUsage, setPlanUsage] = useState<PlanUsage | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+
+  const toggleSection = (id: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+      } catch {
+        // An unwritable store must not stop the section from collapsing.
+      }
+      return next;
+    });
+  };
 
   // Discovery reads config files; it does not spawn or probe a server.
   useEffect(() => {
@@ -138,7 +171,12 @@ export function SessionInfoPanel({
 
       <div className="si-scroll">
         {detail ? (
-          <Section title="Model">
+          <Section
+            id="model"
+            title="Model"
+            open={!collapsed.has("model")}
+            onToggle={() => toggleSection("model")}
+          >
             <div className="si-model">
               <ProviderGlyph provider={detail.provider} />
               <span className="si-model-name" title={detail.model ?? undefined}>
@@ -156,7 +194,12 @@ export function SessionInfoPanel({
           </Section>
         ) : null}
 
-        <Section title="Context">
+        <Section
+          id="context"
+          title="Context"
+          open={!collapsed.has("context")}
+          onToggle={() => toggleSection("context")}
+        >
           {context ? (
             <>
               <div className="si-bar" aria-hidden="true">
@@ -174,7 +217,12 @@ export function SessionInfoPanel({
           )}
         </Section>
 
-        <Section title="Project">
+        <Section
+          id="project"
+          title="Project"
+          open={!collapsed.has("project")}
+          onToggle={() => toggleSection("project")}
+        >
           {project ? (
             <>
               <Row label="Project" value={project.name} />
@@ -197,7 +245,12 @@ export function SessionInfoPanel({
         </Section>
 
         {detail?.provider === "opencode-go" ? (
-          <Section title="Plan usage">
+          <Section
+            id="plan"
+            title="Plan usage"
+            open={!collapsed.has("plan")}
+            onToggle={() => toggleSection("plan")}
+          >
             {planUsage ? (
               <div className="si-plan">
                 {planUsage.windows.map((window) => (
@@ -230,7 +283,12 @@ export function SessionInfoPanel({
           </Section>
         ) : null}
 
-        <Section title="This session">
+        <Section
+          id="session"
+          title="This session"
+          open={!collapsed.has("session")}
+          onToggle={() => toggleSection("session")}
+        >
           {usage.input + usage.output > 0 ? (
             <>
               <Row label="Input" value={formatTokens(usage.input)} />
@@ -247,8 +305,11 @@ export function SessionInfoPanel({
         </Section>
 
         <Section
+          id="subagents"
           title="Subagents"
           aside={<span className="si-count">{subagents.length}</span>}
+          open={!collapsed.has("subagents")}
+          onToggle={() => toggleSection("subagents")}
         >
           {subagents.length ? (
             subagents.map((subagent) => (
@@ -260,8 +321,11 @@ export function SessionInfoPanel({
         </Section>
 
         <Section
+          id="mcp"
           title="MCP"
           aside={<span className="si-count">{mcp ? mcp.servers.length : "…"}</span>}
+          open={!collapsed.has("mcp")}
+          onToggle={() => toggleSection("mcp")}
         >
           {mcp ? (
             mcp.servers.length ? (
@@ -285,22 +349,27 @@ export function SessionInfoPanel({
 }
 
 function Section({
+  id,
   title,
   aside,
+  open,
+  onToggle,
   children,
 }: {
+  id: string;
   title: string;
   aside?: ReactNode;
+  open: boolean;
+  onToggle: () => void;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(true);
   return (
-    <section className="si-section">
+    <section className="si-section" data-section={id}>
       <button
         className="si-title"
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onClick={onToggle}
       >
         <span className="si-chevron">
           <Icon name="chevronRight" size="xs" />
