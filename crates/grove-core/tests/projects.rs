@@ -119,6 +119,35 @@ fn an_existing_session_in_the_project_is_linked() {
 }
 
 #[test]
+fn removing_a_project_keeps_its_sessions_and_the_folder() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let (projects, store) = service();
+    store
+        .insert_session(&session("session-1", dir.path()), &serde_json::json!({}))
+        .expect("insert");
+    let project = projects.add(request(dir.path())).expect("add");
+
+    projects.remove(&project.id).expect("remove");
+
+    assert!(projects.list().expect("list").is_empty());
+    let row = store.session("session-1").expect("read").expect("present");
+    assert_eq!(
+        row.project_id, None,
+        "a removed project leaves its sessions as chats"
+    );
+    assert!(dir.path().is_dir(), "the working tree is untouched");
+}
+
+#[test]
+fn removing_an_unknown_project_is_not_found() {
+    let (projects, _) = service();
+    let error = projects
+        .remove("missing")
+        .expect_err("unknown projects are refused");
+    assert_eq!(error.to_string(), "project not found: missing");
+}
+
+#[test]
 fn detect_and_list_dirs_only_report_directories() {
     let root = tempfile::tempdir().expect("temp dir");
     std::fs::create_dir(root.path().join("alpha")).expect("dir");
