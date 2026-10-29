@@ -76,7 +76,7 @@ apps/desktop/src/                React UI: shell/, session/, context/, settings/
 apps/desktop/src/styles/         themes.css (token contract) · design.css (shell) · extras.css · fonts/
 apps/desktop/tools/              visual screenshot harness (not part of `npm test`)
 apps/desktop/src-tauri/src/
-  lib.rs main.rs state.rs events.rs commands/{mod,app,projects,sessions,plan,specs,skills,mcp,git,settings}.rs
+  lib.rs main.rs state.rs events.rs tray.rs commands/{mod,app,projects,sessions,plan,specs,skills,mcp,git,settings}.rs
 .scratch/grove/issues/           first-build tickets (history; new work is in ClickUp)
 ```
 
@@ -429,6 +429,8 @@ seven-panel shell and the spec/plan editors were retired.
   window; its minimize, maximize/restore and close buttons call the typed `app_window_*` commands, so
   the webview still never imports Tauri's window API and the controls remain fakeable. New sessions
   start from the `+` actions in the tree, not from the titlebar.
+- **Tray:** one icon while the app runs; left-click restores the window and right-click offers
+  Show Grove / Quit Grove.
 - **Transcript:** `@tanstack/react-virtual` mounts only the rows in view, so a 10 000-event session
   costs the same as a short one. Tool rows, diffs, permission cards, and inline question cards are
   transcript rows, not separate panels.
