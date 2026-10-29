@@ -12,8 +12,7 @@ import { useSessionStore } from "../state/sessionStore";
 import type { MenuAnchor } from "../state/menuStore";
 import { useUiStore } from "../state/uiStore";
 import { useWorkspaceStore } from "../state/workspaceStore";
-import { providerMeta, sessionVisual } from "../workspace/models";
-import { modelLabel } from "../workspace/modelLabel";
+import { sessionVisual } from "../workspace/models";
 import { Icon } from "../workspace/Icon";
 import { basename, normalizePath, projectForSession, worktreeForSession } from "../workspace/tree";
 
@@ -38,19 +37,6 @@ interface NavTreeProps {
 
 function anchorOf(event: ReactMouseEvent<HTMLElement>): MenuAnchor {
   return { x: event.clientX, y: event.clientY, returnFocus: event.currentTarget };
-}
-
-function ProviderMark({ provider, small }: { provider: string; small?: boolean }) {
-  const meta = providerMeta(provider);
-  return (
-    <span
-      className={small ? "mark sm" : "mark"}
-      style={{ ["--tint" as string]: meta.tint }}
-      aria-hidden="true"
-    >
-      {meta.short}
-    </span>
-  );
 }
 
 function matches(session: SessionSummary, project: Project | null, query: string): boolean {
@@ -190,7 +176,6 @@ function SessionTitleEditor({ session, active }: { session: SessionSummary; acti
           }}
           onBlur={() => void commit()}
         />
-        <ProviderMark provider={session.provider} small />
       </div>
       {error ? (
         <p className="session-rename-error" role="alert">
@@ -249,11 +234,6 @@ function SessionRow({
         >
           <span className="dot" data-state={visual} aria-hidden="true" />
           <span className="s-title">{session.title}</span>
-          {session.model ? (
-            <span className="s-model" title={session.model}>
-              {modelLabel(session.model, session.provider)}
-            </span>
-          ) : null}
           {suffix ? <span className="s-suffix">{suffix}</span> : null}
           {subagents.length ? (
             <span
@@ -264,7 +244,6 @@ function SessionRow({
             </span>
           ) : null}
           <span className="sr-only">{visual}</span>
-          <ProviderMark provider={session.provider} small />
         </button>
       )}
       {!editing ? (

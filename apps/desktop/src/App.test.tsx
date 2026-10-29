@@ -560,7 +560,6 @@ describe("redesigned shell", () => {
 
   it("hot-swaps a same-provider model without relaunching the agent", async () => {
     const bridge = await readyOnAnthropic();
-    expect(document.querySelector(".session-row .s-model")).toHaveTextContent("Sonnet 4.5");
     expect(document.querySelector(".sh-model")).toHaveTextContent("Sonnet 4.5");
     await userEvent.click(modelTrigger());
     await userEvent.click(screen.getByRole("option", { name: /Opus 4.1/ }));
@@ -578,8 +577,7 @@ describe("redesigned shell", () => {
         "Opus 4.1",
       ),
     );
-    // The row and the header follow the persisted model, not just the composer.
-    expect(document.querySelector(".session-row .s-model")).toHaveTextContent("Opus 4.1");
+    // The header follows the persisted model, not just the composer.
     expect(document.querySelector(".sh-model")).toHaveTextContent("Opus 4.1");
     expect(JSON.parse(localStorage.getItem("grove.recentModels") ?? "[]")[0]).toBe(
       "claude-opus-4-1",

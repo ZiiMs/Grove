@@ -1296,10 +1296,6 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 
 /* ---------- archive and permanent delete (ticket C3/C4) ---------- */
 .archive-group{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
-.session-row .s-model{
-  flex:none;max-width:12ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:9.5px;color:var(--fg-3);opacity:.7;
-}
 .sh-model{
   flex:none;max-width:22ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:10.5px;color:var(--fg-3);opacity:.8;
