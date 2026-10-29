@@ -105,6 +105,7 @@ mod tests {
     use super::*;
     use crate::ipc::Session;
     use crate::sessions::event::SessionState;
+    use crate::sessions::event::TitleSource;
 
     fn store_with_session() -> Store {
         let store = Store::open_in_memory().unwrap();
@@ -120,6 +121,7 @@ mod tests {
                     project_id: None,
                     awaiting: false,
                     archived_at: None,
+                    title_source: TitleSource::Manual,
                     created_at: "2025-01-01T00:00:00.000Z".into(),
                     updated_at: "2025-01-01T00:00:00.000Z".into(),
                 },

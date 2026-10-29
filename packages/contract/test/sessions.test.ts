@@ -26,6 +26,7 @@ describe("session contract fixtures", () => {
     expect(parsed.status).toBe("idle");
     expect(parsed.createdAt).toBe("2025-01-01T00:00:00.000Z");
     expect(parsed.archivedAt).toBeNull();
+    expect(parsed.titleSource).toBe("manual");
   });
 
   it("an archived session keeps a timestamp the tree can filter on", () => {
@@ -90,6 +91,7 @@ describe("session contract fixtures", () => {
       "question_resolved",
       "usage",
       "status",
+      "title_changed",
       "error",
       "context_refreshed",
     ]);
@@ -97,6 +99,11 @@ describe("session contract fixtures", () => {
     expect(toolCall).toMatchObject({ kind: "tool_call", call_id: "mock-call-1", name: "echo" });
     const toolResult = events[5];
     expect(toolResult).toMatchObject({ kind: "tool_result", status: "ok" });
+    expect(events[13]).toMatchObject({
+      kind: "title_changed",
+      title: "Release notes",
+      source: "manual",
+    });
   });
 
   it("session-events.json records the context a session was given", () => {

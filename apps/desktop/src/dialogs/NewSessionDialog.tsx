@@ -186,10 +186,6 @@ export function NewSessionDialog() {
   };
 
   const submit = async () => {
-    if (!title.trim()) {
-      setError("Give the session a name so you can find it in the tree.");
-      return;
-    }
     if (useWorktree && !branch.trim()) {
       setError("A worktree needs a branch name.");
       return;
@@ -224,7 +220,7 @@ export function NewSessionDialog() {
       const created = await create(bridge, {
         provider,
         model,
-        title: title.trim(),
+        title: title.trim() || null,
         projectId: project?.id ?? null,
         worktreePath,
         config: { thinkingLevel },
@@ -270,7 +266,7 @@ export function NewSessionDialog() {
         <input
           id="nd-task"
           type="text"
-          placeholder="e.g. Add a worktree picker to the new-session flow"
+          placeholder="Auto from first message"
           autoComplete="off"
           autoFocus
           value={title}
@@ -279,11 +275,9 @@ export function NewSessionDialog() {
             setError(null);
           }}
         />
-        {error && !title.trim() ? (
-          <p className="field-err" role="alert">
-            {error}
-          </p>
-        ) : null}
+        <p className="field-hint" id="nd-task-hint">
+          Leave blank to name this session from its first message, then let a small model refine it.
+        </p>
       </div>
 
       <div className="field">
@@ -403,7 +397,7 @@ export function NewSessionDialog() {
       </div>
 
       {storeError ? <p className="field-err">{storeError}</p> : null}
-      {error && title.trim() ? (
+      {error ? (
         <p className="field-err" role="alert">
           {error}
         </p>

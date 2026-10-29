@@ -22,7 +22,7 @@ use crate::secrets::MemorySecretStore;
 use crate::sessions::context::{render_documents, ContextAssembly, ContextSource};
 use crate::sessions::event::{
     now, render_tail, Block, ContextReason, Decision, EventKind, QuestionAnswer, Role,
-    SessionEvent, SessionState,
+    SessionEvent, SessionState, TitleSource,
 };
 use crate::sessions::pump::{self, InjectedEvent, SessionBus};
 use crate::store::{Store, StoreError};
@@ -83,6 +83,13 @@ pub const TRANSCRIPT_SUMMARY_LINES: usize = 24;
 
 /// The longest a session title may be: long enough for a sentence, short enough for a tree row.
 pub const SESSION_TITLE_MAX_CHARS: usize = 80;
+
+/// A session created with no title keeps this until its first message arrives. It is deliberately a
+/// real title rather than an empty string: the tree, tabs and window need something to draw.
+pub const TEMPORARY_SESSION_TITLE: &str = "New session";
+
+/// How much of the first message becomes the placeholder title, before the ellipsis.
+pub const PLACEHOLDER_TITLE_MAX_CHARS: usize = 60;
 
 /// Owns every live session and the store they persist into. One instance per application.
 pub struct SessionManager {
@@ -320,8 +327,12 @@ impl SessionManager {
             None => resolve_cwd(request.cwd.as_deref(), &self.deps.paths),
         };
         let model = non_empty(request.model);
-        let title =
-            non_empty(request.title).unwrap_or_else(|| format!("{} session", request.provider));
+        // A blank title is not a validation error: it asks the session to name itself from its first
+        // message. The row still needs a title to draw, so it starts with the temporary one.
+        let (title, title_source) = match non_empty(request.title) {
+            Some(title) => (title, TitleSource::Manual),
+            None => (TEMPORARY_SESSION_TITLE.to_string(), TitleSource::Auto),
+        };
         // The request's own config is what the row keeps and what the launch uses.
         let config = request.config.unwrap_or_else(|| serde_json::json!({}));
 
@@ -331,6 +342,7 @@ impl SessionManager {
             cwd: display_path(&cwd),
             model: model.clone(),
             title,
+            title_source,
             status: SessionState::Starting,
             project_id: project.map(|project| project.id),
             awaiting: false,
@@ -371,6 +383,22 @@ impl SessionManager {
         // Hold the command lock across both steps: the transcript order and the order the provider
         // sees commands are then the same, even when two sends race.
         let mut handle = live.commands.lock().await;
+
+        // An auto session is still wearing its temporary title: the first thing the user says is the
+        // best title available until a model refines it. This persists the row and announces the
+        // change before the message, so the tree never shows a stale "New session".
+        if let Some(session) = self.store.session(id)? {
+            if session.title_source == TitleSource::Auto && session.title == TEMPORARY_SESSION_TITLE
+            {
+                self.record_title_through(
+                    id,
+                    &first_message_title(text),
+                    TitleSource::Auto,
+                    Some(&live),
+                )
+                .await?;
+            }
+        }
 
         let (message, persisted) =
             InjectedEvent::acknowledged(SessionEvent::new(EventKind::Message {
@@ -476,15 +504,15 @@ impl SessionManager {
         self.get(id)
     }
 
-    /// Rename a session. Only the title changes: the agent, its config and the transcript are
-    /// untouched, so a stopped session is renamed without being resumed.
+    /// Rename a session. Only the title and its provenance change: the agent, its config and the
+    /// transcript are untouched, so a stopped session is renamed without being resumed.
     ///
     /// The rules live here rather than in the command and the row, so every caller — the context
     /// menu today, later automation — accepts exactly the same titles. A blank title is refused
     /// rather than defaulted: the row cancels an empty edit before calling.
     ///
-    /// A later slice records title provenance and emits `title_changed` from here; the signature
-    /// and the validation are the seam it extends.
+    /// A rename is always `manual`, which also removes the session from automatic title generation,
+    /// and `title_changed` patches the tree without a reload.
     pub async fn rename(&self, id: &str, title: &str) -> Result<Session, SessionError> {
         let title = title.trim();
         if title.is_empty() {
@@ -503,10 +531,55 @@ impl SessionManager {
         if self.store.session(id)?.is_none() {
             return Err(SessionError::NotFound(id.to_string()));
         }
-        self.store.set_session_title(id, title)?;
+        self.record_title(id, title, TitleSource::Manual).await?;
         self.store
             .session(id)?
             .ok_or_else(|| SessionError::NotFound(id.to_string()))
+    }
+
+    /// Persist a new title and announce it. A live session's pump is the writer, so the event lands in
+    /// the transcript in order and reaches the window immediately; a stopped session has no pump, so
+    /// the manager publishes directly (the same rule `mark` follows after a stop).
+    async fn record_title(
+        &self,
+        id: &str,
+        title: &str,
+        source: TitleSource,
+    ) -> Result<(), SessionError> {
+        let live = { self.live.lock().await.get(id).cloned() };
+        self.record_title_through(id, title, source, live.as_deref())
+            .await
+    }
+
+    /// [`Self::record_title`] for a caller that already holds the live handle. Passing it in avoids
+    /// taking the manager's live-session lock while the caller holds that session's command lock,
+    /// which would invert the order `stop` uses.
+    async fn record_title_through(
+        &self,
+        id: &str,
+        title: &str,
+        source: TitleSource,
+        live: Option<&LiveSession>,
+    ) -> Result<(), SessionError> {
+        self.store.set_session_title(id, title, source)?;
+        let event = SessionEvent::new(EventKind::TitleChanged {
+            title: title.to_string(),
+            source,
+        });
+        match live {
+            Some(live) => {
+                let (injected, persisted) = InjectedEvent::acknowledged(event.clone());
+                if live.inject.send(injected).is_ok() {
+                    // Wait for the pump to append it, so a caller that reads the transcript right
+                    // after the command sees the same title the tree received.
+                    let _ = persisted.await;
+                } else {
+                    pump::publish(&self.store, &self.bus, id, &event);
+                }
+            }
+            None => pump::publish(&self.store, &self.bus, id, &event),
+        }
+        Ok(())
     }
 
     /// Stop the process but keep the row and the transcript. The session can be resumed later.
@@ -931,6 +1004,32 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+/// The placeholder an auto session takes from its first message: one line, capped at
+/// [`PLACEHOLDER_TITLE_MAX_CHARS`] at a word boundary, with an ellipsis when text was left out.
+fn first_message_title(text: &str) -> String {
+    // A message is often several lines; a tree row is one. Collapsing also makes the character count
+    // independent of how the user formatted the message.
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= PLACEHOLDER_TITLE_MAX_CHARS {
+        return text;
+    }
+    let head: String = text.chars().take(PLACEHOLDER_TITLE_MAX_CHARS).collect();
+    let at_word_boundary = text
+        .chars()
+        .nth(PLACEHOLDER_TITLE_MAX_CHARS)
+        .is_none_or(char::is_whitespace);
+    let cut = if at_word_boundary {
+        head.trim_end()
+    } else {
+        match head.rfind(char::is_whitespace) {
+            // Cut at the last whole word rather than mid-word; a single long word is hard-capped.
+            Some(index) if index > 0 => head[..index].trim_end(),
+            _ => head.trim_end(),
+        }
+    };
+    format!("{cut}…")
 }
 
 #[cfg(test)]
@@ -1716,11 +1815,155 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_blank_title_creates_an_auto_session_and_a_typed_title_stays_manual() {
+        let manager = manager();
+        for blank in [None, Some("   ".to_string())] {
+            let detail = manager
+                .create(CreateSessionRequest {
+                    provider: "stub".into(),
+                    title: blank,
+                    ..Default::default()
+                })
+                .await
+                .expect("a blank title is allowed");
+            assert_eq!(
+                detail.session.title, TEMPORARY_SESSION_TITLE,
+                "a blank title gets the temporary row title"
+            );
+            assert_eq!(detail.session.title_source, TitleSource::Auto);
+        }
+
+        let detail = manager
+            .create(CreateSessionRequest {
+                provider: "stub".into(),
+                title: Some("  Release notes  ".into()),
+                ..Default::default()
+            })
+            .await
+            .expect("a typed title is used as written");
+        assert_eq!(detail.session.title, "Release notes");
+        assert_eq!(detail.session.title_source, TitleSource::Manual);
+    }
+
+    #[tokio::test]
+    async fn the_first_send_writes_a_word_boundary_placeholder_and_keeps_the_session_auto() {
+        let stub = StubProvider::new();
+        let contexts = Arc::clone(&stub.contexts);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+        let mut bus = manager.subscribe();
+        let message = "Refactor the session store so a blank title becomes a readable \
+                       placeholder after the first message and never needs the provider";
+
+        manager.send(&session, message).await.expect("send");
+
+        let stored = manager.get(&session).unwrap().session;
+        assert_eq!(
+            stored.title_source,
+            TitleSource::Auto,
+            "a placeholder stays auto"
+        );
+        assert!(
+            stored.title.chars().count() <= PLACEHOLDER_TITLE_MAX_CHARS + 1,
+            "the placeholder is capped: {}",
+            stored.title
+        );
+        assert!(
+            stored.title.ends_with('…'),
+            "a truncated placeholder says so: {}",
+            stored.title
+        );
+        assert!(
+            !stored.title.ends_with(" …"),
+            "the ellipsis never follows a space: {}",
+            stored.title
+        );
+        assert!(
+            stored
+                .title
+                .starts_with("Refactor the session store so a blank title"),
+            "the whole words that fit are kept: {}",
+            stored.title
+        );
+        assert_eq!(
+            lock(&contexts).len(),
+            1,
+            "the placeholder path never starts a provider"
+        );
+
+        let announced = manager
+            .get(&session)
+            .unwrap()
+            .events
+            .into_iter()
+            .find(|event| matches!(event.kind, EventKind::TitleChanged { .. }))
+            .expect("the placeholder is announced");
+        assert_eq!(
+            announced.kind,
+            EventKind::TitleChanged {
+                title: stored.title.clone(),
+                source: TitleSource::Auto,
+            }
+        );
+        let mut seen = false;
+        while let Ok(envelope) = bus.try_recv() {
+            if let EventKind::TitleChanged { title, source } = envelope.payload.kind {
+                assert_eq!(title, stored.title);
+                assert_eq!(source, TitleSource::Auto);
+                seen = true;
+            }
+        }
+        assert!(seen, "the sidebar receives title_changed without a reload");
+    }
+
+    #[tokio::test]
+    async fn only_the_first_send_replaces_the_placeholder_and_a_typed_title_is_never_touched() {
+        let manager = manager();
+        let auto = create(&manager).await;
+        manager.send(&auto, "First message").await.unwrap();
+        let first = manager.get(&auto).unwrap().session;
+        manager.send(&auto, "A later message").await.unwrap();
+        assert_eq!(
+            manager.get(&auto).unwrap().session.title,
+            first.title,
+            "the placeholder is taken from the first message only"
+        );
+
+        let typed = manager
+            .create(CreateSessionRequest {
+                provider: "stub".into(),
+                title: Some("Keep me".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .session
+            .id;
+        manager
+            .send(&typed, "A very different first message")
+            .await
+            .unwrap();
+        let stored = manager.get(&typed).unwrap().session;
+        assert_eq!(stored.title, "Keep me");
+        assert_eq!(stored.title_source, TitleSource::Manual);
+        assert!(
+            !manager
+                .get(&typed)
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| matches!(event.kind, EventKind::TitleChanged { .. })),
+            "a user-written title produces no title event"
+        );
+    }
+
+    #[tokio::test]
     async fn renaming_trims_the_title_and_persists_the_new_one() {
         let manager = manager();
         let session = create(&manager).await;
         let before = manager.get(&session).unwrap().session;
         tokio::time::sleep(Duration::from_millis(20)).await;
+        let mut bus = manager.subscribe();
 
         let renamed = manager
             .rename(&session, "  Release notes  ")
@@ -1728,14 +1971,64 @@ mod tests {
             .expect("a valid title renames the session");
 
         assert_eq!(renamed.title, "Release notes");
-        let stored = manager.get(&session).unwrap().session;
         assert_eq!(
-            stored.title, "Release notes",
+            renamed.title_source,
+            TitleSource::Manual,
+            "a rename takes the session out of automatic naming"
+        );
+        let detail = manager.get(&session).unwrap();
+        assert_eq!(
+            detail.session.title, "Release notes",
             "the tree reads the stored row, not the returned copy"
         );
+        assert_eq!(detail.session.title_source, TitleSource::Manual);
+        assert!(
+            detail.events.iter().any(|event| event.kind
+                == EventKind::TitleChanged {
+                    title: "Release notes".into(),
+                    source: TitleSource::Manual,
+                }),
+            "a rename is announced so the sidebar and header patch without a reload"
+        );
+        assert!(
+            matches!(
+                bus.try_recv().map(|envelope| envelope.payload.kind),
+                Ok(EventKind::TitleChanged { .. })
+            ),
+            "the live window receives title_changed"
+        );
         assert_ne!(
-            stored.updated_at, before.updated_at,
+            detail.session.updated_at, before.updated_at,
             "a rename moves the session's updated timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn renaming_a_stopped_session_still_announces_the_change() {
+        // A stopped session has no pump, so rename writes the event directly; skipping that path
+        // would leave a reopened tree stale until the next reload.
+        let manager = manager();
+        let session = create(&manager).await;
+        manager.close(&session).await.unwrap();
+
+        let renamed = manager
+            .rename(&session, "Stopped but renamed")
+            .await
+            .unwrap();
+
+        assert_eq!(renamed.title_source, TitleSource::Manual);
+        assert!(
+            manager
+                .get(&session)
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| event.kind
+                    == EventKind::TitleChanged {
+                        title: "Stopped but renamed".into(),
+                        source: TitleSource::Manual,
+                    }),
+            "the stopped path still records title_changed"
         );
     }
 
@@ -1758,7 +2051,7 @@ mod tests {
         }
         assert_eq!(
             manager.get(&session).unwrap().session.title,
-            "stub session",
+            TEMPORARY_SESSION_TITLE,
             "a refused title leaves the stored row alone"
         );
 

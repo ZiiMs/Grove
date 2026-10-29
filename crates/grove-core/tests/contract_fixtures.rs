@@ -11,7 +11,7 @@ use grove_core::providers::{Capabilities, Detection, ThinkingLevel};
 use grove_core::sessions::context::{ContextLimits, ContextPin, SessionContext};
 use grove_core::sessions::event::{
     Block, ContextDocument, ContextReason, Decision, EventKind, Question, QuestionAnswer,
-    QuestionChoice, QuestionOption, Role, SessionEvent, SessionState, ToolStatus,
+    QuestionChoice, QuestionOption, Role, SessionEvent, SessionState, TitleSource, ToolStatus,
 };
 use grove_core::skills::{DetectedSkill, InstallRecord};
 
@@ -330,6 +330,7 @@ fn sample_session() -> Session {
         cwd: "C:/projects/grove".into(),
         model: Some("mock-1".into()),
         title: "Refactor the store".into(),
+        title_source: TitleSource::Manual,
         status: SessionState::Idle,
         project_id: None,
         awaiting: false,
@@ -491,6 +492,13 @@ fn sample_events() -> Vec<SessionEvent> {
             "2025-01-01T00:00:04.500Z",
         ),
         event(
+            EventKind::TitleChanged {
+                title: "Release notes".into(),
+                source: TitleSource::Manual,
+            },
+            "2025-01-01T00:00:04.700Z",
+        ),
+        event(
             EventKind::Error {
                 message: "provider exited".into(),
                 retryable: true,
@@ -594,6 +602,7 @@ fn every_harness_event_variant_matches_the_fixture() {
         "question_resolved",
         "usage",
         "status",
+        "title_changed",
         "error",
         "context_refreshed",
     ] {
