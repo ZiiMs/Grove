@@ -1250,28 +1250,7 @@ function Composer({
           </div>
         ) : null}
         <div className="composer-box">
-          <div className="composer-entry">
-            <button
-              type="button"
-              className="approval-picker"
-              data-mode={permission}
-              title={
-                permission === "ask"
-                  ? "Ask before changes. Click for full access."
-                  : "Full access: no approval prompts. Questions still ask."
-              }
-              aria-label={
-                permission === "ask"
-                  ? "Approval mode: ask before changes. Switch to full access"
-                  : "Approval mode: full access. Switch to ask"
-              }
-              onClick={() =>
-                void setPermissionMode(bridge, permission === "ask" ? "full" : "ask")
-              }
-            >
-              <Icon name={permission === "ask" ? "shield" : "shieldCheck"} size="sm" />
-            </button>
-            <label className="sr-only" htmlFor="composer-input">
+          <label className="sr-only" htmlFor="composer-input">
             Message the active session
           </label>
           <textarea
@@ -1295,23 +1274,28 @@ function Composer({
               }
             }}
           />
-          </div>
           <div className="composer-foot">
             <div className="composer-pickers">
-              <Combo
-                className="inline-picker thinking-picker"
-                id="thinking-select"
-                label="Thinking level for this session"
-                value={currentThinking}
-                groups={thinkingGroups(thinkingLevels)}
-                disabled={busy}
-                placement="up"
-                title="Thinking level for the next turn"
-                triggerIcon={<Icon name="brain" />}
-                renderTriggerValue={(level) => thinkingLabel(level as ThinkingLevel)}
-                hideChevron
-                onChange={(value) => void setThinking(bridge, value as ThinkingLevel)}
-              />
+              <button
+                type="button"
+                className="inline-picker approval-picker"
+                data-mode={permission}
+                title={
+                  permission === "ask"
+                    ? "Ask before changes. Click for full access."
+                    : "Full access: no approval prompts. Questions still ask."
+                }
+                aria-label={
+                  permission === "ask"
+                    ? "Approval mode: ask before changes. Switch to full access"
+                    : "Approval mode: full access. Switch to ask"
+                }
+                onClick={() =>
+                  void setPermissionMode(bridge, permission === "ask" ? "full" : "ask")
+                }
+              >
+                <Icon name={permission === "ask" ? "shield" : "shieldCheck"} size="sm" />
+              </button>
               <Combo
                 className="inline-picker model-picker"
                 id="model-select"
@@ -1336,6 +1320,20 @@ function Composer({
                   </button>
                 }
                 onChange={(value) => void changeModel(value)}
+              />
+              <Combo
+                className="inline-picker thinking-picker"
+                id="thinking-select"
+                label="Thinking level for this session"
+                value={currentThinking}
+                groups={thinkingGroups(thinkingLevels)}
+                disabled={busy}
+                placement="up"
+                title="Thinking level for the next turn"
+                triggerIcon={<Icon name="brain" />}
+                renderTriggerValue={(level) => thinkingLabel(level as ThinkingLevel)}
+                hideChevron
+                onChange={(value) => void setThinking(bridge, value as ThinkingLevel)}
               />
               {pending ? (
                 <span

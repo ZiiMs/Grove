@@ -410,9 +410,7 @@ body.nav-resizing{cursor:col-resize;user-select:none}
 .composer-box textarea{width:100%;background:none;border:0;resize:none;padding:2px 0;font-size:13.5px;line-height:1.55;color:var(--fg);max-height:132px}
 .composer-box textarea:focus{outline:none}
 .composer-box textarea::placeholder{color:var(--fg-3)}
-.composer-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
-.composer-entry{display:flex;align-items:flex-start;gap:7px}
-.composer-entry textarea{flex:1;min-width:0;width:auto;margin-top:1px}
+.composer-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 /* ---------- searchable combo ---------- */
 .combo{position:relative;min-width:0}
 .combo-trigger{
@@ -1227,7 +1225,7 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .inline-picker + .inline-picker::before{content:"·";color:var(--fg-3);margin:0 2px}
 .approval-picker{
   flex:none;display:inline-flex;align-items:center;justify-content:center;
-  width:26px;height:26px;margin-top:1px;border:0;border-radius:var(--r-sm);
+  width:26px;height:26px;padding:0;border:0;border-radius:var(--r-sm);
   background:transparent;color:var(--fg-3);cursor:pointer;
 }
 .approval-picker:hover{background:var(--hover);color:var(--fg)}

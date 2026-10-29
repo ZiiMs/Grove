@@ -413,7 +413,8 @@ describe("redesigned shell", () => {
     const approval = screen.getByRole("button", {
       name: "Approval mode: ask before changes. Switch to full access",
     });
-    expect(approval.parentElement).toHaveClass("composer-entry");
+    expect(approval.parentElement).toHaveClass("composer-pickers");
+    expect(approval).toHaveClass("inline-picker");
     await userEvent.click(approval);
 
     await waitFor(() => expect(bridge.invocations).toContain("session_set_permission_mode"));
