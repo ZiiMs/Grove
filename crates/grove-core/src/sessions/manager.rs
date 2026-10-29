@@ -38,7 +38,8 @@ struct LiveSession {
     commands: Mutex<Box<dyn AgentSession>>,
     /// The pump is the single writer for this session, so manager-authored events go through it.
     inject: tokio::sync::mpsc::UnboundedSender<InjectedEvent>,
-    pump: tokio::task::JoinHandle<()>,
+    /// Taken and joined by [`SessionManager::stop`] before it writes the final `exited`.
+    pump: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -643,10 +644,13 @@ impl SessionManager {
         let live = Arc::new(LiveSession {
             commands: Mutex::new(handle),
             inject,
-            pump,
+            pump: Mutex::new(Some(pump)),
         });
-        if let Some(previous) = self.live.lock().await.insert(session.id.clone(), live) {
-            previous.pump.abort();
+        let displaced = self.live.lock().await.insert(session.id.clone(), live);
+        if let Some(previous) = displaced {
+            if let Some(pump) = previous.pump.lock().await.take() {
+                pump.abort();
+            }
         }
         // A launched agent is ready for its first message. Without this transition the row stays
         // `starting`, and a composer that queues while a turn is in flight never sends anything.
@@ -654,17 +658,32 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Stop the agent and leave the row `exited` with `awaiting` clear.
+    ///
+    /// Every stop path — `close`, `resume`, `switch_provider`, and the archive/delete stop to come —
+    /// goes through here. The pump is aborted before it can drain the adapter's last events, so the
+    /// final transition is written directly once its task has finished: a parked permission or
+    /// question must never survive its process and leave the tree's "needs you" badge stuck.
     async fn stop(&self, id: &str) {
         if let Some(live) = self.live.lock().await.remove(id) {
             {
                 let mut handle = live.commands.lock().await;
                 let _ = handle.shutdown().await;
             }
-            live.pump.abort();
+            // Join, not just abort: a queued permission event published after the exit would re-arm
+            // `awaiting`. Once the task is gone, `mark` is the session's only writer.
+            if let Some(pump) = live.pump.lock().await.take() {
+                pump.abort();
+                let _ = pump.await;
+            }
+            let _ = self.mark(id, SessionState::Exited);
         }
+        // Belt and braces for a row whose pump died without publishing: nothing is running after a
+        // stop, so nothing can be waiting for an answer.
+        let _ = self.store.update_session_awaiting(id, false);
     }
 
-    /// Record a transition the adapter did not emit (close, restart), exactly once.
+    /// Record a transition the adapter did not emit (stop, restart), exactly once.
     ///
     /// Callers run this only after [`SessionManager::stop`], when the session has no pump: writing
     /// directly is what keeps the "one writer per session" invariant.
@@ -821,6 +840,9 @@ mod tests {
         peak: Arc<AtomicUsize>,
         contexts: Arc<StdMutex<Vec<StartContext>>>,
         permissions: Arc<StdMutex<Vec<(String, Decision)>>>,
+        /// The outbound event channel of every started session, oldest first, so a test can park a
+        /// permission or a question the way a real agent does mid-turn.
+        events: Arc<StdMutex<Vec<mpsc::Sender<SessionEvent>>>>,
         /// Whether a credential counts as configured (drives `detect`).
         ready: bool,
     }
@@ -836,6 +858,7 @@ mod tests {
                 peak: Arc::new(AtomicUsize::new(0)),
                 contexts: Arc::new(StdMutex::new(Vec::new())),
                 permissions: Arc::new(StdMutex::new(Vec::new())),
+                events: Arc::new(StdMutex::new(Vec::new())),
                 ready: true,
             }
         }
@@ -885,6 +908,7 @@ mod tests {
         ) -> Result<Box<dyn AgentSession>, ProviderError> {
             lock(&self.contexts).push(ctx);
             let (keepalive, events) = mpsc::channel(4);
+            lock(&self.events).push(keepalive.clone());
             Ok(Box::new(StubSession {
                 events: Some(events),
                 _keepalive: keepalive,
@@ -984,6 +1008,179 @@ mod tests {
             .expect("session is created")
             .session
             .id
+    }
+
+    fn latest_sink(
+        events: &StdMutex<Vec<mpsc::Sender<SessionEvent>>>,
+    ) -> mpsc::Sender<SessionEvent> {
+        lock(events)
+            .last()
+            .cloned()
+            .expect("the stub started a session")
+    }
+
+    /// The pump applies events asynchronously; wait until the row mirrors the parked request.
+    async fn wait_until_awaiting(manager: &SessionManager, session: &str) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if manager
+                .get(session)
+                .expect("the session exists")
+                .session
+                .awaiting
+            {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the parked request never reached the row"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    fn await_is_clear(manager: &SessionManager, session: &str) {
+        assert!(
+            !manager.get(session).unwrap().session.awaiting,
+            "the stopped turn cannot still be waiting for an answer"
+        );
+        assert!(
+            !manager
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|row| row.session.id == session)
+                .expect("the session is listed")
+                .session
+                .awaiting,
+            "the tree's \"needs you\" row must clear"
+        );
+    }
+
+    /// Whether the bus carried an `exited` status since the last read.
+    fn saw_exited(bus: &mut broadcast::Receiver<EventEnvelope<SessionEvent>>) -> bool {
+        loop {
+            match bus.try_recv() {
+                Ok(envelope) => {
+                    if envelope.payload.kind
+                        == (EventKind::Status {
+                            state: SessionState::Exited,
+                        })
+                    {
+                        return true;
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Empty) => return false,
+                Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(broadcast::error::TryRecvError::Closed) => return false,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn switching_provider_with_a_pending_permission_clears_awaiting() {
+        // The tree and titlebar read `awaiting` from the row. A switch stops the old agent before it
+        // relaunches; if that stop only aborts the pump, the parked permission is never resolved and
+        // the "needs you" badge sticks forever.
+        let stub = StubProvider::new();
+        let events = Arc::clone(&stub.events);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+
+        latest_sink(&events)
+            .send(SessionEvent::new(EventKind::PermissionRequest {
+                request_id: "req-1".into(),
+                title: "cargo test".into(),
+                detail: "Runs the suite".into(),
+            }))
+            .await
+            .expect("the stub accepts the request");
+        wait_until_awaiting(&manager, &session).await;
+        let mut bus = manager.subscribe();
+
+        manager
+            .switch_provider(&session, "stub", Some("claude-opus-4-1".into()))
+            .await
+            .expect("a switch during a parked permission is allowed");
+
+        await_is_clear(&manager, &session);
+        assert!(
+            saw_exited(&mut bus),
+            "the stop must publish the exited status the tree clears on"
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_provider_with_a_pending_question_clears_awaiting() {
+        // `ask_user` parks a turn the same way a permission does; the stop path has to clear the flag
+        // for both, or switching a session mid-question leaves it in the needs-you list.
+        let stub = StubProvider::new();
+        let events = Arc::clone(&stub.events);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+
+        latest_sink(&events)
+            .send(SessionEvent::new(EventKind::QuestionRequest {
+                request_id: "q-1".into(),
+                questions: Vec::new(),
+            }))
+            .await
+            .expect("the stub accepts the question");
+        wait_until_awaiting(&manager, &session).await;
+
+        manager
+            .switch_provider(&session, "stub", Some("claude-opus-4-1".into()))
+            .await
+            .expect("a switch during a parked question is allowed");
+
+        await_is_clear(&manager, &session);
+    }
+
+    #[tokio::test]
+    async fn closing_a_session_with_a_pending_question_clears_awaiting_once() {
+        // The stop button goes through `close`: the explicit exit must clear awaiting and must not
+        // duplicate the status event the transcript and tree act on.
+        let stub = StubProvider::new();
+        let events = Arc::clone(&stub.events);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+
+        latest_sink(&events)
+            .send(SessionEvent::new(EventKind::QuestionRequest {
+                request_id: "q-1".into(),
+                questions: Vec::new(),
+            }))
+            .await
+            .expect("the stub accepts the question");
+        wait_until_awaiting(&manager, &session).await;
+        let mut bus = manager.subscribe();
+
+        manager.close(&session).await.unwrap();
+
+        assert_eq!(
+            manager.get(&session).unwrap().session.status,
+            SessionState::Exited,
+            "a stopped session's row is exited"
+        );
+        await_is_clear(&manager, &session);
+        assert_eq!(
+            manager
+                .get(&session)
+                .unwrap()
+                .events
+                .iter()
+                .filter(|event| event.kind
+                    == (EventKind::Status {
+                        state: SessionState::Exited,
+                    }))
+                .count(),
+            1,
+            "a stopped session publishes exactly one exit"
+        );
+        assert!(
+            saw_exited(&mut bus),
+            "the stop must publish the exited status the tree clears on"
+        );
     }
 
     #[test]

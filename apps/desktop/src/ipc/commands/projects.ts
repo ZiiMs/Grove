@@ -1,6 +1,9 @@
 import type {
   AddProjectRequest,
+  CreateDirRequest,
+  DirEntry,
   DirListing,
+  FsRoots,
   Project,
   ProjectDetection,
 } from "@grove/contract";
@@ -21,4 +24,8 @@ export interface ProjectsCommands {
   project_detect: { args: { path: string }; result: ProjectDetection };
   /** Directories only, one level deep. `path` may be empty to start at the home folder. */
   fs_list_dirs: { args: { path?: string }; result: DirListing };
+  /** Every root the picker offers: home first, then mounted drives or the filesystem root. */
+  fs_list_roots: { args: Record<string, never>; result: FsRoots };
+  /** Create one folder under an existing parent. The name must be a single path segment. */
+  fs_create_dir: { args: CreateDirRequest; result: DirEntry };
 }

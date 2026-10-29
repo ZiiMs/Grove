@@ -3,7 +3,10 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   addProjectRequestSchema,
+  createDirRequestSchema,
+  dirEntrySchema,
   dirListingSchema,
+  fsRootsSchema,
   projectDetectionSchema,
   projectSchema,
 } from "../src/index";
@@ -31,6 +34,22 @@ describe("workspace contract fixtures", () => {
     const parsed = dirListingSchema.parse(fixture("dir-listing.json"));
     expect(parsed.parent).toBe("C:/Users/ada");
     expect(parsed.dirs.map((dir) => dir.name)).toEqual(["agent-hub", "grove"]);
+  });
+
+  it("fs-roots.json carries home and every mounted drive", () => {
+    const parsed = fsRootsSchema.parse(fixture("fs-roots.json"));
+    expect(parsed.home).toBe("C:/Users/ada");
+    expect(parsed.roots.map((root) => root.name)).toEqual(["Home", "C:", "D:"]);
+    expect(parsed.roots.map((root) => root.kind)).toEqual(["home", "drive", "drive"]);
+  });
+
+  it("create-dir takes a parent and one segment and returns the folder", () => {
+    const request = createDirRequestSchema.parse({ parent: "D:/Dev", name: "grove" });
+    expect(request).toEqual({ parent: "D:/Dev", name: "grove" });
+    expect(() => createDirRequestSchema.parse({ parent: "D:/Dev" })).toThrow();
+
+    const entry = dirEntrySchema.parse(fixture("fs-create-dir.json"));
+    expect(entry).toEqual({ name: "grove", path: "D:/Dev/grove" });
   });
 
   it("project_add accepts a path alone and keeps optional fields nullable", () => {

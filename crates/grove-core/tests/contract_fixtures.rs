@@ -2,8 +2,9 @@ use grove_core::gitops::{
     DiffTarget, GitBranch, GitDiff, GitStatus, GitStatusFile, GitWorktree, PrResult,
 };
 use grove_core::ipc::{
-    AppInfo, CreateSessionRequest, DirEntry, DirListing, ErrorCode, EventEnvelope, IpcError,
-    Project, ProjectDetection, Session, SessionDetail, SessionSummary, SubagentSummary,
+    AppInfo, CreateSessionRequest, DirEntry, DirListing, ErrorCode, EventEnvelope, FsRoot,
+    FsRootKind, FsRoots, IpcError, Project, ProjectDetection, Session, SessionDetail,
+    SessionSummary, SubagentSummary,
 };
 use grove_core::plan::{Plan, PlanUpdate};
 use grove_core::providers::{Capabilities, Detection, ThinkingLevel};
@@ -777,6 +778,46 @@ fn dir_listing_matches_fixture() {
     assert_eq!(
         serde_json::to_value(&sample).unwrap(),
         fixture("dir-listing.json")
+    );
+}
+
+#[test]
+fn fs_roots_match_fixture() {
+    let sample = FsRoots {
+        home: Some("C:/Users/ada".into()),
+        roots: vec![
+            FsRoot {
+                name: "Home".into(),
+                path: "C:/Users/ada".into(),
+                kind: FsRootKind::Home,
+            },
+            FsRoot {
+                name: "C:".into(),
+                path: "C:/".into(),
+                kind: FsRootKind::Drive,
+            },
+            FsRoot {
+                name: "D:".into(),
+                path: "D:/".into(),
+                kind: FsRootKind::Drive,
+            },
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("fs-roots.json")
+    );
+}
+
+#[test]
+fn created_dir_matches_fixture() {
+    let sample = DirEntry {
+        name: "grove".into(),
+        path: "D:/Dev/grove".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&sample).unwrap(),
+        fixture("fs-create-dir.json")
     );
 }
 

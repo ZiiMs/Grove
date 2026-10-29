@@ -1,8 +1,11 @@
 //! Workspace projects against a real temp directory and a real git repository.
 
 use grove_core::gitops::Git;
-use grove_core::ipc::Session;
-use grove_core::projects::{list_dirs, AddProjectRequest, ProjectService};
+use grove_core::ipc::{FsRootKind, Session};
+use grove_core::paths::display_path;
+use grove_core::projects::{
+    create_dir, list_dirs, list_roots, normalize_path, AddProjectRequest, ProjectService,
+};
 use grove_core::sessions::event::SessionState;
 use grove_core::store::Store;
 use std::path::Path;
@@ -169,4 +172,100 @@ fn detect_and_list_dirs_only_report_directories() {
         .detect(root.path().to_str().unwrap())
         .expect("detect");
     assert!(!detection.is_git);
+}
+
+#[test]
+fn list_dirs_accepts_a_pasted_quoted_path() {
+    let root = tempfile::tempdir().expect("temp dir");
+    std::fs::create_dir(root.path().join("code")).expect("dir");
+    let quoted = format!("\"{}\"", root.path().display());
+
+    let listing = list_dirs(Some(&quoted)).expect("list");
+    let direct = list_dirs(Some(root.path().to_str().unwrap())).expect("list direct");
+    assert_eq!(listing.path, direct.path);
+    assert_eq!(listing.dirs.len(), 1);
+}
+
+#[test]
+fn roots_are_platform_shaped_and_always_include_home() {
+    let roots = list_roots();
+    let home = roots.home.expect("the environment has a home folder");
+    assert_eq!(home, normalize_path(&home));
+
+    let first = roots.roots.first().expect("the home shortcut");
+    assert_eq!(first.kind, FsRootKind::Home);
+    assert_eq!(first.path, home);
+    assert_eq!(first.name, "Home");
+
+    let platform = &roots.roots[1..];
+    assert!(!platform.is_empty(), "the filesystem always has a root");
+    #[cfg(windows)]
+    {
+        assert!(
+            platform.iter().all(|root| root.kind == FsRootKind::Drive),
+            "windows roots are drives: {platform:?}"
+        );
+        assert!(platform.iter().any(|root| root.path == "C:/"));
+        assert!(
+            platform
+                .iter()
+                .all(|root| root.path.len() == 3 && root.path.ends_with('/')),
+            "a drive root is `X:/`: {platform:?}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        assert!(platform
+            .iter()
+            .any(|root| root.kind == FsRootKind::Filesystem && root.path == "/"));
+    }
+}
+
+#[test]
+fn create_dir_adds_one_folder_and_refuses_bad_names() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let parent = display_path(root.path());
+
+    let entry = create_dir(&parent, "  new-project  ").expect("create");
+    assert_eq!(entry.name, "new-project");
+    assert_eq!(entry.path, format!("{parent}/new-project"));
+    assert!(root.path().join("new-project").is_dir());
+
+    for bad in ["", "   ", "a/b", "a\\b", "..", "two\nlines"] {
+        let error = create_dir(&parent, bad).expect_err("invalid name");
+        assert!(
+            matches!(error, grove_core::projects::ProjectError::Invalid(_)),
+            "bad name {bad:?}: {error}"
+        );
+    }
+    assert!(
+        !root.path().join("a").exists(),
+        "a separator creates nothing"
+    );
+
+    let duplicate = create_dir(&parent, "new-project").expect_err("duplicate");
+    assert!(
+        duplicate.to_string().contains("already exists"),
+        "{duplicate}"
+    );
+}
+
+#[test]
+fn create_dir_refuses_an_existing_file_and_a_missing_parent() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let parent = display_path(root.path());
+    std::fs::write(root.path().join("taken.txt"), "x").expect("file");
+
+    let existing = create_dir(&parent, "taken.txt").expect_err("existing file");
+    assert!(
+        existing.to_string().contains("already exists"),
+        "{existing}"
+    );
+
+    let missing = create_dir(&format!("{parent}/missing"), "child").expect_err("missing parent");
+    assert!(missing.to_string().contains("cannot open"), "{missing}");
+    assert!(
+        !root.path().join("missing").exists(),
+        "nothing created recursively"
+    );
 }

@@ -5,8 +5,8 @@ import { z } from "zod";
  * and what git detection reports before a project is saved.
  *
  * Rust (`grove_core::projects`) owns the wire shape; these schemas must accept exactly what it
- * serialises. Both sides are pinned by `contract/fixtures/project*.json` and
- * `contract/fixtures/dir-listing.json`.
+ * serialises. Both sides are pinned by `contract/fixtures/project*.json`,
+ * `contract/fixtures/dir-listing.json`, and `contract/fixtures/fs-*.json`.
  */
 
 export const projectSchema = z.object({
@@ -59,3 +59,30 @@ export const dirListingSchema = z.object({
   dirs: z.array(dirEntrySchema),
 });
 export type DirListing = z.infer<typeof dirListingSchema>;
+
+/** What a picker shortcut points at. */
+export const fsRootKindSchema = z.enum(["home", "drive", "filesystem"]);
+export type FsRootKind = z.infer<typeof fsRootKindSchema>;
+
+export const fsRootSchema = z.object({
+  /** Short chip label: `Home`, `C:`, or `/`. */
+  name: z.string(),
+  /** Forward-slash absolute path of the root. */
+  path: z.string(),
+  kind: fsRootKindSchema,
+});
+export type FsRoot = z.infer<typeof fsRootSchema>;
+
+/** Every root the add-project picker offers; `home` is where a fresh picker opens. */
+export const fsRootsSchema = z.object({
+  home: z.string().nullable(),
+  roots: z.array(fsRootSchema),
+});
+export type FsRoots = z.infer<typeof fsRootsSchema>;
+
+/** Arguments to `fs_create_dir`: one new folder under an existing parent. */
+export const createDirRequestSchema = z.object({
+  parent: z.string(),
+  name: z.string(),
+});
+export type CreateDirRequest = z.infer<typeof createDirRequestSchema>;
