@@ -122,7 +122,14 @@ async fn a_mock_session_streams_deltas_a_message_and_a_tool_call() {
     let session = manager.get(&id).unwrap().session;
     assert_eq!(session.status, SessionState::Idle);
     assert_eq!(session.provider, "mock");
-    assert_eq!(session.title, "mock session");
+    assert_eq!(
+        session.title, "hello grove",
+        "an untitled session takes its first message as the placeholder"
+    );
+    assert_eq!(
+        session.title_source,
+        grove_core::sessions::event::TitleSource::Auto
+    );
 
     let summary = manager.list().unwrap();
     assert_eq!(summary.len(), 1);
