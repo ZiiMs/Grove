@@ -99,7 +99,9 @@ pub struct ProviderSpec {                 // what the picker and settings pane r
 
 pub struct StartContext {
     pub cwd: PathBuf, pub model: Option<String>, pub session_id: String,
-    pub prompt: Option<String>, pub resume_token: Option<String>,
+    pub prompt: Option<String>,   // replayed transcript tail (resume fallback)
+    pub history: Vec<wire::Message>, // full conversation, when a live session is handed over
+    pub resume_token: Option<String>,
     pub config: serde_json::Value, // `maxSteps`, `thinkingLevel`
     pub context_files: Vec<ContextDoc>, // pinned specs + plan, as markdown
 }
@@ -121,6 +123,7 @@ pub trait AgentProvider: Send + Sync {
 pub trait AgentSession: Send {
     fn take_events(&mut self) -> tokio::sync::mpsc::Receiver<SessionEvent>;  // once
     async fn send(&mut self, input: UserInput) -> Result<(), ProviderError>;
+    async fn history(&mut self) -> Vec<wire::Message>;  // [] = keep the transcript replay
     async fn respond_permission(&mut self, request_id: &str, decision: Decision)
         -> Result<(), ProviderError>;
     async fn set_thinking(&mut self, level: ThinkingLevel) -> Result<(), ProviderError>;
@@ -275,8 +278,11 @@ Two runtime operations move it, and both are visible in the transcript as a `Con
 - `session_refresh_context(id)` re-reads pins and plan, pushes the rendered documents into the **running**
   session as a turn, and records what was sent.
 - `session_switch_provider(id, provider, model)` re-launches the same conversation on another registered
-  provider with the same context documents plus a transcript summary (`render_tail`) as its prompt,
-  keeping the transcript and dropping the old resume token and model.
+  provider. A live, idle session hands over its normalized history, trimmed to the last complete
+  assistant message, so the transcript is not replayed; a stopped session falls back to a transcript
+  summary (`render_tail`). The switch keeps the transcript and drops the old resume token and model.
+  While the session is busy or waiting for a permission/question it is refused with a `conflict` and
+  the shell queues it until idle (ADR 0005).
 
 `session_set_thinking(id, level)` is not a context operation: it persists `thinkingLevel` in the
 session config and updates a live agent in place; a stopped session picks it up on resume. It does not
