@@ -26,8 +26,8 @@ use super::wire::{
 };
 use super::{
     anthropic, catalog, google, openai, tools, AgentProvider, AgentSession, Capabilities,
-    ContextDoc, Detection, ProviderDeps, ProviderError, ProviderSpec, StartContext, ThinkingLevel,
-    UserInput, Wire,
+    CompletionRequest, ContextDoc, Detection, ProviderDeps, ProviderError, ProviderSpec,
+    StartContext, ThinkingLevel, UserInput, Wire,
 };
 use crate::sessions::event::{
     Block, Decision, EventKind, Question, QuestionAnswer, Role, SessionEvent, SessionState,
@@ -94,6 +94,21 @@ impl AgentProvider for WireProvider {
 
     fn detect(&self, deps: &ProviderDeps) -> Detection {
         Credentials::new(Arc::clone(&deps.secrets)).detect(&self.spec.id)
+    }
+
+    /// Dispatch to the vendor module that owns this spec's wire format. Auth, endpoint and body shape
+    /// stay inside that module; nothing here knows a vendor field.
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+        deps: ProviderDeps,
+    ) -> Result<String, ProviderError> {
+        let (key, _source) = Credentials::new(Arc::clone(&deps.secrets)).key(&self.spec.id)?;
+        match self.spec.wire {
+            Wire::Anthropic => anthropic::complete(&deps.http, &self.spec, &key, &request).await,
+            Wire::OpenAi => openai::complete(&deps.http, &self.spec, &key, &request).await,
+            Wire::Google => google::complete(&deps.http, &self.spec, &key, &request).await,
+        }
     }
 
     async fn start(
@@ -1122,6 +1137,50 @@ mod tests {
             .expect("no key, no session");
         assert!(matches!(error, ProviderError::Unavailable(_)), "{error}");
         assert!(error.to_string().contains("Settings → Providers"));
+    }
+
+    #[tokio::test]
+    async fn a_one_shot_completion_dispatches_to_the_vendors_wire_format() {
+        use crate::secrets::SecretStore as _;
+        use serde_json::json;
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/messages"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                "content": [{ "type": "text", "text": "Fix the login bug" }]
+            })))
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("anthropic").unwrap();
+        spec.base_url = server.uri();
+        let secrets = Arc::new(MemorySecretStore::new());
+        secrets
+            .set("provider.anthropic.api_key", "test-key")
+            .unwrap();
+        let provider = WireProvider::new(spec);
+
+        let answer = provider
+            .complete(
+                CompletionRequest {
+                    model: "claude-haiku-4-5".into(),
+                    system: "You name conversations.".into(),
+                    prompt: "First exchange".into(),
+                    max_tokens: 64,
+                },
+                ProviderDeps {
+                    paths: crate::paths::AppPaths::new(
+                        std::env::temp_dir().join("grove-agent-tests"),
+                    ),
+                    http: reqwest::Client::new(),
+                    secrets,
+                },
+            )
+            .await
+            .expect("the anthropic spec goes through the anthropic client");
+
+        assert_eq!(answer, "Fix the login bug");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

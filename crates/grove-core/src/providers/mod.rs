@@ -231,6 +231,18 @@ pub struct ProviderDeps {
     pub secrets: Arc<dyn SecretStore>,
 }
 
+/// One non-streaming request outside the agent loop: a model, a system instruction, one prompt and a
+/// small output budget. It deliberately has no history, tools or transcript, so a title call cannot
+/// leak a conversation or reach a mutating tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionRequest {
+    pub model: String,
+    pub system: String,
+    pub prompt: String,
+    pub max_tokens: u32,
+}
+
 /// What the settings pane reports about a provider's readiness. Replaces the old binary doctor: there
 /// is nothing to install, only a credential to configure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -325,6 +337,20 @@ pub trait AgentProvider: Send + Sync {
     /// Whether a usable credential exists right now.
     fn detect(&self, deps: &ProviderDeps) -> Detection;
 
+    /// One small non-streaming request with no tools and no history.
+    ///
+    /// This exists for work that is not a conversation, such as naming a session. The default says
+    /// so instead of pretending: a provider that has no one-shot path is never picked silently.
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+        _deps: ProviderDeps,
+    ) -> Result<String, ProviderError> {
+        Err(ProviderError::Unsupported(
+            "this provider cannot run a one-shot completion".into(),
+        ))
+    }
+
     async fn start(
         &self,
         ctx: StartContext,
@@ -378,7 +404,7 @@ pub trait AgentSession: Send {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalog, AgentSession as _, ThinkingLevel};
+    use super::{catalog, AgentProvider as _, AgentSession as _, ThinkingLevel};
 
     /// A session that implements only the required methods, so the default `set_model` is exercised.
     struct PlainSession;
@@ -435,6 +461,54 @@ mod tests {
     async fn a_session_without_hot_swap_reports_unsupported() {
         let mut session = PlainSession;
         let error = session.set_model("another-model".into()).await.unwrap_err();
+        assert!(matches!(error, super::ProviderError::Unsupported(_)));
+    }
+
+    /// A provider implementing only the required methods: the default `complete` must say so rather
+    /// than pretend a one-shot request was sent.
+    struct PlainProvider;
+
+    #[async_trait::async_trait]
+    impl super::AgentProvider for PlainProvider {
+        fn id(&self) -> &str {
+            "plain"
+        }
+
+        fn spec(&self) -> &super::ProviderSpec {
+            unimplemented!("only the default methods are under test")
+        }
+
+        fn detect(&self, _deps: &super::ProviderDeps) -> super::Detection {
+            unimplemented!("only the default methods are under test")
+        }
+
+        async fn start(
+            &self,
+            _ctx: super::StartContext,
+            _deps: super::ProviderDeps,
+        ) -> Result<Box<dyn super::AgentSession>, super::ProviderError> {
+            unimplemented!("only the default methods are under test")
+        }
+    }
+
+    #[tokio::test]
+    async fn a_provider_without_a_one_shot_path_reports_unsupported() {
+        let error = PlainProvider
+            .complete(
+                super::CompletionRequest {
+                    model: "small".into(),
+                    system: "system".into(),
+                    prompt: "prompt".into(),
+                    max_tokens: 64,
+                },
+                super::ProviderDeps {
+                    paths: crate::paths::AppPaths::new(std::env::temp_dir().join("grove-provider")),
+                    http: reqwest::Client::new(),
+                    secrets: std::sync::Arc::new(crate::secrets::MemorySecretStore::new()),
+                },
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(error, super::ProviderError::Unsupported(_)));
     }
 

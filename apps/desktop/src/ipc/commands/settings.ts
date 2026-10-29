@@ -4,6 +4,7 @@ import type {
   Settings,
   SettingsPatch,
   ThinkingLevel,
+  TitleModel,
 } from "@grove/contract";
 
 /**
@@ -13,6 +14,15 @@ import type {
 export interface SettingsCommands {
   settings_get: { args: Record<string, never>; result: Settings };
   settings_set: { args: { patch: SettingsPatch }; result: Settings };
+  /**
+   * The suggested title model for the first configured provider, or `null` when none is configured.
+   * `liveModels` is what the shell already fetched; it decides whether OpenRouter offers the
+   * preferred small model. Nothing is persisted.
+   */
+  title_model_suggest: {
+    args: { liveModels?: Record<string, string[]> };
+    result: TitleModel | null;
+  };
   secret_status: { args: { key: string }; result: SecretStatusView };
   secret_set: { args: { key: string; value: string }; result: SecretStatusView };
   secret_delete: { args: { key: string }; result: SecretStatusView };
