@@ -69,9 +69,9 @@ interface UiState {
 export const useUiStore = create<UiState>((set) => ({
   view: "session",
   setView: (view) => set({ view }),
-  contextOpen: true,
+  contextOpen: false,
   setContextOpen: (contextOpen) => set({ contextOpen }),
-  infoOpen: false,
+  infoOpen: true,
   setInfoOpen: (infoOpen) => set({ infoOpen }),
   contextTab: "git",
   setContextTab: (contextTab) => set({ contextTab }),
@@ -109,8 +109,8 @@ export const useUiStore = create<UiState>((set) => ({
   reset: () =>
     set({
       view: "session",
-      contextOpen: true,
-      infoOpen: false,
+      contextOpen: false,
+      infoOpen: true,
       contextTab: "git",
       settingsTab: null,
       newSession: null,

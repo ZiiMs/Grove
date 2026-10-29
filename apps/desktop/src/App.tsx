@@ -178,13 +178,19 @@ export default function App() {
     setView("session");
   };
 
-  /** Only one right sidebar is visible: opening the context column puts the floating panel away. */
+  /** Opening the context column only covers the floating panel; `infoOpen` keeps the user's intent. */
   const openContext = () => {
-    setInfoOpen(false);
     setContextOpen(true);
   };
-  const infoVisible = infoOpen;
-  const toggleInfo = () => setInfoOpen(!infoOpen);
+  const infoVisible = infoOpen && !contextOpen;
+  const toggleInfo = () => {
+    if (infoVisible) {
+      setInfoOpen(false);
+      return;
+    }
+    setInfoOpen(true);
+    setContextOpen(false);
+  };
 
   const onGit = () => {
     setContextTab("git");

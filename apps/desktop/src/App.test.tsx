@@ -315,7 +315,10 @@ beforeEach(() => {
 describe("redesigned shell", () => {
   it("renders the project tree, the active session and the status line", async () => {
     await ready();
-    expect(screen.getByText("grove")).toBeInTheDocument();
+    const nav = screen.getByRole("complementary", {
+      name: "Projects, worktrees and sessions",
+    });
+    expect(within(nav).getByText("grove")).toBeInTheDocument();
     expect(screen.getAllByText("feat/ui").length).toBeGreaterThan(0);
     expect(screen.getByText(/grove 0\.1\.0/)).toBeInTheDocument();
     expect(screen.getAllByText(/1 awaiting you/).length).toBeGreaterThan(0);
@@ -371,24 +374,32 @@ describe("redesigned shell", () => {
     expect(localStorage.getItem("grove.navWidth")).toBeNull();
   });
 
-  it("floats the session info over the right side and hides it when the context column opens", async () => {
+  it("shows the session info by default and brings it back after the context column closes", async () => {
     await ready();
     const titlebar = document.querySelector(".titlebar") as HTMLElement;
-    await userEvent.click(within(titlebar).getByRole("button", { name: "Session info" }));
-
     const panel = screen.getByRole("complementary", { name: "Session info" });
     expect(within(panel).getByText("Model")).toBeInTheDocument();
     expect(within(panel).getByText("Context")).toBeInTheDocument();
     expect(within(panel).getByText("Usage")).toBeInTheDocument();
     expect(within(panel).getByText("Ask before changes")).toBeInTheDocument();
-    // The floating panel does not close the context column, so the centred chat does not reflow.
-    expect(screen.getByRole("button", { name: "Hide context panel" })).toBeInTheDocument();
 
-    // Closing the context column leaves the floating panel alone; opening it puts the panel away.
-    await userEvent.click(screen.getByRole("button", { name: "Hide context panel" }));
-    expect(screen.getByRole("complementary", { name: "Session info" })).toBeInTheDocument();
+    // Opening the context column covers the floating panel; closing it brings the panel back.
     await userEvent.click(screen.getByRole("button", { name: "Show context panel" }));
     expect(screen.queryByRole("complementary", { name: "Session info" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Hide context panel" }));
+    expect(screen.getByRole("complementary", { name: "Session info" })).toBeInTheDocument();
+
+    // The titlebar button is the persistent hide: the panel stays away across a context open/close.
+    await userEvent.click(within(titlebar).getByRole("button", { name: "Session info" }));
+    expect(screen.queryByRole("complementary", { name: "Session info" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Show context panel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Hide context panel" }));
+    expect(screen.queryByRole("complementary", { name: "Session info" })).not.toBeInTheDocument();
+
+    // Turning it back on closes the context column and shows the panel.
+    await userEvent.click(within(titlebar).getByRole("button", { name: "Session info" }));
+    expect(screen.getByRole("complementary", { name: "Session info" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show context panel" })).toBeInTheDocument();
   });
 
   it("toggles approval mode from the composer and keeps send icon-only", async () => {
