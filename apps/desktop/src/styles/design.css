@@ -75,6 +75,7 @@
   --r:var(--t-r);
   --r-lg:calc(var(--t-r) + 2px);
   --nav:272px; --ctx:304px;
+  --chat-max:730px;
   --mono:var(--t-font-mono);
   --sans:var(--t-font-body);
   --display:var(--t-font-display);
@@ -914,8 +915,6 @@ dialog.settings-modal{
 /* ---------- responsive ---------- */
 @media (max-width:1279px){
   :root{--nav:248px;--ctx:288px}
-  .run-scroll{padding:18px 16px 28px}
-  .composer{padding:10px 16px 13px}
   .session-head{padding:0 14px}
 }
 @media (max-width:1099px){
@@ -933,8 +932,6 @@ dialog.settings-modal{
   .window-btn{width:44px}
   .ctx-stub{display:none}
   .app[data-ctx="closed"] .session-head{padding-right:14px}
-  .run-scroll{padding:16px 14px 26px}
-  .composer{padding:9px 14px 12px}
   .session-head{padding:0 12px;height:42px}
   .toast{bottom:38px;right:12px}
   .sb-right .sb-item.tidy{display:none}
@@ -946,7 +943,6 @@ dialog.settings-modal{
   .sb-right .sb-item.mono{display:none}
   #status-live{display:inline-block;max-width:186px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .grid-2{grid-template-columns:1fr}
-  .turn-user .bubble{max-width:94%}
   .await-chip .await-text{display:none}
   .await-chip{width:26px;height:26px;justify-content:center;padding:0}
 }
@@ -1090,15 +1086,15 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .pd-manage-foot{justify-content:space-between;padding:0 18px 18px;margin-top:0}
 
 /* ---------- airy prose session ---------- */
-.session .run-scroll{padding:clamp(16px,3vw,26px) clamp(16px,2.6vw,34px) clamp(22px,4vw,30px)}
-.session .run-inner{max-width:min(1080px,100%)}
-.session .turn{margin-bottom:clamp(18px,2.4vw,22px)}
-.session .turn-foot{margin-top:7px;font-size:9.5px;opacity:.6}
-.session .turn > p{font-size:14px;line-height:1.8;max-width:100%}
+.session .run-scroll{padding:18px clamp(16px,3vw,24px) 26px}
+.session .run-inner{max-width:min(var(--chat-max),100%)}
+.session .turn{margin-bottom:16px}
+.session .turn-foot{margin-top:6px;font-size:9.5px;opacity:.6}
+.session .turn > p{font-size:14px;line-height:1.72;max-width:100%}
 .session .turn-code{font-size:11.5px;line-height:1.7;margin:10px 0 0;padding:10px 12px;background:var(--sunken);border:1px solid var(--line);border-radius:var(--r);overflow-x:auto}
 .session .turn-thinking{color:var(--fg-3);font-size:12.5px;line-height:1.7;margin-bottom:8px}
 .session .turn-user{align-items:flex-end}
-.session .turn-user .bubble{max-width:min(85%,720px);background:var(--elev);border:1px solid var(--line);border-radius:14px 14px 4px 14px;padding:9px 12px}
+.session .turn-user .bubble{max-width:min(82%,560px);background:var(--elev);border:1px solid var(--line);border-radius:14px 14px 4px 14px;padding:9px 12px}
 .session .turn-user .bubble p{font-size:13.5px;line-height:1.65;color:var(--fg)}
 .session .tool{margin:0;border:0;border-radius:0;background:transparent;overflow:visible}
 .session .tool-head{padding:1px 0;font-family:var(--mono);font-size:11px;color:var(--fg-3);gap:8px;border-radius:3px}
@@ -1118,13 +1114,24 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .session .perm-cmd{margin:6px 0 4px;background:transparent;border:0;border-radius:0;padding:0;font-size:11.5px;overflow:visible}
 .session .perm-note{font-size:11.5px;color:var(--fg-3);max-width:100%}
 .session .perm-actions{margin-top:10px;gap:8px}
-.session .composer{padding:12px clamp(16px,2.6vw,34px) 16px;background:var(--bg)}
-.session .composer-inner{max-width:min(1080px,100%)}
+.session .composer{position:relative;padding:10px clamp(16px,3vw,24px) 14px;border-top:0;background:var(--bg)}
+.session .composer::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:26px;background:linear-gradient(180deg,transparent,var(--bg));pointer-events:none}
+.session .composer-inner{max-width:min(var(--chat-max),100%)}
 .session .composer-box{border-color:transparent;background:transparent;padding:6px 8px;border-radius:var(--r);box-shadow:none;transition:border-color var(--dur) var(--ease),background var(--dur) var(--ease)}
 .session .composer-box:focus-within{border-color:var(--line-2);background:var(--sunken);box-shadow:none}
 .session .composer-box textarea{font-size:14px;line-height:1.6;max-height:96px}
 .session .composer-foot .combo-trigger{font-size:10px;background:transparent;border-color:var(--line-2);color:var(--fg-3);padding:3px 6px}
 .session .empty{border:0;background:transparent;padding:24px 0}
+
+/* The session block sits after the shared responsive section, so its breakpoints live here to win
+   the cascade at the same specificity. */
+@media (max-width:899px){
+  .session .run-scroll{padding:16px 14px 26px}
+  .session .composer{padding:9px 14px 12px}
+}
+@media (max-width:640px){
+  .session .turn-user .bubble{max-width:100%}
+}
 
 /* ---------- inline question card ---------- */
 .qcard{
