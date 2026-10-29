@@ -134,6 +134,13 @@ const anthropicDetail: SessionDetail = {
   model: "claude-sonnet-4-5",
 };
 
+/** The same conversation once its permission request has been answered. */
+const idleEvents = events.filter((event) => event.kind !== "permission_request");
+const idleSession = { ...session, awaiting: false };
+const idleDetail: SessionDetail = { ...idleSession, events: idleEvents };
+const idleAnthropicSession = { ...anthropicSession, awaiting: false };
+const idleAnthropicDetail: SessionDetail = { ...idleDetail, provider: "anthropic", model: "claude-sonnet-4-5" };
+
 function seed() {
   return {
     providers: DEFAULT_PROVIDERS,
@@ -256,13 +263,35 @@ async function ready() {
   return bridge;
 }
 
-/** The shell with the full provider roster on an Anthropic session. */
+/** The shell with the full provider roster on an idle Anthropic session. */
 async function readyOnAnthropic() {
   const bridge = renderApp({
     providers: PROVIDER_ROSTER,
     providerStatuses: FAKE_PROVIDER_ROSTER,
     sessions: [fakeSummary(anthropicSession, events.length)],
     details: { [session.id]: anthropicDetail },
+  });
+  await screen.findByRole("heading", { name: "OAuth device flow" });
+  return bridge;
+}
+
+/** The same session, idle: the permission request has been answered. */
+async function readyOnIdleAnthropic() {
+  const bridge = renderApp({
+    providers: PROVIDER_ROSTER,
+    providerStatuses: FAKE_PROVIDER_ROSTER,
+    sessions: [fakeSummary(idleAnthropicSession, idleEvents.length)],
+    details: { [session.id]: idleAnthropicDetail },
+  });
+  await screen.findByRole("heading", { name: "OAuth device flow" });
+  return bridge;
+}
+
+/** The default shell session, idle. */
+async function readyIdle() {
+  const bridge = renderApp({
+    sessions: [fakeSummary(idleSession, idleEvents.length)],
+    details: { [session.id]: idleDetail },
   });
   await screen.findByRole("heading", { name: "OAuth device flow" });
   return bridge;
@@ -361,7 +390,7 @@ describe("redesigned shell", () => {
   });
 
   it("searches the model combo before switching models", async () => {
-    const bridge = await ready();
+    const bridge = await readyIdle();
     await userEvent.click(screen.getByRole("combobox", { name: "Model for this session" }));
     const search = screen.getByRole("searchbox", { name: "Search Model for this session" });
     await userEvent.type(search, "mock");
@@ -499,7 +528,7 @@ describe("redesigned shell", () => {
   });
 
   it("switches provider through the existing path, remembers the choice and toasts the label", async () => {
-    const bridge = await readyOnAnthropic();
+    const bridge = await readyOnIdleAnthropic();
     await userEvent.click(modelTrigger());
     await userEvent.click(screen.getByRole("option", { name: /GPT-5 Mini/ }));
 
@@ -509,6 +538,62 @@ describe("redesigned shell", () => {
     ).toMatchObject({ provider: "openai", model: "gpt-5-mini" });
     expect(await screen.findByText("Session now runs on OpenAI · GPT-5 Mini")).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("grove.recentModels") ?? "[]")[0]).toBe("gpt-5-mini");
+  });
+
+  it("queues a cross-provider switch while a permission is open and applies it on idle", async () => {
+    const bridge = await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /GPT-5 Mini/ }));
+
+    // The composer says what is coming and why it has not happened yet; the agent is untouched.
+    const waiting = await screen.findByTitle(/Waiting for this turn to finish before switching to GPT-5 Mini/);
+    expect(waiting).toHaveTextContent("GPT-5 Mini");
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+
+    // The user answers the permission and the turn ends; the shell retries at idle.
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: session.id,
+        payload: {
+          at: "2025-01-01T00:00:06.000Z",
+          kind: "permission_resolved",
+          request_id: "perm-1",
+          decision: "approve",
+        },
+      });
+      bridge.emitSessionEvent({
+        sessionId: session.id,
+        payload: { at: "2025-01-01T00:00:07.000Z", kind: "status", state: "idle" },
+      });
+    });
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_switch_provider"));
+    expect(
+      bridge.calls.find((call) => call.command === "session_switch_provider")?.args,
+    ).toMatchObject({ id: session.id, provider: "openai", model: "gpt-5-mini" });
+    expect(screen.queryByTitle(/Waiting for this turn to finish/)).not.toBeInTheDocument();
+    expect(await screen.findByText("Session now runs on OpenAI · GPT-5 Mini")).toBeInTheDocument();
+  });
+
+  it("drops a queued switch when the session exits before it can be applied", async () => {
+    const bridge = await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /GPT-5 Mini/ }));
+    expect(
+      await screen.findByTitle(/Waiting for this turn to finish before switching to GPT-5 Mini/),
+    ).toBeInTheDocument();
+
+    act(() => {
+      bridge.emitSessionEvent({
+        sessionId: session.id,
+        payload: { at: "2025-01-01T00:00:06.000Z", kind: "status", state: "exited" },
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTitle(/Waiting for this turn to finish/)).not.toBeInTheDocument(),
+    );
+    expect(bridge.invocations).not.toContain("session_switch_provider");
   });
 
   it("opens settings on the requested tab and applies a theme", async () => {

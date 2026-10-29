@@ -119,16 +119,20 @@ impl AgentProvider for WireProvider {
             .map(ThinkingLevel::parse)
             .unwrap_or_default();
         let system = system_prompt(&ctx);
-        let mut history: Vec<Message> = Vec::new();
-        if let Some(prompt) = ctx
-            .prompt
-            .as_deref()
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-        {
-            history.push(Message::user(format!(
-                "Earlier in this conversation:\n\n{prompt}\n\nContinue from there."
-            )));
+        // A live conversation handed over by another provider is already normalized: seed it as-is.
+        // Otherwise a resumed session replays its transcript tail as one opening message.
+        let mut history: Vec<Message> = ctx.history.clone();
+        if history.is_empty() {
+            if let Some(prompt) = ctx
+                .prompt
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+            {
+                history.push(Message::user(format!(
+                    "Earlier in this conversation:\n\n{prompt}\n\nContinue from there."
+                )));
+            }
         }
         let session = AgentSessionImpl::new(
             self.spec.clone(),
@@ -894,6 +898,10 @@ impl AgentSession for AgentSessionImpl {
         Ok(())
     }
 
+    async fn history(&mut self) -> Vec<Message> {
+        self.history.lock().await.clone()
+    }
+
     async fn respond_permission(
         &mut self,
         request_id: &str,
@@ -1046,7 +1054,23 @@ fn system_prompt(ctx: &StartContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets::MemorySecretStore;
+    use crate::secrets::{MemorySecretStore, SecretStore};
+
+    /// A keyed OpenAI provider deps, so a `start` resolves a credential before requesting.
+    fn provider_deps() -> ProviderDeps {
+        let secrets = Arc::new(MemorySecretStore::new());
+        secrets
+            .set(
+                &crate::providers::credentials::api_key_name("openai"),
+                "test-key",
+            )
+            .expect("the memory store accepts a key");
+        ProviderDeps {
+            paths: crate::paths::AppPaths::new(std::env::temp_dir().join("grove-agent-tests")),
+            http: reqwest::Client::new(),
+            secrets,
+        }
+    }
 
     #[test]
     fn the_registry_has_one_entry_per_catalogued_provider() {
@@ -1073,6 +1097,7 @@ mod tests {
                 title: "Grove — architecture".into(),
                 body: "the design".into(),
             }],
+            history: Vec::new(),
         };
         let prompt = system_prompt(&ctx);
         assert!(prompt.contains("C:/work/project"));
@@ -1114,6 +1139,7 @@ mod tests {
                     resume_token: None,
                     config: Value::Null,
                     context_files: Vec::new(),
+                    history: Vec::new(),
                 },
                 deps,
             )
@@ -1393,6 +1419,111 @@ mod tests {
                 "the history lost {text:?}: {history}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn history_is_the_normalized_conversation_the_agent_ran() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            std::env::temp_dir(),
+            "gpt-5".into(),
+            "system".into(),
+            vec![Message::user("first")],
+            MAX_STEPS,
+            "session-history".into(),
+        );
+        let mut events = session.take_events();
+        session.send(UserInput::text("second")).await.unwrap();
+        wait_until_idle(&mut events).await;
+        session.send(UserInput::text("third")).await.unwrap();
+        wait_until_idle(&mut events).await;
+
+        // What a handoff exports: every message, in order, in the neutral shape — not the vendor JSON.
+        let history = session.history().await;
+        assert_eq!(history.len(), 5, "{history:?}");
+        assert_eq!(history[0], Message::user("first"));
+        assert_eq!(history[1], Message::user("second"));
+        assert_eq!(history[2].role, MsgRole::Assistant);
+        assert_eq!(history[2].text_of(), "ok");
+        assert_eq!(history[3], Message::user("third"));
+        assert_eq!(history[4].role, MsgRole::Assistant);
+    }
+
+    #[tokio::test]
+    async fn a_handoff_start_seeds_the_history_instead_of_replaying_the_prompt() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                    ),
+            )
+            .mount(&server)
+            .await;
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+
+        let mut session = WireProvider::new(spec)
+            .start(
+                StartContext {
+                    cwd: std::env::temp_dir(),
+                    model: None,
+                    session_id: "handoff".into(),
+                    // The stopped-session fallback. When history is present it must not be sent.
+                    prompt: Some("Earlier in this conversation: user: stale summary".into()),
+                    resume_token: None,
+                    config: Value::Null,
+                    context_files: Vec::new(),
+                    history: vec![
+                        Message::user("first task"),
+                        Message::assistant(vec![MsgBlock::Text {
+                            text: "first reply".into(),
+                        }]),
+                    ],
+                },
+                provider_deps(),
+            )
+            .await
+            .expect("the provider starts");
+        let mut events = session.take_events();
+        session.send(UserInput::text("next")).await.unwrap();
+        wait_until_idle(&mut events).await;
+
+        let requests = server.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let messages = body["messages"].to_string();
+        assert!(messages.contains("first task"), "{messages}");
+        assert!(messages.contains("first reply"), "{messages}");
+        assert!(
+            !messages.contains("stale summary"),
+            "a handoff must not replay the transcript summary: {messages}"
+        );
     }
 
     /// Drain the event stream until the turn reports it is done.

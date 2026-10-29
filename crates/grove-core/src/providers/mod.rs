@@ -220,6 +220,10 @@ pub struct StartContext {
     pub resume_token: Option<String>,
     pub config: serde_json::Value,
     pub context_files: Vec<ContextDoc>,
+    /// The full normalized conversation, when a live session is handed to another provider. A
+    /// non-empty history seeds the agent directly and replaces the transcript replay; empty keeps
+    /// the [`Self::prompt`] path.
+    pub history: Vec<wire::Message>,
 }
 
 /// The services the agent runtime may use. Sessions require the network: a provider call is the
@@ -349,6 +353,15 @@ pub trait AgentSession: Send {
         Err(ProviderError::Unsupported(
             "this provider cannot change models mid-session".into(),
         ))
+    }
+    /// The conversation as neutral messages, so a live session can be handed to another provider
+    /// instead of being summed up. Empty means the provider keeps no in-process history, and the
+    /// manager falls back to replaying the transcript tail.
+    ///
+    /// `&mut self` because a session is only ever read behind the manager's command mutex; the trait
+    /// is `Send` rather than `Sync`, which an `&self` future would demand.
+    async fn history(&mut self) -> Vec<wire::Message> {
+        Vec::new()
     }
     /// Answer a tool permission request. Until it is answered the tool call is parked.
     async fn respond_permission(

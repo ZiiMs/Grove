@@ -1253,6 +1253,13 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
   padding:2px 8px 4px 26px;font-size:10.5px;line-height:1.4;color:var(--red);
 }
 
+/* ---------- queued cross-provider switch (ticket E3) ---------- */
+.pending-switch{
+  display:inline-flex;align-items:center;gap:5px;margin-left:4px;
+  font-size:11px;color:var(--fg-3);white-space:nowrap;cursor:default;
+}
+.pending-switch .dot{width:6px;height:6px}
+
 /* ---------- archive and permanent delete (ticket C3/C4) ---------- */
 .archive-group{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
 .session-row .s-suffix{
