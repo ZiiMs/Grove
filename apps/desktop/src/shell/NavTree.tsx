@@ -900,9 +900,6 @@ export function NavTree({
               onClick={() => setView((current) => ({ ...current, archive: !current.archive }))}
             >
               <Icon name="archive" size="sm" />
-              {archivedSessions.length ? (
-                <span className="nav-badge">{archivedSessions.length}</span>
-              ) : null}
             </button>
             <button
               className="nav-btn"
