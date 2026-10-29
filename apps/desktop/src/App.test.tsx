@@ -319,6 +319,11 @@ describe("redesigned shell", () => {
       name: "Projects, worktrees and sessions",
     });
     expect(within(nav).getByText("grove")).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("region", { name: "Session transcript and composer" }),
+      ).getByLabelText("Message the active session"),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("feat/ui").length).toBeGreaterThan(0);
     expect(screen.getByText(/grove 0\.1\.0/)).toBeInTheDocument();
     expect(screen.getAllByText(/1 awaiting you/).length).toBeGreaterThan(0);

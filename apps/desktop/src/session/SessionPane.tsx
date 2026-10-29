@@ -14,6 +14,7 @@ import {
   useState,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 
 const EMPTY_QUEUE: string[] = [];
@@ -203,28 +204,29 @@ export function SessionPane({ active, summary, project }: SessionPaneProps) {
         onAnswer={(requestId, answers) => respondQuestion(bridge, requestId, answers)}
         empty={!detail}
         onNewSession={() => openNewSession({ projectId: project?.id ?? null })}
+        footer={
+          detail ? (
+            <Composer
+              sessionId={detail.id}
+              model={detail.model}
+              locked={questionPending}
+              pinned={pinned}
+              onUnpin={async (specId) => {
+                try {
+                  const next = await bridge.invoke("session_pin", {
+                    id: detail.id,
+                    specId,
+                    pinned: false,
+                  });
+                  applyContext(next);
+                } catch (err) {
+                  notify(errorText(err), "error");
+                }
+              }}
+            />
+          ) : null
+        }
       />
-
-      {detail ? (
-        <Composer
-          sessionId={detail.id}
-          model={detail.model}
-          locked={questionPending}
-          pinned={pinned}
-          onUnpin={async (specId) => {
-            try {
-              const next = await bridge.invoke("session_pin", {
-                id: detail.id,
-                specId,
-                pinned: false,
-              });
-              applyContext(next);
-            } catch (err) {
-              notify(errorText(err), "error");
-            }
-          }}
-        />
-      ) : null}
 
       {error ? (
         <p className="session-error" role="alert" style={{ padding: "0 20px 8px" }}>
@@ -243,6 +245,7 @@ function Transcript({
   onAnswer,
   empty,
   onNewSession,
+  footer,
 }: {
   items: TranscriptItem[];
   working: boolean;
@@ -251,9 +254,13 @@ function Transcript({
   onAnswer: (requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
   empty: boolean;
   onNewSession: () => void;
+  /** The composer, kept inside the scrollport so the scrollbar runs to the bottom of the chat. */
+  footer?: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const scrollTimer = useRef<number | undefined>(undefined);
+  const [scrolling, setScrolling] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const footers = useMemo(() => footerIndexes(items, working), [items, working]);
   const virtualizer = useVirtualizer({
@@ -276,7 +283,13 @@ function Transcript({
     const node = scrollRef.current;
     if (!node) return;
     stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+    // The scrollbar stays out of sight until the transcript actually moves.
+    setScrolling(true);
+    window.clearTimeout(scrollTimer.current);
+    scrollTimer.current = window.setTimeout(() => setScrolling(false), 900);
   };
+
+  useEffect(() => () => window.clearTimeout(scrollTimer.current), []);
 
   const toggle = (id: string) => {
     setExpanded((current) => {
@@ -292,9 +305,10 @@ function Transcript({
       className="run-scroll od-scroll"
       ref={scrollRef}
       onScroll={onScroll}
+      data-scrolling={scrolling ? "true" : undefined}
       tabIndex={0}
       role="region"
-      aria-label="Session transcript"
+      aria-label="Session transcript and composer"
     >
       <div className="run-inner">
         {empty ? (
@@ -340,6 +354,7 @@ function Transcript({
           </div>
         )}
       </div>
+      {footer}
     </div>
   );
 }
