@@ -80,6 +80,9 @@ impl From<SessionError> for IpcError {
 /// How many transcript lines a provider switch replays as the new provider's opening prompt.
 pub const TRANSCRIPT_SUMMARY_LINES: usize = 24;
 
+/// The longest a session title may be: long enough for a sentence, short enough for a tree row.
+pub const SESSION_TITLE_MAX_CHARS: usize = 80;
+
 /// Owns every live session and the store they persist into. One instance per application.
 pub struct SessionManager {
     store: Arc<Store>,
@@ -439,6 +442,39 @@ impl SessionManager {
             handle.set_thinking(level).await?;
         }
         self.get(id)
+    }
+
+    /// Rename a session. Only the title changes: the agent, its config and the transcript are
+    /// untouched, so a stopped session is renamed without being resumed.
+    ///
+    /// The rules live here rather than in the command and the row, so every caller — the context
+    /// menu today, later automation — accepts exactly the same titles. A blank title is refused
+    /// rather than defaulted: the row cancels an empty edit before calling.
+    ///
+    /// A later slice records title provenance and emits `title_changed` from here; the signature
+    /// and the validation are the seam it extends.
+    pub async fn rename(&self, id: &str, title: &str) -> Result<Session, SessionError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(SessionError::Invalid("title is empty".into()));
+        }
+        if title.chars().count() > SESSION_TITLE_MAX_CHARS {
+            return Err(SessionError::Invalid(format!(
+                "title is longer than {SESSION_TITLE_MAX_CHARS} characters"
+            )));
+        }
+        if title.chars().any(char::is_control) {
+            return Err(SessionError::Invalid(
+                "title contains control characters".into(),
+            ));
+        }
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        self.store.set_session_title(id, title)?;
+        self.store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))
     }
 
     /// Stop the process but keep the row and the transcript. The session can be resumed later.
@@ -1300,6 +1336,63 @@ mod tests {
             manager.get(&session).unwrap().thinking_level,
             ThinkingLevel::Low
         );
+    }
+
+    #[tokio::test]
+    async fn renaming_trims_the_title_and_persists_the_new_one() {
+        let manager = manager();
+        let session = create(&manager).await;
+        let before = manager.get(&session).unwrap().session;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let renamed = manager
+            .rename(&session, "  Release notes  ")
+            .await
+            .expect("a valid title renames the session");
+
+        assert_eq!(renamed.title, "Release notes");
+        let stored = manager.get(&session).unwrap().session;
+        assert_eq!(
+            stored.title, "Release notes",
+            "the tree reads the stored row, not the returned copy"
+        );
+        assert_ne!(
+            stored.updated_at, before.updated_at,
+            "a rename moves the session's updated timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_rejects_blank_control_and_overlong_titles() {
+        let manager = manager();
+        let session = create(&manager).await;
+        let long = "x".repeat(81);
+        for (title, why) in [
+            ("", "an empty title is not a rename"),
+            ("   ", "a whitespace-only title is not a rename"),
+            ("bad\u{7}title", "control characters would corrupt the row"),
+            (
+                long.as_str(),
+                "a title longer than 80 characters is refused",
+            ),
+        ] {
+            let error = manager.rename(&session, title).await.unwrap_err();
+            assert!(matches!(error, SessionError::Invalid(_)), "{why}");
+        }
+        assert_eq!(
+            manager.get(&session).unwrap().session.title,
+            "stub session",
+            "a refused title leaves the stored row alone"
+        );
+
+        let at_limit = "x".repeat(80);
+        manager
+            .rename(&session, &at_limit)
+            .await
+            .expect("80 characters is the limit, not one over it");
+
+        let missing = manager.rename("missing", "Title").await.unwrap_err();
+        assert!(matches!(missing, SessionError::NotFound(_)));
     }
 
     #[tokio::test]
