@@ -223,7 +223,10 @@ export function NewSessionDialog() {
         title: title.trim() || null,
         projectId: project?.id ?? null,
         worktreePath,
-        config: { thinkingLevel },
+        config: {
+          thinkingLevel,
+          permissionMode: prefs.permissionMode === "bypass" ? "full" : "ask",
+        },
       });
       if (!created) {
         setError(useSessionStore.getState().error ?? "The session could not be created.");

@@ -59,6 +59,10 @@ export const thinkingLevelSchema = z.enum([
 ]);
 export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
 
+/** Whether mutating tools ask before they run. `full` still lets `ask_user` questions through. */
+export const permissionModeSchema = z.enum(["ask", "full"]);
+export type PermissionMode = z.infer<typeof permissionModeSchema>;
+
 /** One option in a structured question. */
 export const questionOptionSchema = z.object({
   label: z.string(),
@@ -260,6 +264,8 @@ export type SessionSummary = z.infer<typeof sessionSummarySchema>;
 export const sessionDetailSchema = sessionSchema.extend({
   /** Reasoning level the runtime will use on the next turn; absent means `off`. */
   thinkingLevel: thinkingLevelSchema.optional(),
+  /** Approval mode the runtime will use for the next tool call; absent means `ask`. */
+  permissionMode: permissionModeSchema.optional(),
   events: z.array(sessionEventSchema),
 });
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;

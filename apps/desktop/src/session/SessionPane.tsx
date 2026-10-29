@@ -1030,6 +1030,7 @@ function Composer({
   const dequeue = useSessionStore((state) => state.dequeue);
   const cancel = useSessionStore((state) => state.cancel);
   const setThinking = useSessionStore((state) => state.setThinking);
+  const setPermissionMode = useSessionStore((state) => state.setPermissionMode);
   const setModel = useSessionStore((state) => state.setModel);
   const switchModel = useSessionStore((state) => state.switchModel);
   const pendingModel = useSessionStore((state) => state.pendingModel);
@@ -1055,6 +1056,8 @@ function Composer({
   const currentProvider = detail?.provider ?? fallbackProvider;
   const currentModel = model ?? defaultModelFor(currentProvider, modelsByProvider[currentProvider]);
   const currentThinking = detail?.thinkingLevel ?? "off";
+  const permission =
+    detail?.permissionMode ?? (prefs.permissionMode === "bypass" ? "full" : "ask");
   const pending = pendingModel?.sessionId === sessionId ? pendingModel : null;
   const knownLevels = useMemo(
     () => knownThinkingLevels(currentProvider, currentModel, modelThinking),
@@ -1297,6 +1300,26 @@ function Composer({
                 }
                 onChange={(value) => void changeModel(value)}
               />
+              <button
+                type="button"
+                className="inline-picker approval-picker"
+                data-mode={permission}
+                title={
+                  permission === "ask"
+                    ? "Ask before changes. Click for full access."
+                    : "Full access: no approval prompts. Questions still ask."
+                }
+                aria-label={
+                  permission === "ask"
+                    ? "Approval mode: ask before changes. Switch to full access"
+                    : "Approval mode: full access. Switch to ask"
+                }
+                onClick={() =>
+                  void setPermissionMode(bridge, permission === "ask" ? "full" : "ask")
+                }
+              >
+                <Icon name={permission === "ask" ? "shield" : "shieldCheck"} size="sm" />
+              </button>
               {pending ? (
                 <span
                   className="pending-switch"
@@ -1317,9 +1340,14 @@ function Composer({
             </div>
             <div className="foot-actions">
               {working ? (
-                <button className="btn-stop" type="button" onClick={() => void cancel(bridge)}>
+                <button
+                  className="btn-stop"
+                  type="button"
+                  title="Stop"
+                  aria-label="Stop the running turn"
+                  onClick={() => void cancel(bridge)}
+                >
                   <Icon name="stop" size="sm" />
-                  Stop
                 </button>
               ) : null}
               <button
@@ -1328,9 +1356,9 @@ function Composer({
                 disabled={!typed || locked}
                 onClick={() => void submit()}
                 aria-label={working ? "Queue this message for the next turn" : "Send message"}
+                title={working && typed ? "Queue for the next turn" : "Send"}
               >
                 <Icon name={working && typed ? "arrowRight" : "send"} size="sm" />
-                {working && typed ? "Queue" : "Send"}
               </button>
             </div>
           </div>

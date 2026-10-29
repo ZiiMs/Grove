@@ -1,4 +1,4 @@
-use crate::providers::ThinkingLevel;
+use crate::providers::{PermissionMode, ThinkingLevel};
 use crate::sessions::event::{SessionEvent, SessionState, TitleSource};
 use serde::{Deserialize, Serialize};
 
@@ -104,6 +104,9 @@ pub struct SessionDetail {
     pub session: Session,
     /// The reasoning level the runtime will use on the next turn.
     pub thinking_level: ThinkingLevel,
+    /// Whether mutating tools ask before they run.
+    #[serde(default)]
+    pub permission_mode: PermissionMode,
     pub events: Vec<SessionEvent>,
 }
 

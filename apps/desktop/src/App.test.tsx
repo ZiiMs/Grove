@@ -350,6 +350,24 @@ describe("redesigned shell", () => {
     await waitFor(() => expect(trigger).toHaveTextContent("High"));
   });
 
+  it("toggles approval mode from the composer and keeps send icon-only", async () => {
+    const bridge = await ready();
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Approval mode: ask before changes. Switch to full access",
+      }),
+    );
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_set_permission_mode"));
+    expect(
+      screen.getByRole("button", { name: "Approval mode: full access. Switch to ask" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("full access")).toBeInTheDocument();
+
+    const send = screen.getByTitle("Send");
+    expect(send.textContent?.trim()).toBe("");
+  });
+
   it("uses the selected model's own thinking tiers", async () => {
     const mocked = { ...session, provider: "mock", model: "mock-1" };
     const mockedDetail: SessionDetail = {

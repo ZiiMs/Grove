@@ -16,8 +16,8 @@ use crate::providers::agent::registry as provider_registry;
 use crate::providers::credentials::Credentials;
 use crate::providers::wire::{Message, MsgBlock, MsgRole};
 use crate::providers::{
-    AgentProvider, AgentSession, CompletionRequest, Detection, ProviderDeps, ProviderError,
-    ProviderSpec, StartContext, ThinkingLevel, UserInput,
+    AgentProvider, AgentSession, CompletionRequest, Detection, PermissionMode, ProviderDeps,
+    ProviderError, ProviderSpec, StartContext, ThinkingLevel, UserInput,
 };
 use crate::secrets::MemorySecretStore;
 use crate::sessions::context::{render_documents, ContextAssembly, ContextSource};
@@ -512,6 +512,30 @@ impl SessionManager {
             let mut handle = live.commands.lock().await;
             handle.set_thinking(level).await?;
         }
+        self.get(id)
+    }
+
+    /// Change whether mutating tools ask before they run. The mode is persisted in the session
+    /// config, so a stopped session picks it up on resume; a live session applies it from its next
+    /// tool call, without cancelling a parked request or a running turn.
+    pub async fn set_permission_mode(
+        &self,
+        id: &str,
+        mode: PermissionMode,
+    ) -> Result<SessionDetail, SessionError> {
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        if let Ok(live) = self.live_session(id).await {
+            let mut handle = live.commands.lock().await;
+            handle.set_permission_mode(mode).await?;
+        }
+        let mut config = self.store.adapter_config(id)?;
+        if !config.is_object() {
+            config = serde_json::json!({});
+        }
+        config["permissionMode"] = serde_json::json!(mode.as_str());
+        self.store.set_adapter_config(id, &config)?;
         self.get(id)
     }
 
@@ -1233,6 +1257,8 @@ mod tests {
         models: Arc<StdMutex<Vec<String>>>,
         /// The thinking levels the manager assigned to the live handle, in order.
         thinking: Arc<StdMutex<Vec<ThinkingLevel>>>,
+        /// The approval modes the manager assigned to the live handle, in order.
+        permission_modes: Arc<StdMutex<Vec<PermissionMode>>>,
         /// The outbound event channel of every started session, oldest first, so a test can park a
         /// permission or a question the way a real agent does mid-turn.
         events: Arc<StdMutex<Vec<mpsc::Sender<SessionEvent>>>>,
@@ -1276,6 +1302,7 @@ mod tests {
                 permissions: Arc::new(StdMutex::new(Vec::new())),
                 models: Arc::new(StdMutex::new(Vec::new())),
                 thinking: Arc::new(StdMutex::new(Vec::new())),
+                permission_modes: Arc::new(StdMutex::new(Vec::new())),
                 events: Arc::new(StdMutex::new(Vec::new())),
                 completions: Arc::new(StdMutex::new(Vec::new())),
                 completion: Arc::new(StdMutex::new(StubCompletion::default())),
@@ -1402,6 +1429,7 @@ mod tests {
                 permissions: Arc::clone(&self.permissions),
                 models: Arc::clone(&self.models),
                 thinking: Arc::clone(&self.thinking),
+                permission_modes: Arc::clone(&self.permission_modes),
                 history,
                 hold: self.hold,
                 gate: Arc::clone(&self.gate),
@@ -1417,6 +1445,7 @@ mod tests {
         permissions: Arc<StdMutex<Vec<(String, Decision)>>>,
         models: Arc<StdMutex<Vec<String>>>,
         thinking: Arc<StdMutex<Vec<ThinkingLevel>>>,
+        permission_modes: Arc<StdMutex<Vec<PermissionMode>>>,
         /// The conversation the way the real agent keeps it: one user message per send and one
         /// assistant reply (or a dangling tool call, for the trim test).
         history: Vec<Message>,
@@ -1499,6 +1528,14 @@ mod tests {
 
         async fn set_model(&mut self, model: String) -> Result<(), ProviderError> {
             lock(&self.models).push(model);
+            Ok(())
+        }
+
+        async fn set_permission_mode(
+            &mut self,
+            mode: crate::providers::PermissionMode,
+        ) -> Result<(), ProviderError> {
+            lock(&self.permission_modes).push(mode);
             Ok(())
         }
 
@@ -2238,6 +2275,46 @@ mod tests {
             manager.get(&session).unwrap().thinking_level,
             ThinkingLevel::Low
         );
+    }
+
+    #[tokio::test]
+    async fn permission_mode_applies_live_and_survives_a_stop() {
+        let stub = StubProvider::new();
+        let modes = Arc::clone(&stub.permission_modes);
+        let manager = manager_from(vec![stub]);
+        let session = create(&manager).await;
+
+        let live = manager
+            .set_permission_mode(&session, PermissionMode::Full)
+            .await
+            .unwrap();
+        assert_eq!(live.permission_mode, PermissionMode::Full);
+        assert_eq!(*lock(&modes), vec![PermissionMode::Full]);
+
+        manager.close(&session).await.unwrap();
+        let stopped = manager
+            .set_permission_mode(&session, PermissionMode::Ask)
+            .await
+            .unwrap();
+        assert_eq!(stopped.permission_mode, PermissionMode::Ask);
+        assert_eq!(
+            manager.get(&session).unwrap().permission_mode,
+            PermissionMode::Ask
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_session_reads_its_permission_mode_from_the_config() {
+        let manager = manager();
+        let detail = manager
+            .create(CreateSessionRequest {
+                provider: "stub".into(),
+                config: Some(serde_json::json!({ "permissionMode": "full" })),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(detail.permission_mode, PermissionMode::Full);
     }
 
     #[tokio::test]

@@ -26,8 +26,8 @@ use super::wire::{
 };
 use super::{
     anthropic, catalog, google, openai, tools, AgentProvider, AgentSession, Capabilities,
-    CompletionRequest, ContextDoc, Detection, ProviderDeps, ProviderError, ProviderSpec,
-    StartContext, ThinkingLevel, UserInput, Wire,
+    CompletionRequest, ContextDoc, Detection, PermissionMode, ProviderDeps, ProviderError,
+    ProviderSpec, StartContext, ThinkingLevel, UserInput, Wire,
 };
 use crate::sessions::event::{
     Block, Decision, EventKind, Question, QuestionAnswer, Role, SessionEvent, SessionState,
@@ -133,6 +133,12 @@ impl AgentProvider for WireProvider {
             .and_then(Value::as_str)
             .map(ThinkingLevel::parse)
             .unwrap_or_default();
+        let permission = ctx
+            .config
+            .get("permissionMode")
+            .and_then(Value::as_str)
+            .map(PermissionMode::parse)
+            .unwrap_or_default();
         let system = system_prompt(&ctx);
         // A live conversation handed over by another provider is already normalized: seed it as-is.
         // Otherwise a resumed session replays its transcript tail as one opening message.
@@ -161,6 +167,7 @@ impl AgentProvider for WireProvider {
             ctx.session_id,
         );
         *session.thinking.lock().await = thinking;
+        *session.permission.lock().await = permission;
         Ok(Box::new(session))
     }
 }
@@ -209,6 +216,8 @@ pub struct AgentSessionImpl {
     questions: Arc<Mutex<HashMap<String, oneshot::Sender<Vec<QuestionAnswer>>>>>,
     /// Reasoning level applied to the next provider request.
     thinking: Arc<Mutex<ThinkingLevel>>,
+    /// Whether mutating tools ask before they run.
+    permission: Arc<Mutex<PermissionMode>>,
     /// Serializes turns. `send` returns as soon as the turn is queued.
     gate: Arc<Mutex<()>>,
     turn: Option<JoinHandle<()>>,
@@ -249,6 +258,7 @@ impl AgentSessionImpl {
             permits: Arc::new(Mutex::new(HashMap::new())),
             questions: Arc::new(Mutex::new(HashMap::new())),
             thinking: Arc::new(Mutex::new(ThinkingLevel::Off)),
+            permission: Arc::new(Mutex::new(PermissionMode::Ask)),
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps,
@@ -459,7 +469,7 @@ impl AgentSessionImpl {
         });
 
         let mut allowed = true;
-        if tools::needs_approval(name) {
+        if tools::needs_approval(name) && *self.permission.lock().await == PermissionMode::Ask {
             let request_id = format!("perm-{call_id}");
             let (sender, receiver) = oneshot::channel();
             self.permits.lock().await.insert(request_id.clone(), sender);
@@ -580,6 +590,7 @@ impl AgentSessionImpl {
             description
         };
         let thinking = *self.thinking.lock().await;
+        let permission = *self.permission.lock().await;
         let system = format!(
             "{}\n\n## Worker subagent\n\
              You are a worker subagent. Work only on the task in the next message. You have the \
@@ -588,7 +599,7 @@ impl AgentSessionImpl {
              report: what you found or changed, where, and what you verified.\n",
             self.system
         );
-        let (worker, events) = self.worker_session(system, thinking);
+        let (worker, events) = self.worker_session(system, thinking, permission);
         worker.history.lock().await.push(Message::user(prompt));
         match self.drive_worker(&worker, events, call_id).await {
             Ok(report) => {
@@ -606,6 +617,7 @@ impl AgentSessionImpl {
         &self,
         system: String,
         thinking: ThinkingLevel,
+        permission: PermissionMode,
     ) -> (Self, mpsc::Receiver<SessionEvent>) {
         let (tx, rx) = mpsc::channel(EVENT_BUFFER);
         let session = Self {
@@ -625,6 +637,7 @@ impl AgentSessionImpl {
             permits: Arc::new(Mutex::new(HashMap::new())),
             questions: Arc::new(Mutex::new(HashMap::new())),
             thinking: Arc::new(Mutex::new(thinking)),
+            permission: Arc::new(Mutex::new(permission)),
             gate: Arc::new(Mutex::new(())),
             turn: None,
             max_steps: self.max_steps,
@@ -870,6 +883,7 @@ impl AgentSession for AgentSessionImpl {
         let permits = Arc::clone(&self.permits);
         let questions = Arc::clone(&self.questions);
         let thinking = Arc::clone(&self.thinking);
+        let permission = Arc::clone(&self.permission);
         let gate = Arc::clone(&self.gate);
         let max_steps = self.max_steps;
         let tool_seq = Arc::clone(&self.tool_seq);
@@ -889,6 +903,7 @@ impl AgentSession for AgentSessionImpl {
                 permits,
                 questions,
                 thinking,
+                permission,
                 gate,
                 turn: None,
                 max_steps,
@@ -935,6 +950,11 @@ impl AgentSession for AgentSessionImpl {
 
     async fn set_thinking(&mut self, level: ThinkingLevel) -> Result<(), ProviderError> {
         *self.thinking.lock().await = level;
+        Ok(())
+    }
+
+    async fn set_permission_mode(&mut self, mode: PermissionMode) -> Result<(), ProviderError> {
+        *self.permission.lock().await = mode;
         Ok(())
     }
 
@@ -1741,6 +1761,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn full_access_runs_a_mutating_tool_without_asking() {
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn sse(body: &str) -> ResponseTemplate {
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body)
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("WRITE-MARKER"))
+            .respond_with(sse(
+                r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-write","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"out.txt\",\"content\":\"hi\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#,
+            ))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains("wrote out.txt"))
+            .respond_with(sse(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            ))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut spec = catalog::find("openai").unwrap();
+        spec.base_url = server.uri();
+        let mut session = AgentSessionImpl::new(
+            spec,
+            reqwest::Client::new(),
+            "key".into(),
+            dir.path().to_path_buf(),
+            "gpt-5".into(),
+            "system".into(),
+            Vec::new(),
+            MAX_STEPS,
+            "session-full".into(),
+        );
+        session
+            .set_permission_mode(PermissionMode::Full)
+            .await
+            .unwrap();
+        let mut events = session.take_events();
+        session
+            .send(UserInput::text("WRITE-MARKER: write out.txt"))
+            .await
+            .unwrap();
+
+        let mut asked = false;
+        loop {
+            let event = events.recv().await.expect("an event");
+            match &event.kind {
+                EventKind::PermissionRequest { .. } => asked = true,
+                EventKind::Status {
+                    state: SessionState::Idle,
+                } => break,
+                _ => {}
+            }
+        }
+        assert!(!asked, "full access must not open a permission card");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "hi"
+        );
+    }
+
+    #[tokio::test]
     async fn a_subagent_runs_with_the_parents_approval_and_returns_its_report() {
         use wiremock::matchers::{body_string_contains, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -1916,7 +2013,8 @@ data: [DONE]
             "session-parent".into(),
         );
         let mut events = parent.take_events();
-        let (worker, _worker_events) = parent.worker_session("system".into(), ThinkingLevel::Off);
+        let (worker, _worker_events) =
+            parent.worker_session("system".into(), ThinkingLevel::Off, PermissionMode::Ask);
         // Park the worker's side of the question so the relay has somewhere to land.
         let (sender, receiver) = oneshot::channel();
         worker

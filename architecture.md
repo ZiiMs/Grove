@@ -103,7 +103,7 @@ pub struct StartContext {
     pub prompt: Option<String>,   // replayed transcript tail (resume fallback)
     pub history: Vec<wire::Message>, // full conversation, when a live session is handed over
     pub resume_token: Option<String>,
-    pub config: serde_json::Value, // `maxSteps`, `thinkingLevel`
+    pub config: serde_json::Value, // `maxSteps`, `thinkingLevel`, `permissionMode`
     pub context_files: Vec<ContextDoc>, // pinned specs + plan, as markdown
 }
 
@@ -157,7 +157,12 @@ Provider rules that keep them isolated:
 - **Thinking is a session preference, not a prompt trick.** `ThinkingLevel` lives in
   `sessions.adapter_config` as `thinkingLevel` and is surfaced as `SessionDetail.thinkingLevel`.
   `session_set_thinking` updates the live agent's next turn and persists the config for a stopped
-  session. The selectable values are per-model, not global: `providers::model_catalog` reads the
+  session.
+- **Approval mode is the same kind of preference.** `PermissionMode` lives in `adapter_config` as
+  `permissionMode` and is surfaced as `SessionDetail.permissionMode`. `ask` opens a permission card
+  before `write_file`, `edit_file` or `run_command`; `full` runs them without asking, while `ask_user`
+  questions still reach the user. `session_set_permission_mode` applies to a live agent from its next
+  tool call and persists for a stopped one. The selectable values are per-model, not global: `providers::model_catalog` reads the
   public models.dev catalogue's provider-specific `reasoning_options` into a one-hour file cache and
   `provider_thinking` hands the result to the webview. A model can therefore expose `off`/`none`,
   `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or the static fallback when metadata is absent.

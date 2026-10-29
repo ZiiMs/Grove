@@ -444,6 +444,7 @@ export function createFakeBridge(
             title?: string | null;
             projectId?: string | null;
             worktreePath?: string | null;
+            config?: unknown;
           };
         };
         const at = "2025-01-01T00:00:00.000Z";
@@ -461,7 +462,13 @@ export function createFakeBridge(
           createdAt: at,
           updatedAt: at,
         });
-        const detail: SessionDetail = { ...session, events: [] };
+        const detail: SessionDetail = {
+          ...session,
+          permissionMode:
+            (req.config as { permissionMode?: SessionDetail["permissionMode"] } | undefined)
+              ?.permissionMode ?? "ask",
+          events: [],
+        };
         details[session.id] = detail;
         sessions.unshift({ ...session, eventCount: 0, subagents: [] });
         return detail as CommandMap[K]["result"];
@@ -539,6 +546,13 @@ export function createFakeBridge(
         const detail = details[id];
         if (!detail) throw new Error(`FakeBridge has no session: ${id}`);
         detail.thinkingLevel = level;
+        return detail as CommandMap[K]["result"];
+      }
+      if (command === "session_set_permission_mode") {
+        const { id, mode } = args as { id: string; mode: SessionDetail["permissionMode"] };
+        const detail = details[id];
+        if (!detail) throw new Error(`FakeBridge has no session: ${id}`);
+        detail.permissionMode = mode;
         return detail as CommandMap[K]["result"];
       }
       if (command === "session_rename") {

@@ -1,6 +1,7 @@
 import type {
   CreateSessionRequest,
   Decision,
+  PermissionMode,
   ProviderSpec,
   QuestionAnswer,
   Session,
@@ -38,6 +39,10 @@ export interface SessionsCommands {
   };
   /** Change the reasoning level for the next turn; returns the refreshed session detail. */
   session_set_thinking: { args: { id: string; level: ThinkingLevel }; result: SessionDetail };
+  session_set_permission_mode: {
+    args: { id: string; mode: PermissionMode };
+    result: SessionDetail;
+  };
   /** Name a session with the global title model; `force` is the explicit menu action, not the auto trigger. */
   session_generate_title: { args: { id: string; force: boolean }; result: Session };
   /** Rename a session; the trimmed title is validated in the core and comes back on the updated row. */

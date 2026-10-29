@@ -166,15 +166,21 @@ impl Store {
         let Some(session) = self.session(id)? else {
             return Ok(None);
         };
-        let thinking_level = self
-            .adapter_config(id)?
+        let config = self.adapter_config(id)?;
+        let thinking_level = config
             .get("thinkingLevel")
             .and_then(serde_json::Value::as_str)
             .map(crate::providers::ThinkingLevel::parse)
             .unwrap_or_default();
+        let permission_mode = config
+            .get("permissionMode")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::providers::PermissionMode::parse)
+            .unwrap_or_default();
         Ok(Some(SessionDetail {
             session,
             thinking_level,
+            permission_mode,
             events: self.session_events(id)?,
         }))
     }

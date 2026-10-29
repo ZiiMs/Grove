@@ -121,6 +121,32 @@ impl ThinkingLevel {
     }
 }
 
+/// Whether a mutating tool asks before it runs. `ask` is the default; `full` lets every tool run
+/// without a permission card, while `ask_user` questions still reach the user.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    #[default]
+    Ask,
+    Full,
+}
+
+impl PermissionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PermissionMode::Ask => "ask",
+            PermissionMode::Full => "full",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "full" => PermissionMode::Full,
+            _ => PermissionMode::Ask,
+        }
+    }
+}
+
 /// What a provider's models can actually do. Capability honesty: a flag is `true` only when the
 /// agent runtime really emits that event kind for this provider, and the UI degrades from here
 /// rather than from a model name.
@@ -378,6 +404,13 @@ pub trait AgentSession: Send {
     async fn set_model(&mut self, _model: String) -> Result<(), ProviderError> {
         Err(ProviderError::Unsupported(
             "this provider cannot change models mid-session".into(),
+        ))
+    }
+    /// Change whether mutating tools ask before they run. Applies to the next tool call; a parked
+    /// request keeps waiting for an answer.
+    async fn set_permission_mode(&mut self, _mode: PermissionMode) -> Result<(), ProviderError> {
+        Err(ProviderError::Unsupported(
+            "this provider cannot change approval mode mid-session".into(),
         ))
     }
     /// The conversation as neutral messages, so a live session can be handed to another provider

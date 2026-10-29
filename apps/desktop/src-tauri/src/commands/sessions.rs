@@ -4,6 +4,7 @@
 use crate::commands::app::adopt;
 use crate::state::AppState;
 use grove_core::ipc::{CreateSessionRequest, IpcResult, Session, SessionDetail, SessionSummary};
+use grove_core::providers::PermissionMode;
 use grove_core::providers::ProviderSpec;
 use grove_core::providers::ThinkingLevel;
 use grove_core::sessions::context::SessionContext;
@@ -95,6 +96,17 @@ pub async fn session_set_thinking(
     level: ThinkingLevel,
 ) -> IpcResult<SessionDetail> {
     Ok(state.core.sessions.set_thinking(&id, level).await?)
+}
+
+/// Change whether mutating tools ask before they run. A live agent applies it from the next tool
+/// call; the stored config keeps it across resumes.
+#[tauri::command]
+pub async fn session_set_permission_mode(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    mode: PermissionMode,
+) -> IpcResult<SessionDetail> {
+    Ok(state.core.sessions.set_permission_mode(&id, mode).await?)
 }
 
 /// Rename a session. The trimmed, validated title is persisted and the updated row comes back so the

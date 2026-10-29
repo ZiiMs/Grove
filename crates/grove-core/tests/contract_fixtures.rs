@@ -572,6 +572,7 @@ fn session_detail_matches_fixture() {
     let sample = SessionDetail {
         session: sample_session(),
         thinking_level: ThinkingLevel::High,
+        permission_mode: grove_core::providers::PermissionMode::Ask,
         events: vec![events[0].clone(), events[3].clone()],
     };
     assert_eq!(

@@ -38,6 +38,7 @@
   "projectId": null,
   "status": "idle",
   "thinkingLevel": "high",
+  "permissionMode": "ask",
   "title": "Refactor the store",
   "titleSource": "manual",
   "updatedAt": "2025-01-01T00:00:05.000Z"

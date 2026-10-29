@@ -443,16 +443,16 @@ html{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--fg-3) 40%, tr
 .field .combo-list{max-height:240px}
 .combo-dialog .combo-list{max-height:160px}
 .btn-send{
-  display:inline-flex;align-items:center;gap:6px;
+  display:inline-flex;align-items:center;justify-content:center;
   background:var(--jade);color:var(--jade-ink);font-weight:600;font-size:12.5px;
-  padding:6px 12px;border-radius:var(--r);
+  width:30px;height:30px;padding:0;border-radius:var(--r);
 }
 .btn-send:hover{background:var(--jade-hi)}
 .foot-actions{margin-left:auto;display:flex;align-items:center;gap:6px}
 .btn-stop{
-  display:inline-flex;align-items:center;gap:6px;
+  display:inline-flex;align-items:center;justify-content:center;
   border:1px solid color-mix(in srgb, var(--t-bad) 46%, var(--line));background:var(--red-soft);color:var(--red);
-  font-weight:600;font-size:12.5px;padding:6px 12px;border-radius:var(--r);
+  font-weight:600;font-size:12.5px;width:30px;height:30px;padding:0;border-radius:var(--r);
   transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease);
 }
 .btn-stop:hover{background:color-mix(in srgb, var(--t-bad) 18%, transparent);border-color:color-mix(in srgb, var(--t-bad) 62%, var(--line))}
@@ -1191,6 +1191,13 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .inline-picker .combo-trigger:hover{background:var(--hover);color:var(--fg)}
 .inline-picker .combo-trigger[aria-expanded="true"]{background:var(--hover);color:var(--fg);box-shadow:none}
 .inline-picker + .inline-picker::before{content:"·";color:var(--fg-3);margin:0 2px}
+.approval-picker{
+  background:transparent;border:0;padding:4px 6px;border-radius:var(--r-sm);
+  color:var(--fg-3);cursor:pointer;
+}
+.approval-picker:hover{background:var(--hover);color:var(--fg)}
+.approval-picker[data-mode="full"]{color:var(--jade)}
+.approval-picker:focus-visible{outline:2px solid var(--jade);outline-offset:1px}
 .inline-picker .combo-pop{width:min(340px,calc(100vw - 32px));min-width:0}
 .inline-picker.thinking-picker .combo-pop{width:190px}
 .combo-trigger-icon,.combo-option-icon{display:flex;flex:none;align-items:center;justify-content:center}
