@@ -14,6 +14,7 @@ use crate::ipc::{
 use crate::paths::{display_path, AppPaths};
 use crate::providers::agent::registry as provider_registry;
 use crate::providers::credentials::Credentials;
+use crate::providers::wire::{Message, MsgBlock, MsgRole};
 use crate::providers::{
     AgentProvider, AgentSession, Detection, ProviderDeps, ProviderError, ProviderSpec,
     StartContext, ThinkingLevel, UserInput,
@@ -50,6 +51,8 @@ pub enum SessionError {
     NotFound(String),
     #[error("session is not running: {0} (resume it first)")]
     NotRunning(String),
+    #[error("session is busy: {0}")]
+    Conflict(String),
     #[error("invalid request: {0}")]
     Invalid(String),
     #[error(transparent)]
@@ -69,6 +72,7 @@ impl From<SessionError> for IpcError {
             SessionError::UnknownProvider(_) | SessionError::Invalid(_) => {
                 IpcError::invalid(message)
             }
+            SessionError::Conflict(_) => IpcError::conflict(message),
             SessionError::NotRunning(_) => IpcError::unavailable(message),
             SessionError::Provider(ProviderError::Unavailable(_)) => IpcError::unavailable(message),
             SessionError::Provider(ProviderError::Unsupported(_)) => IpcError::unavailable(message),
@@ -586,11 +590,15 @@ impl SessionManager {
 
     /// Re-launch the same conversation on another provider or model.
     ///
-    /// The transcript is the record and stays untouched: the new provider gets the same context
-    /// documents plus a summary of the conversation so far. A provider switch adds a visible system
-    /// note; a same-provider model change is just the composer's picker and does not add a context
-    /// note. The resume token belongs to the old provider (and model), so it is dropped rather than
-    /// handed over.
+    /// A **live, idle** session hands its whole normalized conversation to the new agent, so the
+    /// provider change is lossless: the transcript is the record and stays untouched, and the new
+    /// agent's first request carries the same messages. A stopped session has no in-process history
+    /// left, so it falls back to replaying a transcript summary. A switch while a turn is running or
+    /// a permission/question is parked is refused with a conflict: the shell queues it and retries
+    /// when the session is idle, because stopping to relaunch would cancel the turn or discard the
+    /// pending request. A real provider change adds a visible system note; a same-provider model
+    /// change is just the composer's picker and does not add a context note. The resume token belongs
+    /// to the old provider (and model), so it is dropped rather than handed over.
     pub async fn switch_provider(
         &self,
         id: &str,
@@ -614,6 +622,21 @@ impl SessionManager {
         }
         let provider_id = provider.to_string();
         let provider = self.provider(&provider_id)?;
+        // Capture the conversation before the stop, and only when it is safe to stop. The row is the
+        // pump's view of the agent, so a busy turn or a parked request is visible here without
+        // touching the command mutex (which a running send holds).
+        let handoff = match self.live.lock().await.get(id).cloned() {
+            Some(live) => {
+                if session.awaiting || session.status == SessionState::Busy {
+                    return Err(SessionError::Conflict(format!(
+                        "session {id} is running; switch it when the turn finishes"
+                    )));
+                }
+                let mut handle = live.commands.lock().await;
+                trim_to_complete_assistant(handle.history().await)
+            }
+            None => Vec::new(),
+        };
         let previous = session.provider.clone();
         let config = self.store.adapter_config(id)?;
         let events = self.store.session_events(id)?;
@@ -644,11 +667,11 @@ impl SessionManager {
             cwd: PathBuf::from(&session.cwd),
             model: session.model.clone(),
             session_id: session.id.clone(),
-            prompt: (!summary.is_empty()).then_some(summary),
+            prompt: (handoff.is_empty() && !summary.is_empty()).then_some(summary),
             resume_token: None,
             config,
             context_files: assembly.docs,
-            history: Vec::new(),
+            history: handoff,
         };
         // A provider that refuses to start leaves the row on the new provider and the session stopped:
         // the conversation is intact and can be resumed (or switched again).
@@ -893,15 +916,40 @@ fn non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Cut a conversation at its last complete assistant message before handing it to another provider.
+///
+/// A message that asks for a tool is not complete: the tool results and the reply they produce are
+/// the rest of that turn. A cancelled or failed turn can leave such a dangling call (or its orphaned
+/// user message) at the end of the history; no other provider can be given the second half of a turn
+/// it never ran, so the handoff stops at the last reply that finished.
+fn trim_to_complete_assistant(history: Vec<Message>) -> Vec<Message> {
+    let end = history.iter().rposition(|message| {
+        message.role == MsgRole::Assistant
+            && !message
+                .blocks
+                .iter()
+                .any(|block| matches!(block, MsgBlock::ToolUse { .. }))
+    });
+    match end {
+        Some(index) => history.into_iter().take(index + 1).collect(),
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::ErrorCode;
     use crate::providers::catalog;
+    use crate::providers::wire::{Message, MsgBlock};
     use crate::providers::{AuthMethod, Capabilities, Detection, ProviderSpec};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
     use std::time::Duration;
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, Notify};
+
+    /// The `StartContext`s one stub provider received, so a test reads what it was launched with.
+    type Starts = Arc<StdMutex<Vec<StartContext>>>;
 
     /// A provider that records what the manager does to it, without touching the network.
     struct StubProvider {
@@ -919,6 +967,10 @@ mod tests {
         events: Arc<StdMutex<Vec<mpsc::Sender<SessionEvent>>>>,
         /// Whether a credential counts as configured (drives `detect`).
         ready: bool,
+        /// Park a turn after it reports busy until the test releases `gate`, so a mid-turn switch
+        /// is deterministic instead of racing a sleep.
+        hold: bool,
+        gate: Arc<Notify>,
     }
 
     impl StubProvider {
@@ -936,11 +988,26 @@ mod tests {
                 thinking: Arc::new(StdMutex::new(Vec::new())),
                 events: Arc::new(StdMutex::new(Vec::new())),
                 ready: true,
+                hold: false,
+                gate: Arc::new(Notify::new()),
             }
+        }
+
+        /// A second registered provider, so a cross-provider switch has somewhere to go.
+        fn named(id: &str) -> Self {
+            let mut stub = Self::new();
+            stub.spec.id = id.into();
+            stub.spec.name = id.into();
+            stub
         }
 
         fn with_ready(mut self, ready: bool) -> Self {
             self.ready = ready;
+            self
+        }
+
+        fn holding_turns(mut self) -> Self {
+            self.hold = true;
             self
         }
     }
@@ -982,29 +1049,38 @@ mod tests {
             ctx: StartContext,
             _deps: ProviderDeps,
         ) -> Result<Box<dyn AgentSession>, ProviderError> {
+            let history = ctx.history.clone();
             lock(&self.contexts).push(ctx);
             let (keepalive, events) = mpsc::channel(4);
             lock(&self.events).push(keepalive.clone());
             Ok(Box::new(StubSession {
                 events: Some(events),
-                _keepalive: keepalive,
+                events_out: keepalive,
                 active: Arc::clone(&self.active),
                 peak: Arc::clone(&self.peak),
                 permissions: Arc::clone(&self.permissions),
                 models: Arc::clone(&self.models),
                 thinking: Arc::clone(&self.thinking),
+                history,
+                hold: self.hold,
+                gate: Arc::clone(&self.gate),
             }))
         }
     }
 
     struct StubSession {
         events: Option<mpsc::Receiver<SessionEvent>>,
-        _keepalive: mpsc::Sender<SessionEvent>,
+        events_out: mpsc::Sender<SessionEvent>,
         active: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
         permissions: Arc<StdMutex<Vec<(String, Decision)>>>,
         models: Arc<StdMutex<Vec<String>>>,
         thinking: Arc<StdMutex<Vec<ThinkingLevel>>>,
+        /// The conversation the way the real agent keeps it: one user message per send and one
+        /// assistant reply (or a dangling tool call, for the trim test).
+        history: Vec<Message>,
+        hold: bool,
+        gate: Arc<Notify>,
     }
 
     #[async_trait::async_trait]
@@ -1013,12 +1089,46 @@ mod tests {
             self.events.take().expect("called once")
         }
 
-        async fn send(&mut self, _input: UserInput) -> Result<(), ProviderError> {
+        async fn send(&mut self, input: UserInput) -> Result<(), ProviderError> {
             let in_flight = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(in_flight, Ordering::SeqCst);
+            if self.hold {
+                self.events_out
+                    .send(SessionEvent::new(EventKind::Status {
+                        state: SessionState::Busy,
+                    }))
+                    .await
+                    .expect("the pump still listens");
+                self.gate.notified().await;
+            }
             tokio::time::sleep(Duration::from_millis(25)).await;
             self.active.fetch_sub(1, Ordering::SeqCst);
+            self.history.push(Message::user(input.text.clone()));
+            if input.text == "unfinished" {
+                self.history
+                    .push(Message::assistant(vec![MsgBlock::ToolUse {
+                        id: "call-1".into(),
+                        name: "run_command".into(),
+                        input: serde_json::json!({ "command": "sleep 60" }),
+                    }]));
+            } else {
+                self.history.push(Message::assistant(vec![MsgBlock::Text {
+                    text: format!("ack: {}", input.text),
+                }]));
+            }
+            if self.hold {
+                self.events_out
+                    .send(SessionEvent::new(EventKind::Status {
+                        state: SessionState::Idle,
+                    }))
+                    .await
+                    .expect("the pump still listens");
+            }
             Ok(())
+        }
+
+        async fn history(&mut self) -> Vec<Message> {
+            self.history.clone()
         }
 
         async fn respond_permission(
@@ -1064,20 +1174,23 @@ mod tests {
         }
     }
 
-    fn manager_with(stub: StubProvider) -> (SessionManager, Arc<StdMutex<Vec<StartContext>>>) {
-        let contexts = Arc::clone(&stub.contexts);
+    fn manager_from(stubs: Vec<StubProvider>) -> SessionManager {
         let paths = AppPaths::new(std::env::temp_dir().join("grove-manager-tests"));
         let deps = ProviderDeps {
             paths,
             http: reqwest::Client::new(),
             secrets: Arc::new(MemorySecretStore::new()),
         };
-        let manager = SessionManager::new(
-            Arc::new(Store::open_in_memory().unwrap()),
-            deps,
-            vec![Arc::new(stub) as Arc<dyn AgentProvider>],
-        );
-        (manager, contexts)
+        let providers: Vec<Arc<dyn AgentProvider>> = stubs
+            .into_iter()
+            .map(|stub| Arc::new(stub) as Arc<dyn AgentProvider>)
+            .collect();
+        SessionManager::new(Arc::new(Store::open_in_memory().unwrap()), deps, providers)
+    }
+
+    fn manager_with(stub: StubProvider) -> (SessionManager, Starts) {
+        let contexts = Arc::clone(&stub.contexts);
+        (manager_from(vec![stub]), contexts)
     }
 
     fn manager() -> SessionManager {
@@ -1094,6 +1207,28 @@ mod tests {
             .expect("session is created")
             .session
             .id
+    }
+
+    async fn create_on(manager: &SessionManager, provider: &str) -> String {
+        manager
+            .create(CreateSessionRequest {
+                provider: provider.into(),
+                ..Default::default()
+            })
+            .await
+            .expect("session is created")
+            .session
+            .id
+    }
+
+    /// Two registered providers and the `StartContext` each received, so a cross-provider handoff can
+    /// be checked from what the new provider was actually launched with.
+    fn manager_two() -> (SessionManager, Starts, Starts) {
+        let from = StubProvider::named("stub-a");
+        let to = StubProvider::named("stub-b");
+        let from_starts = Arc::clone(&from.contexts);
+        let to_starts = Arc::clone(&to.contexts);
+        (manager_from(vec![from, to]), from_starts, to_starts)
     }
 
     fn latest_sink(
@@ -1120,6 +1255,24 @@ mod tests {
             assert!(
                 tokio::time::Instant::now() < deadline,
                 "the parked request never reached the row"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Wait for a status the pump publishes on its own schedule (busy when a turn starts, idle when it
+    /// ends), so a test observes the transition instead of sleeping past it.
+    async fn wait_until_status(manager: &SessionManager, session: &str, state: SessionState) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let current = manager.get(session).expect("the session exists").session;
+            if current.status == state {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the session never reached {state:?}; it stayed {:?}",
+                current.status
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -1164,13 +1317,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn switching_provider_with_a_pending_permission_clears_awaiting() {
-        // The tree and titlebar read `awaiting` from the row. A switch stops the old agent before it
-        // relaunches; if that stop only aborts the pump, the parked permission is never resolved and
-        // the "needs you" badge sticks forever.
+    async fn switching_provider_with_a_parked_permission_is_refused_and_keeps_the_request() {
+        // The tree and titlebar read `awaiting` from the row. A switch has to wait for that answer:
+        // stopping the agent to relaunch it would discard the parked request and strand the badge.
         let stub = StubProvider::new();
         let events = Arc::clone(&stub.events);
-        let (manager, _contexts) = manager_with(stub);
+        let (manager, contexts) = manager_with(stub);
         let session = create(&manager).await;
 
         latest_sink(&events)
@@ -1183,26 +1335,41 @@ mod tests {
             .expect("the stub accepts the request");
         wait_until_awaiting(&manager, &session).await;
         let mut bus = manager.subscribe();
+        let before = manager.get(&session).unwrap().session;
 
-        manager
+        let error = manager
             .switch_provider(&session, "stub", Some("claude-opus-4-1".into()))
             .await
-            .expect("a switch during a parked permission is allowed");
+            .expect_err("a switch while the agent waits for the user is refused");
+        assert!(matches!(&error, SessionError::Conflict(_)), "{error}");
+        assert_eq!(IpcError::from(error).code, ErrorCode::Conflict);
 
-        await_is_clear(&manager, &session);
+        let after = manager.get(&session).unwrap().session;
         assert!(
-            saw_exited(&mut bus),
-            "the stop must publish the exited status the tree clears on"
+            after.awaiting,
+            "the permission is still the user's to answer"
         );
+        assert_eq!(after.provider, before.provider);
+        assert_eq!(after.model, before.model);
+        assert_eq!(lock(&contexts).len(), 1, "nothing was relaunched");
+        assert!(
+            !saw_exited(&mut bus),
+            "a refused switch must not stop the agent"
+        );
+        // The live agent is intact: the answer still reaches it.
+        manager
+            .respond_permission(&session, "req-1", Decision::Approve)
+            .await
+            .expect("the request is still parked on the live agent");
     }
 
     #[tokio::test]
-    async fn switching_provider_with_a_pending_question_clears_awaiting() {
-        // `ask_user` parks a turn the same way a permission does; the stop path has to clear the flag
-        // for both, or switching a session mid-question leaves it in the needs-you list.
+    async fn switching_provider_with_a_parked_question_is_refused_and_keeps_the_request() {
+        // `ask_user` parks a turn the same way a permission does; neither can be thrown away by a
+        // provider relaunch.
         let stub = StubProvider::new();
         let events = Arc::clone(&stub.events);
-        let (manager, _contexts) = manager_with(stub);
+        let (manager, contexts) = manager_with(stub);
         let session = create(&manager).await;
 
         latest_sink(&events)
@@ -1214,12 +1381,69 @@ mod tests {
             .expect("the stub accepts the question");
         wait_until_awaiting(&manager, &session).await;
 
+        let error = manager
+            .switch_provider(&session, "stub", Some("claude-opus-4-1".into()))
+            .await
+            .expect_err("a switch while the agent waits for an answer is refused");
+        assert!(matches!(&error, SessionError::Conflict(_)), "{error}");
+
+        assert!(
+            manager.get(&session).unwrap().session.awaiting,
+            "the question is still the user's to answer"
+        );
+        assert_eq!(lock(&contexts).len(), 1, "nothing was relaunched");
+    }
+
+    #[tokio::test]
+    async fn switching_provider_while_a_turn_is_running_is_refused_until_idle() {
+        let stub = StubProvider::new().holding_turns();
+        let gate = Arc::clone(&stub.gate);
+        let (manager, contexts) = manager_with(stub);
+        let session = create(&manager).await;
+        let mut bus = manager.subscribe();
+
+        let sending = manager.send(&session, "a long turn");
+        let refused = async {
+            wait_until_status(&manager, &session, SessionState::Busy).await;
+            let refused = manager
+                .switch_provider(&session, "stub", Some("claude-opus-4-1".into()))
+                .await;
+            // Let the held turn finish whether or not the switch was refused, so a regression cannot
+            // hang the suite.
+            gate.notify_one();
+            refused
+        };
+        let (sent, refused) = tokio::join!(sending, refused);
+        sent.expect("the running turn is untouched");
+        let error = refused.expect_err("a switch during a running turn is refused");
+        assert!(matches!(&error, SessionError::Conflict(_)), "{error}");
+        assert_eq!(IpcError::from(error).code, ErrorCode::Conflict);
+        assert_eq!(
+            lock(&contexts).len(),
+            1,
+            "the busy session was not stopped or relaunched"
+        );
+        assert!(
+            !saw_exited(&mut bus),
+            "the refused switch must not stop the agent"
+        );
+        assert_eq!(
+            manager.get(&session).unwrap().session.model,
+            None,
+            "a refused switch does not persist the new model"
+        );
+
+        // The shell retries when the turn ends; at idle the switch is accepted.
+        wait_until_status(&manager, &session, SessionState::Idle).await;
         manager
             .switch_provider(&session, "stub", Some("claude-opus-4-1".into()))
             .await
-            .expect("a switch during a parked question is allowed");
-
-        await_is_clear(&manager, &session);
+            .expect("an idle session switches");
+        assert_eq!(lock(&contexts).len(), 2, "the idle retry relaunched");
+        assert_eq!(
+            manager.get(&session).unwrap().session.model.as_deref(),
+            Some("claude-opus-4-1")
+        );
     }
 
     #[tokio::test]
@@ -1725,6 +1949,105 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event.kind, EventKind::ContextRefreshed { .. })),
             "a model change must not add a context-refresh notice: {detail:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_hands_the_live_history_to_the_new_provider_without_a_replay() {
+        let (manager, from_starts, to_starts) = manager_two();
+        let session = create_on(&manager, "stub-a").await;
+        manager.send(&session, "first task").await.unwrap();
+
+        let detail = manager
+            .switch_provider(&session, "stub-b", Some("claude-opus-4-1".into()))
+            .await
+            .expect("an idle live session hands over");
+
+        let starts = lock(&to_starts);
+        assert_eq!(starts.len(), 1, "the new provider starts once");
+        assert_eq!(
+            starts[0].prompt, None,
+            "the full history replaces the transcript replay"
+        );
+        assert_eq!(
+            starts[0].history,
+            vec![
+                Message::user("first task"),
+                Message::assistant(vec![MsgBlock::Text {
+                    text: "ack: first task".into()
+                }]),
+            ]
+        );
+        assert_eq!(
+            lock(&from_starts).len(),
+            1,
+            "the old provider is not restarted"
+        );
+        assert_eq!(detail.session.provider, "stub-b");
+        assert_eq!(detail.session.model.as_deref(), Some("claude-opus-4-1"));
+        assert!(
+            detail.events.iter().any(|event| matches!(
+                &event.kind,
+                EventKind::ContextRefreshed {
+                    reason: ContextReason::ProviderSwitch,
+                    ..
+                }
+            )),
+            "a real provider change keeps its visible note: {:?}",
+            detail.events
+        );
+    }
+
+    #[tokio::test]
+    async fn a_handoff_stops_at_the_last_complete_assistant_message() {
+        let (manager, _from_starts, to_starts) = manager_two();
+        let session = create_on(&manager, "stub-a").await;
+        manager.send(&session, "first task").await.unwrap();
+        // A cancelled or failed turn can leave an assistant tool call whose results never arrived.
+        manager.send(&session, "unfinished").await.unwrap();
+
+        manager
+            .switch_provider(&session, "stub-b", None)
+            .await
+            .expect("an idle live session hands over");
+
+        assert_eq!(
+            lock(&to_starts)[0].history,
+            vec![
+                Message::user("first task"),
+                Message::assistant(vec![MsgBlock::Text {
+                    text: "ack: first task".into()
+                }]),
+            ],
+            "the dangling tool call and its user message are not handed to another provider"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stopped_session_keeps_the_transcript_replay_on_a_switch() {
+        let (manager, _from_starts, to_starts) = manager_two();
+        let session = create_on(&manager, "stub-a").await;
+        manager
+            .send(&session, "remember the number 7")
+            .await
+            .unwrap();
+        manager.close(&session).await.unwrap();
+
+        manager
+            .switch_provider(&session, "stub-b", None)
+            .await
+            .expect("a stopped session switches from its transcript");
+
+        let start = &lock(&to_starts)[0];
+        assert!(
+            start.history.is_empty(),
+            "there is no live history to export: {:?}",
+            start.history
+        );
+        let prompt = start.prompt.as_deref().expect("the transcript replay");
+        assert!(
+            prompt.contains("remember the number 7"),
+            "the replay carries the conversation: {prompt:?}"
         );
     }
 }

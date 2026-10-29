@@ -898,7 +898,7 @@ impl AgentSession for AgentSessionImpl {
         Ok(())
     }
 
-    async fn history(&self) -> Vec<Message> {
+    async fn history(&mut self) -> Vec<Message> {
         self.history.lock().await.clone()
     }
 

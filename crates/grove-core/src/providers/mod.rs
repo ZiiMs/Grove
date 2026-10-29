@@ -357,7 +357,10 @@ pub trait AgentSession: Send {
     /// The conversation as neutral messages, so a live session can be handed to another provider
     /// instead of being summed up. Empty means the provider keeps no in-process history, and the
     /// manager falls back to replaying the transcript tail.
-    async fn history(&self) -> Vec<wire::Message> {
+    ///
+    /// `&mut self` because a session is only ever read behind the manager's command mutex; the trait
+    /// is `Send` rather than `Sync`, which an `&self` future would demand.
+    async fn history(&mut self) -> Vec<wire::Message> {
         Vec::new()
     }
     /// Answer a tool permission request. Until it is answered the tool call is parked.
