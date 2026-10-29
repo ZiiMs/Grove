@@ -855,7 +855,7 @@ describe("redesigned shell", () => {
     const dialog = screen.getByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "Choose folder" }));
     const address = await within(dialog).findByLabelText("Folder path");
-    await waitFor(() => expect(address).toHaveValue("C:/Users/demo"));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/demo/"));
     await userEvent.click(within(dialog).getByRole("button", { name: "Select folder" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Add project" }));
 
@@ -872,7 +872,7 @@ describe("redesigned shell", () => {
     await userEvent.type(address, "D:\\Dev\\grove");
     await userEvent.keyboard("{Enter}");
 
-    await waitFor(() => expect(address).toHaveValue("D:/Dev/grove"));
+    await waitFor(() => expect(address).toHaveValue("D:/Dev/grove/"));
     expect(await within(dialog).findByRole("option", { name: "docs" })).toBeInTheDocument();
     expect(
       bridge.calls.some(
@@ -885,10 +885,10 @@ describe("redesigned shell", () => {
     // A forward-slash path navigates the same way, and Escape puts the address back.
     await userEvent.clear(address);
     await userEvent.type(address, "D:/Dev{Enter}");
-    await waitFor(() => expect(address).toHaveValue("D:/Dev"));
+    await waitFor(() => expect(address).toHaveValue("D:/Dev/"));
     await userEvent.clear(address);
     await userEvent.type(address, "not a folder{Escape}");
-    expect(address).toHaveValue("D:/Dev");
+    expect(address).toHaveValue("D:/Dev/");
   });
 
   it("keeps the current listing when a pasted path does not exist", async () => {
@@ -917,10 +917,10 @@ describe("redesigned shell", () => {
       "true",
     );
     await userEvent.keyboard("{ArrowDown}{ArrowUp}{Enter}");
-    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code"));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code/"));
 
     await userEvent.keyboard("{Backspace}");
-    await waitFor(() => expect(address).toHaveValue("C:/Users/ada"));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/"));
     expect(within(dialog).getByRole("option", { name: "notes" })).toBeInTheDocument();
   });
 
@@ -928,16 +928,16 @@ describe("redesigned shell", () => {
     const { dialog, address } = await openPicker();
 
     await userEvent.click(within(dialog).getByRole("option", { name: "code" }));
-    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code"));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code/"));
     expect(within(dialog).getByRole("option", { name: "grove" })).toBeInTheDocument();
     expect(within(dialog).queryByRole("option", { name: "notes" })).not.toBeInTheDocument();
 
     await userEvent.click(within(dialog).getByRole("option", { name: "grove" }));
-    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code/grove"));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code/grove/"));
 
     // The breadcrumb is a way back up without retyping the path.
     await userEvent.click(within(dialog).getByRole("button", { name: "code" }));
-    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code"));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code/"));
   });
 
   it("returns to the project form after Select folder and seeds detection", async () => {
@@ -970,10 +970,29 @@ describe("redesigned shell", () => {
     await userEvent.type(name, "My repo");
     await userEvent.click(within(dialog).getByRole("button", { name: "Choose folder" }));
     const address = await within(dialog).findByLabelText("Folder path");
-    await waitFor(() => expect(address).toHaveValue("C:/Users/demo"));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/demo/"));
     await userEvent.click(within(dialog).getByRole("button", { name: "Select folder" }));
 
     expect(within(dialog).getByLabelText("Name")).toHaveValue("My repo");
+  });
+
+  it("ends a folder in a slash and filters its children as you type", async () => {
+    const { dialog, address } = await openPicker();
+
+    await userEvent.click(within(dialog).getByRole("option", { name: "code" }));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code/"));
+    expect(within(dialog).getByRole("option", { name: "agent-hub" })).toBeInTheDocument();
+
+    await userEvent.type(address, "GRO");
+    expect(within(dialog).queryByRole("option", { name: "agent-hub" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "grove" })).toBeInTheDocument();
+
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/code/grove/"));
+
+    await userEvent.clear(address);
+    await userEvent.type(address, "C:/Users/ada/code/grove/zzz");
+    expect(await within(dialog).findByText(/No folders match/)).toBeInTheDocument();
   });
 
   it("creates a folder inline and enters it", async () => {
@@ -983,7 +1002,7 @@ describe("redesigned shell", () => {
     const name = within(dialog).getByLabelText("New folder name");
     await userEvent.type(name, "new-project{Enter}");
 
-    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/new-project"));
+    await waitFor(() => expect(address).toHaveValue("C:/Users/ada/new-project/"));
     const call = bridge.calls.find((entry) => entry.command === "fs_create_dir");
     expect(call?.args).toEqual({ parent: "C:/Users/ada", name: "new-project" });
   });
@@ -995,7 +1014,7 @@ describe("redesigned shell", () => {
     await userEvent.type(within(dialog).getByLabelText("New folder name"), "bad/name{Enter}");
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(/single path segment/);
-    expect(address).toHaveValue("C:/Users/ada");
+    expect(address).toHaveValue("C:/Users/ada/");
     expect(bridge.invocations).toContain("fs_create_dir");
   });
 

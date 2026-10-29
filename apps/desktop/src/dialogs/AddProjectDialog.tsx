@@ -41,6 +41,16 @@ export function AddProjectDialog() {
   const newFolderRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
+  // The address is a path plus an optional trailing filter: at `D:/Dev/` typing `Zcon` narrows the
+  // listing to folders under Dev whose name contains "Zcon", without leaving Dev.
+  const currentPath = listing?.path ?? "";
+  const filter = addressFilter(address, currentPath);
+  const visibleDirs = filter
+    ? (listing?.dirs ?? []).filter((dir) =>
+        dir.name.toLowerCase().includes(filter.toLowerCase()),
+      )
+    : (listing?.dirs ?? []);
+
   useEffect(() => {
     if (!open) return;
     setMode("form");
@@ -86,7 +96,9 @@ export function AddProjectDialog() {
     try {
       const next = await bridge.invoke("fs_list_dirs", target ? { path: target } : {});
       setListing(next);
-      setAddress(next.path);
+      // The slash is the cursor for the filter: every folder you enter ends with one, so typing
+      // narrows that folder's children instead of replacing the path.
+      setAddress(withTrailingSlash(next.path));
       setActiveIndex(-1);
       if (focus === "list") listRef.current?.focus();
       else addressRef.current?.focus();
@@ -114,7 +126,11 @@ export function AddProjectDialog() {
       setPickerError("Enter a folder path.");
       return;
     }
-    void loadDirs(target, focus);
+    // Enter on a partial segment opens the selected (or first) match instead of erroring on a path
+    // that does not exist yet.
+    const exact = visibleDirs.find((dir) => dir.path.toLowerCase() === target.toLowerCase());
+    const match = exact ?? (filter ? visibleDirs[activeIndex >= 0 ? activeIndex : 0] : undefined);
+    void loadDirs(match?.path ?? target, focus);
   };
 
   const createFolder = async () => {
@@ -137,7 +153,7 @@ export function AddProjectDialog() {
   };
 
   const handleListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const dirs = listing?.dirs ?? [];
+    const dirs = visibleDirs;
     if (!dirs.length) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -328,8 +344,8 @@ export function AddProjectDialog() {
             </button>
           </div>
           <p className="dlg-sub">
-            Paste a path and press Enter, or open folders by clicking them. Select folder uses the
-            folder you are in.
+            Paste a path and press Enter, or open folders by clicking them. Type after the slash to
+            filter the folders you are in. Select folder uses the folder you are in.
           </p>
 
           <div className="fp-address-row">
@@ -353,6 +369,7 @@ export function AddProjectDialog() {
               value={address}
               onChange={(event) => {
                 setAddress(event.target.value);
+                setActiveIndex(-1);
                 setPickerError(null);
               }}
               onKeyDown={(event) => {
@@ -360,8 +377,12 @@ export function AddProjectDialog() {
                   event.preventDefault();
                   navigate(address);
                 } else if (event.key === "Escape") {
-                  setAddress(listing?.path ?? "");
+                  setAddress(listing ? withTrailingSlash(listing.path) : "");
                   setPickerError(null);
+                } else if (event.key === "ArrowDown" && visibleDirs.length) {
+                  event.preventDefault();
+                  setActiveIndex(0);
+                  listRef.current?.focus();
                 }
               }}
             />
@@ -481,8 +502,8 @@ export function AddProjectDialog() {
           >
             {pickerLoading ? (
               <p className="git-empty">Reading folders…</p>
-            ) : listing?.dirs.length ? (
-              listing.dirs.map((dir, index) => (
+            ) : visibleDirs.length ? (
+              visibleDirs.map((dir, index) => (
                 <button
                   id={`fp-option-${index}`}
                   className="fp-row"
@@ -492,7 +513,7 @@ export function AddProjectDialog() {
                   tabIndex={-1}
                   key={dir.path}
                   onMouseDown={() => setActiveIndex(index)}
-                  onClick={() => void loadDirs(dir.path, "list")}
+                  onClick={() => void loadDirs(dir.path)}
                 >
                   <Icon name="folder" size="sm" />
                   <span className="fp-name">{dir.name}</span>
@@ -502,7 +523,9 @@ export function AddProjectDialog() {
                 </button>
               ))
             ) : (
-              <p className="fp-empty">No subfolders here.</p>
+              <p className="fp-empty">
+                {filter ? `No folders match “${filter}”.` : "No subfolders here."}
+              </p>
             )}
           </div>
 
@@ -525,9 +548,28 @@ export function AddProjectDialog() {
   );
 }
 
+/** `D:/Dev` → `D:/Dev/`; a root (`D:/`, `/`) is already complete. */
+function withTrailingSlash(path: string): string {
+  if (!path) return "";
+  return path.endsWith("/") ? path : `${path}/`;
+}
+
+/**
+ * What the user typed after the current folder, if anything. Only a fragment under the listing
+ * counts as a filter; a different absolute path is left to Enter.
+ */
+function addressFilter(address: string, base: string): string {
+  if (!base) return "";
+  const root = withTrailingSlash(base);
+  const typed = address.replace(/\\/g, "/");
+  if (!typed.startsWith(root)) return "";
+  const rest = typed.slice(root.length);
+  if (!rest) return "";
+  return rest.split("/")[0] ?? "";
+}
+
 /** One clickable segment per folder; the last one is where the picker already is. */
-function breadcrumbs(path: string, home: string | null): Array<{ label: string; path: string }> {
-  const clean = path.replace(/\/+$/, "") || path;
+function breadcrumbs(path: string, home: string | null): Array<{ label: string; path: string }> {  const clean = path.replace(/\/+$/, "") || path;
   if (!clean) return [];
   const homePath = home?.replace(/\/+$/, "");
 
