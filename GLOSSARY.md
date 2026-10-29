@@ -119,6 +119,21 @@ naming is one non-streaming `AgentProvider::complete` call with no tools and no 
 session per app run or on demand from the session menu. A failure leaves the placeholder and toasts
 the model and provider (ADR 0004).
 
+## Hot swap
+
+Changing a live session's model without ending the conversation. A same-provider change is applied
+in place (`session_set_model`, next turn); a cross-provider change hands the normalized history to the
+new agent (`switch_provider`) and drops the old provider's resume token. Work is never cancelled to
+satisfy a model change: a busy or awaiting session queues the switch until it is idle.
+
+## Context menu
+
+The single app-wide menu primitive that replaces the native webview menu (`shell/ContextMenu.tsx`,
+state in `state/menuStore.ts`). Components put `MenuItem[]` in the store; one host portals the menu
+into the topmost native dialog (or the body), keeps it inside the viewport, and implements the
+keyboard navigation. Text fields get the edit menu; sessions, projects, worktrees, messages and the
+tree background register their own items.
+
 ## Spec graph
 
 The index of repo `.md` files whose frontmatter carries `id` + `type`, with `parent`, `depends-on`,

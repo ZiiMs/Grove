@@ -60,8 +60,9 @@ packages/contract/             zod schemas + TS types + fixture validator (UI �
 contract/fixtures/             golden JSON, written by Rust tests, parsed by TS tests
 crates/grove-core/src/
   providers/{mod,catalog,credentials,wire,anthropic,openai,google,probe,tools,agent,offline}.rs
-  sessions/{mod,event,manager,pump,context}.rs
+  sessions/{mod,event,manager,pump,context,title}.rs
   projects/mod.rs                 workspace folders + folder browsing
+  reveal.rs                       platform file-manager reveal for a path
   store/{mod,db,repos,plans,pins,projects}.rs
   specgraph/{mod,frontmatter,index,watch}.rs
   plan/{mod,service,mirror}.rs
@@ -115,6 +116,8 @@ pub trait AgentProvider: Send + Sync {
     fn spec(&self) -> &ProviderSpec;
     fn capabilities(&self) -> Capabilities;
     fn detect(&self, deps: &ProviderDeps) -> Detection;   // is a credential configured?
+    async fn complete(&self, req: CompletionRequest, deps: ProviderDeps)
+        -> Result<String, ProviderError>;                // one-shot, no tools or history
     async fn start(&self, ctx: StartContext, deps: ProviderDeps)
         -> Result<Box<dyn AgentSession>, ProviderError>;
 }
@@ -127,6 +130,7 @@ pub trait AgentSession: Send {
     async fn respond_permission(&mut self, request_id: &str, decision: Decision)
         -> Result<(), ProviderError>;
     async fn set_thinking(&mut self, level: ThinkingLevel) -> Result<(), ProviderError>;
+    async fn set_model(&mut self, model: String) -> Result<(), ProviderError>;
     async fn cancel(&mut self) -> Result<(), ProviderError>;
     async fn shutdown(&mut self) -> Result<(), ProviderError>;
     fn resume_token(&self) -> Option<String>;
@@ -379,12 +383,14 @@ settings pane's "test" button and the picker refresh that runs after boot; `prov
 offline fallback. `session_set_thinking` changes the persisted reasoning level for one session.
 
 **Session titles.** `settings.titleModel` is the one global small model that names sessions, or null
-when the suggested model applies; `clearTitleModel` is how the patch expresses Off, because a JSON
-null cannot be told apart from an omitted field. `title_model_suggest` answers the suggestion for the
-first configured provider (the shell passes its live model lists so the OpenRouter choice can follow
-the account) and never writes settings. `session_generate_title` runs one non-streaming completion
-with no tools and no history, then stores the title as `generated` and emits `title_changed`. See ADR
-0004.
+when the suggested model applies; `settings.autoTitles` is the Off switch, because clearing the model
+alone means "use the suggestion", not "never name". `clearTitleModel` is how the patch expresses a
+cleared model, because a JSON null cannot be told apart from an omitted field. `title_model_suggest`
+answers the suggestion for the first configured provider (the shell passes its live model lists so the
+OpenRouter choice can follow the account) and never writes settings. `session_generate_title` runs one
+non-streaming completion with no tools and no history, then stores the title as `generated` and emits
+`title_changed`; its `force` flag separates the explicit menu action from the automatic trigger, which
+never overwrites a manual title. See ADR 0004.
 
 **Drift control without codegen.** `contract/fixtures/<domain>.<case>.json` holds canonical payloads.
 A Rust test serialises a representative sample per DTO and asserts equality with the file; a TS test in
@@ -461,8 +467,11 @@ seven-panel shell and the spec/plan editors were retired.
   a side effect.
 - **projects** — a folder the user added, with the git facts detected at add time (`is_git`,
   `default_branch`, normalized `owner/name` remote). `fs_list_dirs` lists one level for the picker;
-  adding a project backfills `sessions.project_id` for conversations that already ran in the folder or
-  one of its worktrees. Worktrees themselves stay in git.
+  `fs_list_roots` adds home and every mounted drive/root, and `fs_create_dir` creates one validated
+  segment under the current folder. `project_remove` deletes the projects row only: its sessions become
+  chats (`project_id` is `ON DELETE SET NULL`) and the working tree is untouched. Adding a project
+  backfills `sessions.project_id` for conversations that already ran in the folder or one of its
+  worktrees. Worktrees themselves stay in git.
 - **gitops** — shell out to `git` (no libgit2): `rev-parse --show-toplevel`, status, branches,
   worktrees, unified diff per file/branch, stage/unstage selected paths, commit with paths, create a
   branch plus worktree, and `gh pr create` (draft or ready) returning the URL.
