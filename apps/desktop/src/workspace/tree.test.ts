@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Project } from "@grove/contract";
-import { basename, dirname, normalizePath, projectForSession, worktreeForSession } from "./tree";
+import {
+  basename,
+  dirname,
+  normalizeFolderPath,
+  normalizePath,
+  projectForSession,
+  worktreeForSession,
+} from "./tree";
 import { fakeSession, fakeSummary } from "../test-utils/fakeBridge";
 
 const project: Project = {
@@ -44,5 +51,15 @@ describe("tree mapping", () => {
     expect(basename("C:\\code\\grove\\session.rs")).toBe("session.rs");
     expect(dirname("C:/code/grove/session.rs")).toBe("C:/code/grove");
     expect(dirname("session.rs")).toBe("");
+  });
+
+  it("normalises a pasted folder path for the picker", () => {
+    for (const raw of ["D:\\Dev\\grove\\", "D:/Dev/grove", "  \"D:/Dev/grove\"  "]) {
+      expect(normalizeFolderPath(raw)).toBe("D:/Dev/grove");
+    }
+    expect(normalizeFolderPath("D:\\")).toBe("D:/");
+    expect(normalizeFolderPath("/")).toBe("/");
+    expect(normalizeFolderPath("//server/share/")).toBe("//server/share");
+    expect(normalizeFolderPath("~\\dev\\grove")).toBe("~/dev/grove");
   });
 });
