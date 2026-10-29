@@ -154,6 +154,12 @@ hands to the agent (`providers::ContextDoc`, assembled by `sessions::context::Se
 with explicit budgets (8 000 chars per document, 24 000 total) and a truncation marker; nothing
 re-reads a spec on a timer. The transcript records what was sent as a `context_refreshed` event.
 
+## Pinned session
+
+A session whose `pinned` flag is set (`session_set_pinned`). It appears in the sidebar's Pinned
+section above the tree, and remains in its project group. Pinning is a preference, not activity: it
+never changes `updated_at`, so it cannot reorder the recent list.
+
 ## Offline provider
 
 The `mock` provider in `providers/offline.rs`: it speaks the real runtime but answers from a script

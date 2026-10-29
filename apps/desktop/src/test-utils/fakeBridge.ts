@@ -274,6 +274,7 @@ export function fakeSession(overrides: Partial<Session> = {}): Session {
     projectId: null,
     awaiting: false,
     archivedAt: null,
+    pinned: false,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,
@@ -586,6 +587,16 @@ export function createFakeBridge(
         if (!detail) throw new Error(`FakeBridge has no session: ${id}`);
         detail.permissionMode = mode;
         return detail as CommandMap[K]["result"];
+      }
+      if (command === "session_set_pinned") {
+        const { id, pinned } = args as { id: string; pinned: boolean };
+        const row = sessions.find((session) => session.id === id);
+        if (!row) throw new Error(`FakeBridge has no session: ${id}`);
+        row.pinned = pinned;
+        const detail = details[id];
+        if (detail) detail.pinned = pinned;
+        const { eventCount: _eventCount, subagents: _subagents, ...session } = row;
+        return structuredClone(session) as CommandMap[K]["result"];
       }
       if (command === "session_rename") {
         // The core trims, validates and bumps the timestamp; the fake applies the same rules so a UI

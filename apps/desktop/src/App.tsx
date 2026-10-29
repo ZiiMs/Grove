@@ -75,7 +75,21 @@ export default function App() {
   const refreshSpecs = useContextStore((state) => state.refreshSpecs);
   const refreshGit = useContextStore((state) => state.refreshGit);
   const applyPlan = useContextStore((state) => state.applyPlan);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState(() => {
+    try {
+      return localStorage.getItem("grove.navSearch") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  useEffect(() => {
+    try {
+      if (filter) localStorage.setItem("grove.navSearch", filter);
+      else localStorage.removeItem("grove.navSearch");
+    } catch {
+      // A blocked store must not affect the filter.
+    }
+  }, [filter]);
   const autoSelected = useRef(false);
 
   const activeSummary = sessions.find((row) => row.id === activeId) ?? null;

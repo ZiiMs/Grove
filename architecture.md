@@ -316,7 +316,7 @@ stale project and no service has to be rebuilt. `GROVE_PROJECT_ROOT` (else the p
 SQLite via `rusqlite` (`bundled`, no system dependency), one file at the Tauri app-data dir:
 `%APPDATA%/Grove/grove.db`. Migrations are an ordered `&[&str]` applied under
 `schema_migrations(version)`; later domains append rather than edit an earlier migration, so an
-existing install upgrades in place. Nine migrations have shipped:
+existing install upgrades in place. Ten migrations have shipped:
 
 | # | Tables / columns | Feature |
 |---|---|---|
@@ -329,6 +329,7 @@ existing install upgrades in place. Nine migrations have shipped:
 | 7 | `subagents` (+ backfill from `tool_call`/`tool_result`) | durable delegated-worker trace |
 | 8 | `sessions.archived_at`, `sessions_by_archive` | archive, restore and permanent delete |
 | 9 | `sessions.title_source` | optional session titles and first-message placeholders |
+| 10 | `sessions.pinned` | pinned sessions in the sidebar |
 
 ```sql
 projects(id TEXT PK, name TEXT UNIQUE, path TEXT UNIQUE, remote TEXT, default_branch TEXT,
@@ -336,7 +337,8 @@ projects(id TEXT PK, name TEXT UNIQUE, path TEXT UNIQUE, remote TEXT, default_br
 sessions(id TEXT PK, provider TEXT, cwd TEXT, model TEXT, title TEXT, status TEXT,
          adapter_config TEXT, resume_token TEXT, project_id TEXT REFERENCES projects(id),
          awaiting INTEGER NOT NULL DEFAULT 0, archived_at TEXT,
-         title_source TEXT NOT NULL DEFAULT 'manual', created_at TEXT, updated_at TEXT)
+         title_source TEXT NOT NULL DEFAULT 'manual', pinned INTEGER NOT NULL DEFAULT 0,
+         created_at TEXT, updated_at TEXT)
 events(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, at TEXT,
        kind TEXT, payload TEXT)                       -- payload = full EventKind JSON
 plans(session_id TEXT PK, markdown TEXT, version INTEGER, mirror_hash TEXT, updated_at TEXT)
@@ -386,6 +388,8 @@ Two channels, both typed in `packages/contract`:
 `provider_models` (asks the vendor which models the key can reach). `provider_models` powers both the
 settings pane's "test" button and the picker refresh that runs after boot; `provider_list` remains the
 offline fallback. `session_set_thinking` changes the persisted reasoning level for one session.
+`session_set_pinned` pins a session into the sidebar's Pinned section; it is a preference and does not
+touch `updated_at`.
 `plan_usage` reports the remaining 5-hour/weekly/monthly budget for a metered provider (OpenCode Go's
 `/zen/go/v1/usage`); it returns `null` for providers without a plan endpoint and never runs on a
 session turn.

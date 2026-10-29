@@ -59,6 +59,14 @@ export function sessionMenuItems(bridge: GroveBridge, row: SessionSummary): Menu
       onSelect: () => useUiStore.getState().startRename(row.id),
     },
   ];
+  if (!row.archivedAt) {
+    items.push({
+      kind: "item",
+      label: row.pinned ? "Unpin session" : "Pin session",
+      icon: "pin",
+      onSelect: () => void useSessionStore.getState().setPinned(bridge, row.id, !row.pinned),
+    });
+  }
   if (row.archivedAt) {
     items.push({
       kind: "item",

@@ -49,6 +49,16 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M9.5 3v10" />
     </>
   ),
+  filter: <path d="M2.5 3.5h11L9.6 8.3v4.2l-3.2-1.7V8.3z" />,
+  sort: <path d="M4 3.5v9M2 10.5l2 2 2-2M9 4.5h5M9 8h3.6M9 11.5h2.2" />,
+  list: <path d="M3 4.5h10M3 8h10M3 11.5h10" />,
+  collapseAll: <path d="M4 6.5 8 2.5l4 4M4 9.5l4 4 4-4" />,
+  pin: (
+    <>
+      <path d="M9.8 2.2l4 4M10.6 3l-5 5-.8 3.8 3.8-.8 5-5z" />
+      <path d="M5.6 10.4 2.5 13.5" />
+    </>
+  ),
   shield: <path d="M8 2.2 12.8 3.9v3.6c0 2.9-2 4.9-4.8 5.9-2.8-1-4.8-3-4.8-5.9V3.9z" />,
   shieldCheck: (
     <>

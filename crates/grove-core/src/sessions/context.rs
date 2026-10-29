@@ -539,6 +539,7 @@ mod tests {
             project_id: None,
             awaiting: false,
             archived_at: None,
+            pinned: false,
             title_source: TitleSource::Manual,
             created_at: "2025-01-01T00:00:00.000Z".into(),
             updated_at: "2025-01-01T00:00:00.000Z".into(),

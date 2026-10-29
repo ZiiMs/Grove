@@ -39,6 +39,7 @@ export interface SessionsCommands {
   };
   /** Change the reasoning level for the next turn; returns the refreshed session detail. */
   session_set_thinking: { args: { id: string; level: ThinkingLevel }; result: SessionDetail };
+  session_set_pinned: { args: { id: string; pinned: boolean }; result: Session };
   session_set_permission_mode: {
     args: { id: string; mode: PermissionMode };
     result: SessionDetail;

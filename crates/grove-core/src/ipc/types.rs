@@ -63,6 +63,10 @@ pub struct Session {
     /// When the session was archived, or `None` while it is active. Archive is a nullable column,
     /// not a delete: the row, its transcript and its plan stay exactly where they were.
     pub archived_at: Option<String>,
+    /// A durable user pin. Pinned sessions rise into the sidebar's Pinned section. Pinning never
+    /// changes `updated_at`, so it cannot reorder recent activity.
+    #[serde(default)]
+    pub pinned: bool,
     pub created_at: String,
     pub updated_at: String,
 }

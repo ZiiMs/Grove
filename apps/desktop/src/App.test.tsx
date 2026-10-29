@@ -1633,36 +1633,43 @@ describe("archive and delete", () => {
   }
 
   async function openArchived(): Promise<void> {
+    await userEvent.click(within(nav()).getByRole("button", { name: "Show archived sessions" }));
     await userEvent.click(treeRow("Old spike"));
     await screen.findByRole("heading", { name: "Old spike" });
   }
 
-  it("lists archived sessions in a counted Archive section, apart from the active tree", async () => {
+  it("lists archived sessions in a counted archive view, apart from the active tree", async () => {
     renderApp(archiveSeed());
     await screen.findByRole("heading", { name: "OAuth device flow" });
 
-    expect(within(nav()).getByRole("button", { name: /^Archive 1$/ })).toBeInTheDocument();
+    expect(within(nav()).queryByText("Old spike")).not.toBeInTheDocument();
+    await userEvent.click(within(nav()).getByRole("button", { name: "Show archived sessions" }));
+
     expect(within(nav()).getByText("Old spike")).toBeInTheDocument();
-    expect(nav().querySelector("#kids-archive .s-suffix")).toHaveTextContent("grove");
-    expect(within(nav()).getByText("1 session · 1 awaiting you")).toBeInTheDocument();
+    expect(within(nav()).getByText("1 archived")).toBeInTheDocument();
+    expect(within(nav()).getByText("grove")).toBeInTheDocument();
+    expect(
+      within(nav()).getByRole("button", { name: "Show active sessions" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
-    await userEvent.click(within(nav()).getByRole("button", { name: "Toggle archive" }));
-    expect(document.getElementById("kids-archive")).toHaveAttribute("hidden");
+    await userEvent.click(within(nav()).getByRole("button", { name: "Show active sessions" }));
+    expect(within(nav()).queryByText("Old spike")).not.toBeInTheDocument();
   });
 
-  it("shows an empty Archive section when nothing is archived", async () => {
+  it("shows an empty archive view when nothing is archived", async () => {
     await ready();
-    expect(within(nav()).getByText("No archived sessions")).toBeInTheDocument();
+    await userEvent.click(within(nav()).getByRole("button", { name: "Show archived sessions" }));
+    expect(within(nav()).getByText("No archived sessions.")).toBeInTheDocument();
   });
 
-  it("searches the Archive section and keeps its header when a row matches", async () => {
+  it("searches archived sessions without hiding the archive view", async () => {
     renderApp(archiveSeed());
     await screen.findByRole("heading", { name: "OAuth device flow" });
+    await userEvent.click(within(nav()).getByRole("button", { name: "Show archived sessions" }));
 
     await userEvent.type(screen.getByLabelText(/Filter projects/), "old");
 
     expect(within(nav()).getByText("Old spike")).toBeInTheDocument();
-    expect(within(nav()).getByRole("button", { name: /^Archive 1$/ })).toBeInTheDocument();
     expect(within(nav()).queryByText("OAuth device flow")).not.toBeInTheDocument();
     expect(within(nav()).queryByText(/Nothing matches/)).not.toBeInTheDocument();
   });
@@ -1688,14 +1695,67 @@ describe("archive and delete", () => {
     const bridge = renderApp(archiveSeed());
     await screen.findByRole("heading", { name: "OAuth device flow" });
     const nav = document.getElementById("panel-nav") as HTMLElement;
+    await userEvent.click(within(nav).getByRole("button", { name: "Show archived sessions" }));
 
     const restore = within(nav).getByRole("button", { name: "Restore session" });
     expect(restore).toHaveAttribute("title", "Restore");
     await userEvent.click(restore);
 
     await waitFor(() => expect(bridge.invocations).toContain("session_restore"));
-    expect(within(nav).getByText("No archived sessions")).toBeInTheDocument();
+    expect(within(nav).getByText("No archived sessions.")).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+  });
+
+  it("pins a session into the Pinned section", async () => {
+    const bridge = await ready();
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+    fireEvent.contextMenu(within(nav).getByRole("button", { name: /OAuth device flow/ }), {
+      clientX: 120,
+      clientY: 160,
+    });
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Pin session" }),
+    );
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_set_pinned"));
+    expect(bridge.calls.find((call) => call.command === "session_set_pinned")?.args).toEqual({
+      id: session.id,
+      pinned: true,
+    });
+    expect(within(nav).getByText("Pinned")).toBeInTheDocument();
+    expect(within(nav).getAllByText("OAuth device flow").length).toBeGreaterThan(1);
+  });
+
+  it("filters the tree by status and clears the filters", async () => {
+    await ready();
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+    await userEvent.click(within(nav).getByRole("button", { name: "Filter sessions" }));
+    const filters = within(nav).getByRole("group", { name: "Session filters" });
+
+    await userEvent.click(within(filters).getByLabelText("Running"));
+    expect(within(nav).getByText(/No sessions match these filters/)).toBeInTheDocument();
+
+    await userEvent.click(within(filters).getByLabelText("Needs you"));
+    expect(within(nav).getByText("OAuth device flow")).toBeInTheDocument();
+
+    await userEvent.click(within(filters).getByRole("button", { name: "Clear all" }));
+    expect(within(nav).getByText("OAuth device flow")).toBeInTheDocument();
+  });
+
+  it("switches to a flat list and remembers the view", async () => {
+    await ready();
+    const nav = document.getElementById("panel-nav") as HTMLElement;
+    expect(within(nav).getByText("Chats")).toBeInTheDocument();
+
+    await userEvent.click(
+      within(nav).getByRole("button", { name: "Show a flat session list" }),
+    );
+    expect(within(nav).queryByText("Chats")).not.toBeInTheDocument();
+    expect(within(nav).getByText("OAuth device flow")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("grove.navView") ?? "{}").flat).toBe(true);
+
+    await userEvent.click(within(nav).getByRole("button", { name: "Show the project tree" }));
+    expect(within(nav).getByText("Chats")).toBeInTheDocument();
   });
 
   it("opens an archived session with a pill and restores it from the header", async () => {
@@ -1755,8 +1815,9 @@ describe("archive and delete", () => {
     expect(bridge.calls.find((call) => call.command === "session_archive")?.args).toEqual({
       id: session.id,
     });
-    expect(await screen.findByText("Archived")).toBeInTheDocument();
     expect(within(nav()).getByText("0 sessions · 0 awaiting you")).toBeInTheDocument();
+    await userEvent.click(within(nav()).getByRole("button", { name: "Show archived sessions" }));
+    expect(within(nav()).getByText("OAuth device flow")).toBeInTheDocument();
   });
 
   it("offers permanent delete only on an archived row, after a confirmation that names it", async () => {
@@ -2088,6 +2149,7 @@ describe("session titles", () => {
     });
     await screen.findByRole("heading", { name: "OAuth device flow" });
     const nav = document.getElementById("panel-nav") as HTMLElement;
+    await userEvent.click(within(nav).getByRole("button", { name: "Show archived sessions" }));
 
     fireEvent.contextMenu(within(nav).getByRole("button", { name: /Old spike/ }), {
       clientX: 120,

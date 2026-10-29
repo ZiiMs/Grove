@@ -233,6 +233,8 @@ export const sessionSchema = z.object({
   awaiting: z.boolean(),
   /** When the session was archived, or null while it is active. Archive keeps the transcript. */
   archivedAt: z.string().nullable(),
+  /** A durable user pin; pinned sessions rise into the Pinned section. */
+  pinned: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

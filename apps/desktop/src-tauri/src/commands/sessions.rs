@@ -109,6 +109,16 @@ pub async fn session_set_permission_mode(
     Ok(state.core.sessions.set_permission_mode(&id, mode).await?)
 }
 
+/// Pin or unpin a session in the sidebar. A preference only: no activity and no transcript change.
+#[tauri::command]
+pub fn session_set_pinned(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    pinned: bool,
+) -> IpcResult<Session> {
+    Ok(state.core.sessions.set_pinned(&id, pinned)?)
+}
+
 /// Rename a session. The trimmed, validated title is persisted and the updated row comes back so the
 /// tree patches in place; the agent and its transcript are untouched.
 #[tauri::command]

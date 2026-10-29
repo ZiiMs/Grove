@@ -170,6 +170,8 @@ export interface SessionStore extends SessionStoreData {
    * returns `null` on success or the message to show beside the field.
    */
   rename: (bridge: GroveBridge, id: string, title: string) => Promise<string | null>;
+  /** Pin or unpin a session; the row is patched from the command result. */
+  setPinned: (bridge: GroveBridge, id: string, pinned: boolean) => Promise<boolean>;
   /** Fold one live `grove://session-event` into the list and, when it belongs to the open session, the transcript. */
   applyEvent: (sessionId: string | null, event: SessionEvent) => void;
   reset: () => void;
@@ -820,6 +822,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       return null;
     } catch (error) {
       return errorText(error);
+    }
+  },
+
+  setPinned: async (bridge, id, pinned) => {
+    try {
+      const session = await bridge.invoke("session_set_pinned", { id, pinned });
+      set((state) => applySessionRow(state, session));
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
     }
   },
 

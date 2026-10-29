@@ -362,6 +362,7 @@ impl SessionManager {
             project_id: project.map(|project| project.id),
             awaiting: false,
             archived_at: None,
+            pinned: false,
             created_at: at.clone(),
             updated_at: at,
         };
@@ -542,6 +543,18 @@ impl SessionManager {
         config["permissionMode"] = serde_json::json!(mode.as_str());
         self.store.set_adapter_config(id, &config)?;
         self.get(id)
+    }
+
+    /// Pin or unpin a session. This is a durable preference, not activity: the row keeps its
+    /// `updated_at`, so pinning cannot reorder the recent list. The agent is untouched.
+    pub fn set_pinned(&self, id: &str, pinned: bool) -> Result<Session, SessionError> {
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        self.store.set_session_pinned(id, pinned)?;
+        self.store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))
     }
 
     /// Rename a session. Only the title and its provenance change: the agent, its config and the
@@ -1984,6 +1997,28 @@ mod tests {
         assert!(manager.get(&one).unwrap().session.archived_at.is_some());
         assert!(manager.get(&two).unwrap().session.archived_at.is_some());
         assert!(manager.get(&other).unwrap().session.archived_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn pinning_is_durable_and_does_not_touch_activity() {
+        let manager = manager();
+        let session = create(&manager).await;
+        let before = manager.get(&session).unwrap().session;
+
+        let pinned = manager.set_pinned(&session, true).expect("pin");
+        assert!(pinned.pinned);
+        assert_eq!(
+            pinned.updated_at, before.updated_at,
+            "pinning is not activity and must not reorder the recent list"
+        );
+        assert!(manager.get(&session).unwrap().session.pinned);
+
+        let unpinned = manager.set_pinned(&session, false).expect("unpin");
+        assert!(!unpinned.pinned);
+        assert!(matches!(
+            manager.set_pinned("missing", true),
+            Err(SessionError::NotFound(_))
+        ));
     }
 
     #[tokio::test]
