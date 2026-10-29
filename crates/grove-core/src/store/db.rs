@@ -145,6 +145,13 @@ LEFT JOIN events result
 WHERE call.kind = 'tool_call'
   AND json_extract(call.payload, '$.name') = 'subagent';
 "#,
+    // 8 — archive. Archiving is soft state, not a delete: `archived_at` NULL means active, and the
+    // session keeps its transcript, plan, pins and workers. The index serves the Archive section,
+    // which lists archived rows by recency.
+    r#"
+ALTER TABLE sessions ADD COLUMN archived_at TEXT;
+CREATE INDEX sessions_by_archive ON sessions(archived_at, updated_at);
+"#,
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -267,7 +274,7 @@ mod tests {
             let store = Store::open(&path).unwrap();
             assert_eq!(
                 store.applied_migrations().unwrap(),
-                vec![1, 2, 3, 4, 5, 6, 7]
+                vec![1, 2, 3, 4, 5, 6, 7, 8]
             );
         }
         assert!(path.exists(), "the database file is created on open");
@@ -275,7 +282,7 @@ mod tests {
         let reopened = Store::open(&path).unwrap();
         assert_eq!(
             reopened.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7],
+            vec![1, 2, 3, 4, 5, 6, 7, 8],
             "reopening does not replay migrations"
         );
     }
@@ -285,7 +292,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         assert_eq!(
             store.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7]
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
         );
     }
 
@@ -338,7 +345,7 @@ mod tests {
         let store = Store::open(&path).unwrap();
         assert_eq!(
             store.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7]
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
         );
         let session = store.session("legacy").unwrap().expect("the row survives");
         assert_eq!(
@@ -373,9 +380,57 @@ mod tests {
         let store = Store::open(&path).unwrap();
         assert_eq!(
             store.applied_migrations().unwrap(),
-            vec![1, 2, 3, 4, 5, 6, 7]
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
         );
         assert!(store.pins("session-1").unwrap().is_empty(), "pins exists");
+    }
+
+    #[test]
+    fn migration_eight_leaves_existing_sessions_active_and_keeps_their_transcripts() {
+        // Archive is a nullable column, not a copy of the row: an install that predates it keeps every
+        // conversation exactly where it was, on the active side of the tree.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grove.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .unwrap();
+            for (index, sql) in MIGRATIONS[..7].iter().enumerate() {
+                conn.execute_batch(sql).unwrap();
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+                    params![index as i64 + 1, now()],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO sessions (id, provider, cwd, title, status, created_at, updated_at)
+                 VALUES ('legacy', 'mock', 'C:/work', 'Before archive', 'idle', ?1, ?1)",
+                params![now()],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO events (session_id, at, kind, payload)
+                 VALUES ('legacy', ?1, 'status', '{\"kind\":\"status\",\"state\":\"idle\"}')",
+                params![now()],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        assert_eq!(
+            store.applied_migrations().unwrap(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
+        );
+        let session = store.session("legacy").unwrap().unwrap();
+        assert_eq!(session.archived_at, None, "existing rows stay active");
+        assert_eq!(
+            store.session_events("legacy").unwrap().len(),
+            1,
+            "the migration leaves the transcript alone"
+        );
     }
 
     #[test]

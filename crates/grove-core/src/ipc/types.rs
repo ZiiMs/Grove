@@ -56,6 +56,9 @@ pub struct Session {
     pub project_id: Option<String>,
     /// True while a permission request is waiting for the user.
     pub awaiting: bool,
+    /// When the session was archived, or `None` while it is active. Archive is a nullable column,
+    /// not a delete: the row, its transcript and its plan stay exactly where they were.
+    pub archived_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

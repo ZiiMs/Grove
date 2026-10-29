@@ -330,6 +330,7 @@ impl SessionManager {
             status: SessionState::Starting,
             project_id: project.map(|project| project.id),
             awaiting: false,
+            archived_at: None,
             created_at: at.clone(),
             updated_at: at,
         };
@@ -448,6 +449,48 @@ impl SessionManager {
         }
         self.stop(id).await;
         self.mark(id, SessionState::Exited)
+    }
+
+    /// Hide a session from the active tree without losing it.
+    ///
+    /// A running agent is stopped first through [`Self::stop`], which is the single exit path: it
+    /// publishes `Exited` and clears `awaiting`, so archiving a session with a parked permission never
+    /// leaves the "needs you" badge behind. Nothing is deleted; the transcript, plan, pins and
+    /// workers stay attached to the row.
+    pub async fn archive(&self, id: &str) -> Result<Session, SessionError> {
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        // Never hold `live.commands` across this call: `stop` takes the same lock to shut the handle
+        // down. Nothing here locks the session before asking to stop it.
+        self.stop(id).await;
+        self.store.set_session_archived(id, Some(&now()))?;
+        self.store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))
+    }
+
+    /// Put an archived session back in the active tree. The agent stays stopped; the next send (or
+    /// an explicit resume) starts it, exactly like any other stopped session.
+    pub async fn restore(&self, id: &str) -> Result<Session, SessionError> {
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        self.store.set_session_archived(id, None)?;
+        self.store
+            .session(id)?
+            .ok_or_else(|| SessionError::NotFound(id.to_string()))
+    }
+
+    /// Delete a session permanently: stop a live agent, then remove the row. `events`, `plans`,
+    /// `pins` and `subagents` cascade with it.
+    pub async fn delete(&self, id: &str) -> Result<(), SessionError> {
+        if self.store.session(id)?.is_none() {
+            return Err(SessionError::NotFound(id.to_string()));
+        }
+        self.stop(id).await;
+        self.store.delete_session(id)?;
+        Ok(())
     }
 
     /// Restart the adapter for an existing conversation: with its resume token when the adapter
@@ -1181,6 +1224,148 @@ mod tests {
             saw_exited(&mut bus),
             "the stop must publish the exited status the tree clears on"
         );
+    }
+
+    #[tokio::test]
+    async fn archiving_a_running_session_stops_it_publishes_exit_and_clears_awaiting() {
+        // Archive is a soft hide, but it still owns the process: the agent must stop before the row
+        // leaves the active tree, and a parked permission must not outlive the stop.
+        let stub = StubProvider::new();
+        let events = Arc::clone(&stub.events);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+
+        latest_sink(&events)
+            .send(SessionEvent::new(EventKind::PermissionRequest {
+                request_id: "req-1".into(),
+                title: "cargo test".into(),
+                detail: "Runs the suite".into(),
+            }))
+            .await
+            .expect("the stub accepts the request");
+        wait_until_awaiting(&manager, &session).await;
+        let mut bus = manager.subscribe();
+
+        let archived = manager.archive(&session).await.expect("archive");
+
+        assert!(
+            archived.archived_at.is_some(),
+            "the returned row carries the stamp the tree filters on"
+        );
+        assert_eq!(
+            manager.get(&session).unwrap().session.archived_at,
+            archived.archived_at
+        );
+        assert_eq!(
+            manager.get(&session).unwrap().session.status,
+            SessionState::Exited,
+            "archiving a running session stops its agent"
+        );
+        await_is_clear(&manager, &session);
+        assert!(
+            saw_exited(&mut bus),
+            "the stop must publish the exited status the tree clears on"
+        );
+        assert!(
+            matches!(
+                manager.send(&session, "still here?").await,
+                Err(SessionError::NotRunning(_))
+            ),
+            "an archived session has no live agent to send to"
+        );
+    }
+
+    #[tokio::test]
+    async fn archiving_a_stopped_session_keeps_the_transcript_and_restore_returns_it() {
+        let manager = manager();
+        let session = create(&manager).await;
+        manager
+            .send(&session, "remember the number 7")
+            .await
+            .unwrap();
+        manager.close(&session).await.unwrap();
+        let before = manager.get(&session).unwrap();
+
+        let archived = manager
+            .archive(&session)
+            .await
+            .expect("archive a stopped session");
+        assert!(archived.archived_at.is_some());
+        let hidden = manager.get(&session).unwrap();
+        assert_eq!(hidden.session.archived_at, archived.archived_at);
+        assert_eq!(
+            hidden.events, before.events,
+            "archiving never rewrites the transcript"
+        );
+
+        let restored = manager.restore(&session).await.expect("restore");
+        assert_eq!(restored.archived_at, None);
+        assert_eq!(manager.get(&session).unwrap().events, before.events);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_session_removes_it_with_every_dependent_row() {
+        let stub = StubProvider::new();
+        let events = Arc::clone(&stub.events);
+        let (manager, _contexts) = manager_with(stub);
+        let session = create(&manager).await;
+        manager
+            .send(&session, "keep this transcript")
+            .await
+            .unwrap();
+        let store = manager.store();
+        store.write_plan(&session, "# Plan\n", 0, "hash").unwrap();
+        store.add_pin(&session, "grove-architecture").unwrap();
+        store
+            .start_subagent(
+                &session,
+                "call-1",
+                "audit the store",
+                "2025-01-01T00:00:00.000Z",
+            )
+            .unwrap();
+        latest_sink(&events)
+            .send(SessionEvent::new(EventKind::PermissionRequest {
+                request_id: "req-1".into(),
+                title: "cargo test".into(),
+                detail: "Runs the suite".into(),
+            }))
+            .await
+            .expect("the stub accepts the request");
+        wait_until_awaiting(&manager, &session).await;
+        let mut bus = manager.subscribe();
+
+        manager.delete(&session).await.expect("delete");
+
+        assert!(
+            manager.get(&session).is_err(),
+            "the deleted session is gone from the store"
+        );
+        assert!(store.session(&session).unwrap().is_none());
+        assert!(store.session_events(&session).unwrap().is_empty());
+        assert!(store.plan_row(&session).unwrap().is_none());
+        assert!(store.pins(&session).unwrap().is_empty());
+        assert!(
+            saw_exited(&mut bus),
+            "delete stops a live agent before removing its row"
+        );
+    }
+
+    #[tokio::test]
+    async fn archiving_or_deleting_an_unknown_session_is_not_found() {
+        let manager = manager();
+        assert!(matches!(
+            manager.archive("missing").await,
+            Err(SessionError::NotFound(_))
+        ));
+        assert!(matches!(
+            manager.restore("missing").await,
+            Err(SessionError::NotFound(_))
+        ));
+        assert!(matches!(
+            manager.delete("missing").await,
+            Err(SessionError::NotFound(_))
+        ));
     }
 
     #[test]
