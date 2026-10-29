@@ -316,9 +316,28 @@ export function footerIndexes(items: TranscriptItem[], working: boolean): Readon
   return footers;
 }
 
+/**
+ * The path, pattern or command a tool row shows. The core prefixes file and grep titles with the
+ * tool name (`read_file src/a.ts`), which would otherwise repeat beside the name column.
+ */
+export function toolTarget(name: string, title: string): string {
+  if (name === "subagent" && title.startsWith("subagent · ")) {
+    return title.slice("subagent · ".length);
+  }
+  const prefix = `${name} `;
+  const target = title.startsWith(prefix) ? title.slice(prefix.length) : title;
+  return target === name ? "" : target;
+}
+
+/** A completed tool under a second is instant; its row shows no timer. */
+export function toolTiming(status: ToolStatus | null, durationMs: number | null): string {
+  if (status === null) return "running";
+  if (durationMs === null || durationMs < 1000) return "";
+  return durationLabel(durationMs);
+}
+
 /** A short elapsed label for a tool card or a turn. */
-export function durationLabel(ms: number | null): string {
-  if (ms === null) return "";
+export function durationLabel(ms: number | null): string {  if (ms === null) return "";
   if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
   const minutes = Math.floor(ms / 60_000);

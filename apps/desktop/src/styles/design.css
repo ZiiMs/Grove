@@ -1120,7 +1120,8 @@ dialog.provider-dialog{width:min(560px,calc(100vw - 30px));padding:0;overflow:hi
 .session .tool{margin:0;border:0;border-radius:0;background:transparent;overflow:visible}
 .session .tool-head{padding:1px 0;font-family:var(--mono);font-size:11px;color:var(--fg-3);gap:8px;border-radius:3px}
 .session .tool-head:hover{background:transparent;color:var(--fg-2)}
-.session .tool-ico{display:none}
+.session .tool-ico{display:flex;color:var(--fg-3)}
+.tool-filetype{display:flex;flex:none;margin-right:-3px}
 .session .tool-name{font-weight:400;color:var(--fg-2);font-size:11px}
 .session .tool-target{font-size:11px}
 .session .tool-time{font-size:10px}

@@ -1192,7 +1192,7 @@ describe("redesigned shell", () => {
     const nav = document.getElementById("panel-nav") as HTMLElement;
     await userEvent.click(within(nav).getByRole("button", { name: /audit the store/ }));
     expect(await screen.findByRole("heading", { name: "audit the store" })).toBeInTheDocument();
-    expect(screen.getByText("read_file crates/store.rs")).toBeInTheDocument();
+    expect(screen.getByText("crates/store.rs")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Session" }));
     expect(await screen.findByRole("heading", { name: "OAuth device flow" })).toBeInTheDocument();

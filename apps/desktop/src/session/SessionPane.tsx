@@ -39,7 +39,8 @@ import {
   PROVIDERS,
   type ProviderMeta,
 } from "../workspace/models";
-import { Icon } from "../workspace/Icon";
+import { Icon, type IconName } from "../workspace/Icon";
+import { FileTypeIcon } from "../workspace/FileTypeIcon";
 import { ProviderGlyph } from "../workspace/ProviderGlyph";
 import { modelLabel } from "../workspace/modelLabel";
 import {
@@ -55,6 +56,8 @@ import {
   durationLabel,
   foldTranscript,
   footerIndexes,
+  toolTarget,
+  toolTiming,
   type TranscriptItem,
 } from "../session/transcript";
 import { copyText } from "../shell/clipboard";
@@ -416,6 +419,29 @@ function resolveToolPath(title: string, cwd: string | null): string | null {
   return `${cwd.replace(/[\\/]+$/, "")}/${raw.replace(/\\/g, "/")}`;
 }
 
+/** The action mark for a tool row; a file-type mark sits beside the target for file tools. */
+function toolIcon(name: string): IconName {
+  switch (name) {
+    case "read_file":
+      return "file";
+    case "list_dir":
+      return "folder";
+    case "grep":
+      return "search";
+    case "write_file":
+    case "edit_file":
+      return "edit";
+    case "run_command":
+      return "terminal";
+    case "ask_user":
+      return "message";
+    case "subagent":
+      return "layers";
+    default:
+      return "terminal";
+  }
+}
+
 function openAt(event: ReactMouseEvent<HTMLElement>, items: MenuItem[]) {
   event.preventDefault();
   useMenuStore.getState().openMenu({
@@ -557,20 +583,16 @@ export function TranscriptRow({
         </div>
       );
     case "tool": {
-      const icon =
-        /read|grep|search/i.test(item.name)
-          ? "search"
-          : /write/i.test(item.name)
-            ? "file"
-            : /edit/i.test(item.name)
-              ? "edit"
-              : "terminal";
+      const target = toolTarget(item.name, item.title);
+      const fileTool =
+        item.name === "read_file" || item.name === "write_file" || item.name === "edit_file";
+      const timing = toolTiming(item.status, item.durationMs);
       return (
         <div className="turn">
           <div
             className="tool"
             data-status={item.status ?? "running"}
-            onContextMenu={(event) => openTargetMenu(event, item.title)}
+            onContextMenu={(event) => openTargetMenu(event, target)}
           >
             <button
               className="tool-head"
@@ -579,20 +601,23 @@ export function TranscriptRow({
               onClick={onToggle}
             >
               <span className="tool-ico">
-                <Icon name={icon} size="sm" />
+                <Icon name={toolIcon(item.name)} size="sm" />
               </span>
               <span className="tool-name">{item.name}</span>
-              <span className="tool-target">{item.title}</span>
-              <span className="tool-time">
-                {item.status === null ? "running" : durationLabel(item.durationMs)}
-              </span>
+              {fileTool && target ? (
+                <span className="tool-filetype">
+                  <FileTypeIcon path={target} />
+                </span>
+              ) : null}
+              <span className="tool-target">{target}</span>
+              {timing ? <span className="tool-time">{timing}</span> : null}
               <span className="chev">
                 <Icon name="chevron" size="sm" />
               </span>
             </button>
             {open ? (
               <div className="tool-body">
-                {item.title ? <span className="tool-path">{item.title}</span> : null}
+                {target ? <span className="tool-path">{target}</span> : null}
                 <pre className={item.status === "error" ? "err" : undefined}>
                   {item.summary ?? "No output recorded."}
                 </pre>

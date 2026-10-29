@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { foldTranscript, footerIndexes, durationLabel } from "./transcript";
+import {
+  durationLabel,
+  foldTranscript,
+  footerIndexes,
+  toolTarget,
+  toolTiming,
+} from "./transcript";
 
 const AT = "2025-01-01T00:00:01.000Z";
 const LATER = "2025-01-01T00:00:02.000Z";
@@ -291,5 +297,24 @@ describe("foldTranscript", () => {
     expect(durationLabel(12_400)).toBe("12s");
     expect(durationLabel(72_000)).toBe("1m 12s");
     expect(durationLabel(null)).toBe("");
+  });
+});
+
+describe("tool rows", () => {
+  it("strips the tool name the core prefixes onto a target", () => {
+    expect(toolTarget("read_file", "read_file src/App.tsx")).toBe("src/App.tsx");
+    expect(toolTarget("edit_file", "edit_file src/lib.rs")).toBe("src/lib.rs");
+    expect(toolTarget("grep", "grep useState")).toBe("useState");
+    expect(toolTarget("run_command", "Run cargo test")).toBe("Run cargo test");
+    expect(toolTarget("subagent", "subagent · review the diff")).toBe("review the diff");
+    expect(toolTarget("ask_user", "ask_user")).toBe("");
+  });
+
+  it("hides a timer on instant tools and keeps it on real work", () => {
+    expect(toolTiming(null, null)).toBe("running");
+    expect(toolTiming("ok", 0)).toBe("");
+    expect(toolTiming("ok", 999)).toBe("");
+    expect(toolTiming("ok", 1000)).toBe("1.0s");
+    expect(toolTiming("ok", 12_400)).toBe("12s");
   });
 });
