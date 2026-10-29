@@ -350,6 +350,7 @@ impl SessionManager {
             resume_token: None,
             config: config.clone(),
             context_files: assembly.docs.clone(),
+            history: Vec::new(),
         };
         self.publish_context(&session, ContextReason::Start, &assembly, None);
         if let Err(error) = self.launch(&provider, &session, context).await {
@@ -541,6 +542,7 @@ impl SessionManager {
             resume_token: None,
             config,
             context_files: assembly.docs.clone(),
+            history: Vec::new(),
         };
         if provider.capabilities().resume && token.is_some() {
             context.resume_token = token;
@@ -646,6 +648,7 @@ impl SessionManager {
             resume_token: None,
             config,
             context_files: assembly.docs,
+            history: Vec::new(),
         };
         // A provider that refuses to start leaves the row on the new provider and the session stopped:
         // the conversation is intact and can be resumed (or switched again).

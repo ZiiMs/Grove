@@ -296,6 +296,7 @@ mod tests {
                     resume_token: None,
                     config: serde_json::json!({}),
                     context_files: Vec::new(),
+                    history: Vec::new(),
                 },
                 ProviderDeps {
                     paths: crate::paths::AppPaths::new(std::env::temp_dir().join("grove-offline")),
