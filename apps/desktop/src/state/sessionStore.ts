@@ -90,6 +90,15 @@ export interface SessionStore extends SessionStoreData {
   respondPermission: (bridge: GroveBridge, requestId: string, decision: Decision) => Promise<void>;
   respondQuestion: (bridge: GroveBridge, requestId: string, answers: QuestionAnswer[]) => Promise<boolean>;
   setThinking: (bridge: GroveBridge, level: ThinkingLevel) => Promise<boolean>;
+  /**
+   * Change the active session's model in place (same provider). Returns whether the core accepted
+   * it; the transcript is untouched and the resulting detail carries the persisted model.
+   */
+  setModel: (
+    bridge: GroveBridge,
+    model: string,
+    thinking?: ThinkingLevel | null,
+  ) => Promise<boolean>;
   /** Restart a stopped session; `send` calls this automatically before the next message. */
   resume: (bridge: GroveBridge) => Promise<boolean>;
   close: (bridge: GroveBridge) => Promise<void>;
@@ -455,6 +464,31 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     try {
       const detail = await bridge.invoke("session_set_thinking", { id, level });
       set({ detail, events: detail.events });
+      return true;
+    } catch (error) {
+      set({ error: errorText(error) });
+      return false;
+    }
+  },
+
+  setModel: async (bridge, model, thinking) => {
+    const id = get().activeId;
+    if (!id) return false;
+    set({ error: null });
+    try {
+      const detail = await bridge.invoke("session_set_model", {
+        id,
+        model,
+        thinking: thinking ?? null,
+      });
+      // A hot swap does not touch the transcript, so keep the live event list rather than replacing
+      // it with the snapshot the command returned.
+      set((state) => ({
+        detail,
+        sessions: state.sessions.map((row) =>
+          row.id === id ? { ...row, model: detail.model, updatedAt: detail.updatedAt } : row,
+        ),
+      }));
       return true;
     } catch (error) {
       set({ error: errorText(error) });

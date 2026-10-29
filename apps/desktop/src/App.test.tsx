@@ -448,6 +448,54 @@ describe("redesigned shell", () => {
     );
   });
 
+  it("hot-swaps a same-provider model without relaunching the agent", async () => {
+    const bridge = await readyOnAnthropic();
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /Opus 4.1/ }));
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_set_model"));
+    expect(bridge.invocations).not.toContain("session_switch_provider");
+    expect(bridge.calls.find((call) => call.command === "session_set_model")?.args).toEqual({
+      id: "session-1",
+      model: "claude-opus-4-1",
+      thinking: null,
+    });
+    expect(await screen.findByText("Session now runs on Anthropic · Opus 4.1")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Model for this session" })).toHaveTextContent(
+        "Opus 4.1",
+      ),
+    );
+    expect(JSON.parse(localStorage.getItem("grove.recentModels") ?? "[]")[0]).toBe(
+      "claude-opus-4-1",
+    );
+  });
+
+  it("clamps the thinking level when the new model has a different ladder", async () => {
+    const bridge = renderApp({
+      providers: PROVIDER_ROSTER,
+      providerStatuses: FAKE_PROVIDER_ROSTER,
+      sessions: [fakeSummary(anthropicSession, events.length)],
+      details: { [anthropicSession.id]: anthropicDetail },
+      modelThinking: { anthropic: { "claude-opus-4-1": ["low", "medium"] } },
+    });
+    await screen.findByRole("heading", { name: "OAuth device flow" });
+    await userEvent.click(modelTrigger());
+    await userEvent.click(screen.getByRole("option", { name: /Opus 4.1/ }));
+
+    await waitFor(() => expect(bridge.invocations).toContain("session_set_model"));
+    expect(bridge.calls.find((call) => call.command === "session_set_model")?.args).toEqual({
+      id: "session-1",
+      model: "claude-opus-4-1",
+      thinking: "low",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Thinking level for this session" })).toHaveTextContent(
+        "Low",
+      ),
+    );
+  });
+
   it("switches provider through the existing path, remembers the choice and toasts the label", async () => {
     const bridge = await readyOnAnthropic();
     await userEvent.click(modelTrigger());

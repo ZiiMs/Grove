@@ -38,6 +38,14 @@ export interface SessionsCommands {
   };
   /** Change the reasoning level for the next turn; returns the refreshed session detail. */
   session_set_thinking: { args: { id: string; level: ThinkingLevel }; result: SessionDetail };
+  /**
+   * Change the model for the next turn in place. `thinking` is the nearest level the new model
+   * supports, or `null` when the capability map has not loaded; the pair is persisted together.
+   */
+  session_set_model: {
+    args: { id: string; model: string; thinking: ThinkingLevel | null };
+    result: SessionDetail;
+  };
   session_close: { args: { id: string }; result: null };
   session_resume: { args: { id: string }; result: Session };
 }

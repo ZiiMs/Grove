@@ -97,6 +97,19 @@ pub async fn session_set_thinking(
     Ok(state.core.sessions.set_thinking(&id, level).await?)
 }
 
+/// Change the model for the next turn. A same-provider change is a hot swap: the agent keeps its
+/// process and conversation, and only the next request names the new model. The optional level is the
+/// nearest one the new model supports, so the pair changes together.
+#[tauri::command]
+pub async fn session_set_model(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    model: String,
+    thinking: Option<ThinkingLevel>,
+) -> IpcResult<SessionDetail> {
+    Ok(state.core.sessions.set_model(&id, &model, thinking).await?)
+}
+
 #[tauri::command]
 pub async fn session_close(state: tauri::State<'_, AppState>, id: String) -> IpcResult<()> {
     Ok(state.core.sessions.close(&id).await?)
