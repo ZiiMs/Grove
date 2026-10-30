@@ -1,0 +1,87 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Install workspace
+        run: npm ci
+
+      - name: Version surfaces agree
+        run: bun run release:check
+
+      - name: Release script tests
+        run: bun run test:scripts
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun run test
+
+      - name: Webview build and bundle guard
+        run: bun run build
+
+      - name: Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Rust lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Core tests
+        run: cargo nextest run -p grove-core
+
+      - name: Core doctests
+        run: cargo test -p grove-core --doc
+
+      - name: Desktop shell check
+        run: cargo check -p grove-desktop
+
+  release:
+    name: Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: checks
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

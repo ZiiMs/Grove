@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 /** Shell-only state: which pane is visible, which context tab is open, and which dialog is up. */
 export type ContextTab = "git" | "plan" | "spec";
-export type SettingsTab = "general" | "theme" | "skills" | "providers" | "mcp";
+export type SettingsTab = "general" | "theme" | "skills" | "providers" | "mcp" | "about";
 export type PaneView = "nav" | "session" | "context";
 
 export interface NewSessionTarget {

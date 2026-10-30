@@ -522,10 +522,12 @@ initials. The live list from `provider_models` overrides the fallback once a pro
 - **TS:** `vitest` + `@testing-library/react` against a `FakeBridge` implementing the same typed bridge
   the app uses. `apps/desktop/tools/visual.test.tsx` (not in `npm test`) renders the built shell into
   `dist/visual-*.html` for screenshot comparison across the viewport matrix.
-- **No CI.** The gates are `npm ci`, `npm run typecheck`, `npm test`, `npm run build` (which ends with
-  the bundle guard), `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
-  warnings`, `cargo test -p grove-core` and `cargo check -p grove-desktop`. Nothing runs them
-  automatically, so the change that lands is responsible for having run them.
+- **CI.** `.github/workflows/ci.yml` runs the gates on Windows for every pull request and push to
+  main: `npm ci`, `bun run release:check`, `bun run test:scripts`, `bun run typecheck`, `bun run test`,
+  `bun run build` (which ends with the bundle guard), `cargo fmt --all -- --check`, `cargo clippy
+  --workspace --all-targets -- -D warnings`, `cargo nextest run -p grove-core`, the core doctests and
+  `cargo check -p grove-desktop`. `.github/workflows/release.yml` turns every main push into a
+  versioned, signed release; see `docs/release.md`.
 - **Not automatable here:** launching the GUI and observing webview paint. `cargo check` + `vite build`
   are the gate; a human smoke run is listed in the README.
 

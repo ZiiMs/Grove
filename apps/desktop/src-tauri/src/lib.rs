@@ -16,6 +16,8 @@ pub fn run() {
         .try_init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let paths = AppPaths::new(data_dir);

@@ -1,9 +1,12 @@
 {
   "name": "grove",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "One desktop home for every AI coding harness",
-  "workspaces": ["apps/desktop", "packages/contract"],
+  "workspaces": [
+    "apps/desktop",
+    "packages/contract"
+  ],
   "scripts": {
     "dev": "bun run --cwd apps/desktop tauri dev",
     "dev:web": "bun run --cwd apps/desktop dev",
@@ -12,6 +15,10 @@
     "typecheck": "bun run --workspaces --if-present typecheck",
     "check:rust": "node scripts/check-rust.mjs",
     "test": "bun run --workspaces --if-present test",
+    "test:scripts": "bun test scripts/release.test.mjs",
+    "release:check": "bun scripts/release.mjs --check",
+    "release:dry": "bun scripts/release.mjs --dry-run",
+    "release:apply": "bun scripts/release.mjs --apply",
     "tauri": "bun run --cwd apps/desktop tauri"
   },
   "devDependencies": {

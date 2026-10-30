@@ -18,8 +18,8 @@ First build, feature-complete and hardened. All fifteen tickets in `.scratch/gro
 `done`; the dependency graph is in `.scratch/grove/spec.md`. The redesigned shell from
 `design-reference/` is now the production UI: a project tree, an always-mounted conversation, a Git ·
 Plan · Spec context column, and a settings sheet with seven themes. The decision record is
-`docs/adr/0002-workspace-projects-and-the-redesigned-shell.md`. The gates below are run locally —
-there is no CI — and the manual smoke checklist is the part no test can paint for you.
+`docs/adr/0002-workspace-projects-and-the-redesigned-shell.md`. The gates below run in CI on every
+pull request and push to main, and the manual smoke checklist is the part no test can paint for you.
 
 ## Prerequisites
 
@@ -120,9 +120,30 @@ the full gates above still use sccache.
 
 `bun run build` ends with `scripts/check-bundle.mjs`: it fails if Monaco reappears in the entry
 chunk or the entry chunk exceeds its size budget.
-There is no CI. Run these gates yourself before landing a change, in this order: install,
-typecheck, vitest, build (with the bundle guard), rustfmt `--check`, clippy with `-D warnings`,
-`cargo nextest run -p grove-core`, and `cargo check -p grove-desktop`.
+
+CI runs the same gates on Windows for every pull request and every push to main (`.github/workflows/ci.yml`).
+You can still run them yourself before opening a PR, in this order: install, typecheck, vitest, build
+(with the bundle guard), rustfmt `--check`, clippy with `-D warnings`, `cargo nextest run -p grove-core`,
+and `cargo check -p grove-desktop`.
+
+### Releases and updates
+
+Every push to main is a release, after CI passes. `.github/workflows/release.yml` reads the
+conventional commits since the last `v*` tag, bumps the version, writes `CHANGELOG.md`, commits and
+tags, builds a signed NSIS installer, and publishes a GitHub Release with the installer, `latest.json`
+and `SHA256SUMS`. The version lives in five places plus both lockfiles; `bun run release:check` proves
+they agree.
+
+The updater is wired now: Settings → About checks the latest release, shows its notes, verifies the
+minisign signature, installs and restarts. The signing key is set up once; see
+[docs/release.md](docs/release.md) for the pipeline, the key backup and the updater endpoint.
+
+To see what the next release would contain without changing anything:
+
+```sh
+bun run release:dry
+```
+
 
 The cross-cutting Rust suites that pin the release promise:
 

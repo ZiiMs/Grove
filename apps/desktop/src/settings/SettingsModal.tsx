@@ -10,6 +10,7 @@ import { ProvidersPane } from "./ProvidersPane";
 import { McpPane } from "./McpPane";
 import { SkillsPane } from "./SkillsPane";
 import { ThemePane } from "./ThemePane";
+import { AboutPane } from "./AboutPane";
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "General" },
@@ -17,6 +18,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: "skills", label: "Skills" },
   { id: "providers", label: "Providers" },
   { id: "mcp", label: "MCP" },
+  { id: "about", label: "About" },
 ];
 
 /** The near-fullscreen settings sheet: defaults, themes, catalog, providers and MCP. */
@@ -95,6 +97,11 @@ export function SettingsModal() {
             {tab === "mcp" ? (
               <section className="sm-pane" id="sm-mcp" role="tabpanel" aria-label="MCP servers">
                 <McpPane />
+              </section>
+            ) : null}
+            {tab === "about" ? (
+              <section className="sm-pane" id="sm-about" role="tabpanel" aria-label="About">
+                <AboutPane />
               </section>
             ) : null}
           </div>
