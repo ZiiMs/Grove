@@ -7,6 +7,7 @@ entries are generated from conventional commits by `scripts/release.mjs`.
 
 ### Added
 
+- **release:** add CI, automatic main releases, and signed updater artifacts
 - **app:** use the mint robot garden as the app icon
 - **app:** add the three-flower mark as app and tray icons
 - **worktree:** name worktrees independently of session titles
@@ -94,6 +95,8 @@ entries are generated from conventional commits by `scripts/release.mjs`.
 
 ### Fixed
 
+- **gitops:** compare worktree paths after canonicalizing
+- **core:** sort directory names with sort_by_key
 - **session:** close archive, worker, and model-switch races
 - **shell:** keep the session info floating below the header
 - **window:** allow dragging the custom titlebar
@@ -131,6 +134,7 @@ entries are generated from conventional commits by `scripts/release.mjs`.
 
 ### Other
 
+- **core:** resolve project test paths like the app does
 - **store:** prove an archived session survives a reopen
 - **build:** run the JS toolchain under bun
 - **contract:** populate the shared subagent summary fixture
