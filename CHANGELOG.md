@@ -3,6 +3,12 @@
 All notable changes to Grove are recorded here. Versions follow SemVer and
 entries are generated from conventional commits by `scripts/release.mjs`.
 
+## v0.3.2 — 2026-10-30
+
+### Fixed
+
+- **git:** stop console windows and one git process per untracked file
+
 ## v0.3.1 — 2026-10-30
 
 ### Changed

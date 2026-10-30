@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/grove-core", "apps/desktop/src-tauri"]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 license = "MIT"
 authors = ["Grove contributors"]
