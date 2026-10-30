@@ -619,7 +619,16 @@ fn normalize_remote(raw: &str) -> Option<String> {
 }
 
 fn same_path(left: &str, right: &str) -> bool {
-    let normalise = |value: &str| value.replace('\\', "/").trim_end_matches('/').to_string();
+    // Windows may hand back the 8.3 form (`RUNNER~1`) for a path git reports in long form. Resolve
+    // both sides first; a path that does not exist falls back to its literal spelling.
+    let normalise = |value: &str| {
+        std::fs::canonicalize(value)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| value.to_string())
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_string()
+    };
     let (left, right) = (normalise(left), normalise(right));
     if cfg!(windows) {
         left.eq_ignore_ascii_case(&right)
@@ -631,6 +640,16 @@ fn same_path(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_path_accepts_canonical_and_display_forms() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let canonical = std::fs::canonicalize(dir.path()).expect("canonical path");
+        assert!(same_path(
+            &display_path(dir.path()),
+            &display_path(&canonical)
+        ));
+    }
 
     #[test]
     fn branch_header_handles_upstreams_empty_repos_and_detached_head() {
