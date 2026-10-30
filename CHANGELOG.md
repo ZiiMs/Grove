@@ -3,6 +3,16 @@
 All notable changes to Grove are recorded here. Versions follow SemVer and
 entries are generated from conventional commits by `scripts/release.mjs`.
 
+## v0.3.1 — 2026-10-30
+
+### Changed
+
+- **updates:** clarify the manual update prompt
+
+### Fixed
+
+- **release:** use a config file for updater artifacts and resume unpublished tags
+
 ## v0.3.0 — 2026-10-30
 
 ### Added
