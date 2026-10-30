@@ -4,7 +4,8 @@ use grove_core::gitops::Git;
 use grove_core::ipc::{FsRootKind, Session};
 use grove_core::paths::display_path;
 use grove_core::projects::{
-    create_dir, list_dirs, list_roots, normalize_path, AddProjectRequest, ProjectService,
+    create_dir, list_dirs, list_roots, normalize_path, resolve_folder, AddProjectRequest,
+    ProjectService,
 };
 use grove_core::sessions::event::SessionState;
 use grove_core::store::Store;
@@ -114,12 +115,13 @@ fn a_plain_folder_is_added_without_git_facts_and_duplicates_are_refused() {
 #[test]
 fn an_existing_session_in_the_project_is_linked() {
     let dir = repo();
+    let path = resolve_folder(Some(dir.path().to_str().expect("utf-8"))).expect("canonical path");
     let (projects, store) = service();
     store
-        .insert_session(&session("session-1", dir.path()), &serde_json::json!({}))
+        .insert_session(&session("session-1", &path), &serde_json::json!({}))
         .expect("insert");
 
-    let project = projects.add(request(dir.path())).expect("add");
+    let project = projects.add(request(&path)).expect("add");
     let row = store.session("session-1").expect("read").expect("present");
     assert_eq!(row.project_id.as_deref(), Some(project.id.as_str()));
 }
@@ -227,7 +229,9 @@ fn roots_are_platform_shaped_and_always_include_home() {
 #[test]
 fn create_dir_adds_one_folder_and_refuses_bad_names() {
     let root = tempfile::tempdir().expect("temp dir");
-    let parent = display_path(root.path());
+    let parent = display_path(
+        &resolve_folder(Some(root.path().to_str().expect("utf-8"))).expect("canonical path"),
+    );
 
     let entry = create_dir(&parent, "  new-project  ").expect("create");
     assert_eq!(entry.name, "new-project");
