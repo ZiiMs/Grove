@@ -85,13 +85,14 @@ users through a release signed with the old key. Keep the old key until that rel
 then switch `pubkey` and the secrets.
 
 **Local builds** do not need the key: `createUpdaterArtifacts` is turned on only by the release
-workflow's `--config` override. `bun run tauri build` still produces an unsigned installer locally.
+workflow's `apps/desktop/src-tauri/tauri.release.conf.json` override. `bun run tauri build` still
+produces an unsigned installer locally.
 
 ## Failure recovery
 
 - **Tag pushed, publish failed.** Re-run the CI workflow (or dispatch the release workflow manually).
-  The script sees the tag, finds no GitHub release, and resumes from the tagged commit instead of
-  bumping again.
+  The script sees the newest tag has no GitHub release and builds that tagged commit instead of
+  bumping past it.
 - **Push raced with a merge.** The script retries the atomic push up to five times.
 - **Bad release.** Prefer a new patch release over deleting a tag; clients may already have seen the
   manifest. If you must delete, remove the GitHub release and tag together, then run the workflow

@@ -405,7 +405,8 @@ function writeReleaseFiles(plan, notes) {
   if (process.env.GITHUB_OUTPUT) {
     appendFileSync(
       process.env.GITHUB_OUTPUT,
-      `skip=${plan.skip}\nversion=${plan.version}\ntag=${plan.tag}\n`,
+      `skip=${plan.skip}\nversion=${plan.version}\ntag=${plan.tag}\n` +
+        `resume=${plan.resume === true}\n`,
     );
   }
 }
@@ -424,6 +425,31 @@ async function commitRelease() {
   for (let attempt = 1; attempt <= 5; attempt++) {
     git(["fetch", "origin", "main"]);
     git(["checkout", "-B", "release-work", "origin/main"]);
+
+    // A previous run may have pushed its tag and then failed before publishing. Finish that
+    // release from the tagged commit instead of bumping past it and leaving the tag empty.
+    const pending = lastTag();
+    if (pending && !releaseExists(pending)) {
+      git(["checkout", "--detach", pending]);
+      // The tag predates the build-config file when the publish step failed on its first run.
+      // It is build-only, so write it into the checkout rather than moving the tag.
+      writeFileSync(
+        join(ROOT, "apps/desktop/src-tauri/tauri.release.conf.json"),
+        `${JSON.stringify({ bundle: { createUpdaterArtifacts: true } }, null, 2)}\n`,
+      );
+      const version = pending.replace(/^v/, "");
+      const plan = {
+        skip: false,
+        resume: true,
+        version,
+        tag: pending,
+        previousTag: pending,
+        commits: [],
+      };
+      writeReleaseFiles(plan, readChangelogSection(version));
+      console.log(`Resuming ${pending}: the tag exists but the release does not.`);
+      return plan;
+    }
 
     const plan = planRelease();
     if (plan.skip) {
