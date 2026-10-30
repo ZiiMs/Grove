@@ -15,7 +15,7 @@ type Status =
 function statusText(status: Status): string {
   switch (status.kind) {
     case "idle":
-      return "No check yet. Nothing is downloaded until you choose to install.";
+      return "Check for a signed release. Nothing is downloaded until you choose to install.";
     case "checking":
       return "Asking GitHub for the latest release…";
     case "current":
