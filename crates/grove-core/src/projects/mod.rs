@@ -256,7 +256,7 @@ pub fn list_dirs(requested: Option<&str>) -> ProjectResult<DirListing> {
             path: display_path(&candidate),
         });
     }
-    dirs.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    dirs.sort_by_key(|left| left.name.to_lowercase());
 
     let parent = folder
         .parent()
