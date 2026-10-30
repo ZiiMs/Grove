@@ -19,6 +19,10 @@ export const gitFileStatusSchema = z.object({
   worktree: z.string(),
   staged: z.boolean(),
   untracked: z.boolean(),
+  /** Lines added; a whole untracked file counts as added. */
+  added: z.number().int().nonnegative(),
+  /** Lines removed; always `0` for an untracked file. */
+  removed: z.number().int().nonnegative(),
 });
 export type GitFileStatus = z.infer<typeof gitFileStatusSchema>;
 

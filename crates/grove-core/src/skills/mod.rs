@@ -330,12 +330,7 @@ fn gh_auth_token() -> Option<String> {
         .args(["auth", "token"])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::process::hide_console(&mut command);
     let output = command.output().ok()?;
     if !output.status.success() {
         return None;

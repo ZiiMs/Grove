@@ -34,8 +34,9 @@ impl Git {
             return Err(git_failure("status", &output));
         }
         let (raw, truncated) = bound_status(&output.stdout);
-        let (branch, files) = parse_status(&raw);
+        let (branch, mut files) = parse_status(&raw);
         let head = self.head(&root)?;
+        self.attach_line_stats(&root, head.is_some(), &mut files)?;
         Ok(GitStatus {
             repo_root: display_path(&root),
             branch,
@@ -479,6 +480,9 @@ fn parse_status(raw: &str) -> (Option<String>, Vec<GitStatusFile>) {
             untracked: index == "?" && worktree == "?",
             index,
             worktree,
+            // Filled from one numstat read plus the untracked file read; see `stats.rs`.
+            added: 0,
+            removed: 0,
         });
     }
     (branch, files)

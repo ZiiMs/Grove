@@ -14,6 +14,46 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
 }
 
+/// Every console child is spawned with [`grove_core::process::hide_console`].
+///
+/// The release build is a GUI executable with no console, so a missing call does not fail a test on
+/// this machine: it shows up as a terminal window flashing open, once per `git` call. `explorer.exe`
+/// is a GUI program and has no console window to hide.
+#[test]
+fn console_children_are_spawned_without_a_window() {
+    const WINDOWLESS_PROGRAMS: &[&str] = &["src/reveal.rs"];
+    let mut offenders = Vec::new();
+    let mut pending = vec![core_root().join("src")];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read src") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(core_root())
+                .expect("path under the crate")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if WINDOWLESS_PROGRAMS.contains(&relative.as_str()) {
+                continue;
+            }
+            let source = read(&path);
+            if source.contains("Command::new") && !source.contains("hide_console") {
+                offenders.push(relative);
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "these spawn a console child without hide_console, so a release build flashes a terminal window: {offenders:?}"
+    );
+}
+
 #[test]
 fn core_does_not_depend_on_tauri() {
     let manifest = read(&core_root().join("Cargo.toml"));

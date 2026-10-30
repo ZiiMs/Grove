@@ -158,7 +158,7 @@ function seed() {
       clean: false,
       truncated: false,
       files: [
-        { path: "apps/desktop/src/session.rs", from: null, index: "M", worktree: " ", staged: true, untracked: false },
+        { path: "apps/desktop/src/session.rs", from: null, index: "M", worktree: " ", staged: true, untracked: false, added: 2, removed: 1 },
       ],
     },
     installs: [],

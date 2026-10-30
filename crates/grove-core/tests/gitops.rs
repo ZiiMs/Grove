@@ -189,6 +189,11 @@ fn status_reports_clean_dirty_staged_untracked_and_the_current_branch() {
         (" ", "M")
     );
     assert!(!tracked.staged && !tracked.untracked);
+    assert_eq!(
+        (tracked.added, tracked.removed),
+        (1, 0),
+        "the line counts come from one numstat read"
+    );
     assert!(!status.clean);
 
     repo.write("staged.txt", "new\n");
@@ -206,6 +211,11 @@ fn status_reports_clean_dirty_staged_untracked_and_the_current_branch() {
     let untracked = find_file(&status, "untracked.txt");
     assert!(untracked.untracked);
     assert!(!untracked.staged);
+    assert_eq!(
+        (untracked.added, untracked.removed),
+        (1, 0),
+        "an untracked file is all added, counted without a process"
+    );
 
     repo.git(&["checkout", "--quiet", "-b", "feature/x"]);
     let status = git.status(Some(repo.path())).expect("branch status");
@@ -218,11 +228,56 @@ fn status_reports_a_rename_with_its_previous_path() {
     repo.write("old.txt", "stable\n");
     repo.commit_all("init");
     repo.git(&["mv", "old.txt", "new.txt"]);
+    repo.write("new.txt", "stable\nmore\n");
 
     let status = Git::system().status(Some(repo.path())).expect("status");
     let renamed = find_file(&status, "new.txt");
     assert_eq!(renamed.from.as_deref(), Some("old.txt"));
     assert_eq!(renamed.index, "R");
+    assert_eq!(
+        (renamed.added, renamed.removed),
+        (1, 0),
+        "a rename's counts belong to its new path"
+    );
+}
+
+/// The regression this guards: the changes list used to ask for one diff per untracked file, so a
+/// dirty tree cost a process per file. Counts now come from one status read plus one numstat read.
+#[test]
+fn status_does_not_fan_out_one_process_per_untracked_file() {
+    let repo = Repo::new();
+    repo.write("tracked.txt", "one\n");
+    repo.commit_all("init");
+    repo.write("tracked.txt", "one\ntwo\n");
+    for index in 0..20 {
+        repo.write(&format!("loose/{index}.txt"), "a\nb\n");
+    }
+
+    let runner = Arc::new(RecordingRunner::new());
+    let git = Git::with_runner(runner.clone());
+    // The first read resolves and remembers the repository root; the measured one reuses it.
+    let _ = git.status(Some(repo.path())).expect("warm status");
+    let before = runner.specs().len();
+    let status = git.status(Some(repo.path())).expect("status");
+    let used = runner.specs().len() - before;
+
+    assert_eq!(status.files.len(), 21);
+    assert_eq!(
+        (
+            find_file(&status, "loose/0.txt").added,
+            find_file(&status, "loose/0.txt").removed
+        ),
+        (2, 0)
+    );
+    assert_eq!(
+        used,
+        3,
+        "status, HEAD and one numstat read: {:?}",
+        runner.specs()[before..]
+            .iter()
+            .map(|spec| spec.args.join(" "))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

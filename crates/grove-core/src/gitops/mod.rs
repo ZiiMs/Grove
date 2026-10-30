@@ -14,6 +14,7 @@
 mod diff;
 mod pr;
 mod repo;
+mod stats;
 mod types;
 
 pub use types::{
@@ -21,10 +22,11 @@ pub use types::{
     GitWorktree, PrRequest, PrResult,
 };
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::ipc::{IpcError, IpcResult};
 
@@ -74,6 +76,8 @@ pub struct SystemCommandRunner;
 impl CommandRunner for SystemCommandRunner {
     fn run(&self, spec: &CommandSpec) -> IpcResult<CommandOutput> {
         let mut command = Command::new(&spec.program);
+        // A release build has no console to inherit; without this every git call flashes a window.
+        crate::process::hide_console(&mut command);
         command.args(&spec.args);
         if let Some(cwd) = &spec.cwd {
             command.current_dir(cwd);
@@ -105,12 +109,17 @@ impl CommandRunner for SystemCommandRunner {
     }
 }
 
+/// Repository roots remembered per starting path. A session's cwd does not move, and resolving it
+/// costs a process every time; the bound keeps a long-running app from growing the map forever.
+const MAX_CACHED_ROOTS: usize = 64;
+
 /// The gitops service. Cheap to clone: the runner is shared and the program names are strings.
 #[derive(Clone)]
 pub struct Git {
     runner: Arc<dyn CommandRunner>,
     git_bin: String,
     gh_bin: String,
+    roots: Arc<Mutex<HashMap<PathBuf, PathBuf>>>,
 }
 
 impl fmt::Debug for Git {
@@ -142,6 +151,7 @@ impl Git {
             runner,
             git_bin: git_bin.into(),
             gh_bin: gh_bin.into(),
+            roots: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -162,12 +172,18 @@ impl Git {
 
     /// Resolve the repository root for a requested path (or the process cwd), so every later command
     /// runs with the root as its working directory and cannot wander outside it.
+    ///
+    /// A successful answer is remembered per starting path: the webview asks for several reads of the
+    /// same checkout, and each one would otherwise pay a process just to learn where its cwd is.
     fn discover(&self, repo: Option<&Path>) -> IpcResult<PathBuf> {
         let start = match repo {
             Some(path) => path.to_path_buf(),
             None => std::env::current_dir()
                 .map_err(|err| IpcError::io(format!("cannot read the current directory: {err}")))?,
         };
+        if let Some(root) = self.remembered_root(&start) {
+            return Ok(root);
+        }
         let output = self.run(&start, &["rev-parse", "--show-toplevel"])?;
         if !output.success() {
             let detail = output.stderr_tail();
@@ -185,7 +201,28 @@ impl Git {
                 start.display()
             )));
         }
-        Ok(PathBuf::from(root))
+        let root = PathBuf::from(root);
+        self.remember_root(start, root.clone());
+        Ok(root)
+    }
+
+    fn remembered_root(&self, start: &Path) -> Option<PathBuf> {
+        self.roots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(start)
+            .cloned()
+    }
+
+    fn remember_root(&self, start: PathBuf, root: PathBuf) {
+        let mut roots = self
+            .roots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if roots.len() >= MAX_CACHED_ROOTS && !roots.contains_key(&start) {
+            roots.clear();
+        }
+        roots.insert(start, root);
     }
 }
 

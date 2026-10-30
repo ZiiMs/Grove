@@ -200,6 +200,8 @@ fn sample_git_status() -> GitStatus {
                 worktree: " ".into(),
                 staged: true,
                 untracked: false,
+                added: 12,
+                removed: 3,
             },
             GitStatusFile {
                 path: "docs/notes.md".into(),
@@ -208,6 +210,8 @@ fn sample_git_status() -> GitStatus {
                 worktree: "M".into(),
                 staged: false,
                 untracked: false,
+                added: 4,
+                removed: 1,
             },
             GitStatusFile {
                 path: "src/renamed.ts".into(),
@@ -216,6 +220,8 @@ fn sample_git_status() -> GitStatus {
                 worktree: " ".into(),
                 staged: true,
                 untracked: false,
+                added: 0,
+                removed: 0,
             },
             GitStatusFile {
                 path: "scratch.txt".into(),
@@ -224,6 +230,8 @@ fn sample_git_status() -> GitStatus {
                 worktree: "?".into(),
                 staged: false,
                 untracked: true,
+                added: 7,
+                removed: 0,
             },
         ],
     }

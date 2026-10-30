@@ -106,7 +106,10 @@ async fn stdio_probe(server: &McpServerView, timeout: Duration) -> ServerProbe {
 }
 
 fn spawn(command: &str, args: &[String]) -> Result<Child, String> {
-    Command::new(command)
+    let mut spawned = Command::new(command);
+    // MCP servers speak over stdio; a console window would be a flash of noise on Windows.
+    crate::process::hide_console_async(&mut spawned);
+    spawned
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

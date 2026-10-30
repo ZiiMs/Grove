@@ -573,6 +573,8 @@ async fn run_command(cwd: &Path, input: &serde_json::Value) -> ToolOutcome {
         builder.arg("-c").arg(&command);
         builder
     };
+    // The command's output is piped; it must never pop a console window of its own.
+    crate::process::hide_console_async(&mut builder);
     builder
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())

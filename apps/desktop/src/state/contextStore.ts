@@ -11,7 +11,7 @@ import type {
 import { create } from "zustand";
 import type { GroveBridge } from "../ipc/bridge";
 import { errorText } from "../ipc/errors";
-import { statsFromPatch, totalStats, type FileStat } from "../workspace/gitStats";
+import { statsFromFiles, type FileStat } from "../workspace/gitStats";
 
 /**
  * The context panel's data: the active checkout's git status, the session's plan and the project's
@@ -53,39 +53,22 @@ interface ContextState {
 }
 
 /**
- * Per-file counts for the whole checkout. `git diff` omits untracked files, so those are asked for
- * one at a time; the result is what the titlebar chip and the changes list read.
+ * The status read carries its own line counts, so the panel never asks git per file.
+ *
+ * `git_status` runs on the backend as one status read plus one numstat read; a dirty tree with
+ * hundreds of untracked files used to cost a process each.
  */
-async function computeStats(
-  bridge: GroveBridge,
-  path: string,
-  files: GitStatus["files"],
-): Promise<{ fileStats: Record<string, FileStat>; gitStats: FileStat | null }> {
-  if (files.length === 0) return { fileStats: {}, gitStats: null };
-  try {
-    const diff = await bridge.invoke("git_diff", { repoPath: path });
-    const parsed = statsFromPatch(diff.patch);
-    const fileStats: Record<string, FileStat> = {};
-    for (const file of files) fileStats[file.path] = parsed[file.path] ?? { added: 0, removed: 0 };
-    const untracked = files.filter((file) => file.untracked);
-    const extra = await Promise.all(
-      untracked.map(async (file) => {
-        try {
-          const fileDiff = await bridge.invoke("git_diff", { repoPath: path, path: file.path });
-          return [file.path, statsFromPatch(fileDiff.patch)[file.path] ?? { added: 0, removed: 0 }] as const;
-        } catch {
-          return [file.path, { added: 0, removed: 0 }] as const;
-        }
-      }),
-    );
-    for (const [filePath, stat] of extra) fileStats[filePath] = stat;
-    return { fileStats, gitStats: totalStats(fileStats) };
-  } catch {
-    const fileStats: Record<string, FileStat> = {};
-    for (const file of files) fileStats[file.path] = { added: 0, removed: 0 };
-    return { fileStats, gitStats: { added: 0, removed: 0 } };
-  }
+function statsOf(git: GitStatus): { fileStats: Record<string, FileStat>; gitStats: FileStat | null } {
+  if (git.files.length === 0) return { fileStats: {}, gitStats: null };
+  const { fileStats, total } = statsFromFiles(git.files);
+  return { fileStats, gitStats: total };
 }
+
+/**
+ * The refresh already running for a path, so the context panel and the app shell asking for the same
+ * checkout at the same moment share one read instead of racing two.
+ */
+let inFlight: { path: string; promise: Promise<void> } | null = null;
 
 export const useContextStore = create<ContextState>((set, get) => ({
   activeSessionId: null,
@@ -128,17 +111,25 @@ export const useContextStore = create<ContextState>((set, get) => ({
       set({ git: null, gitStats: null, fileStats: {}, gitError: null, gitLoading: false });
       return;
     }
-    set({ gitLoading: true });
+    if (inFlight?.path === path) return inFlight.promise;
+    const promise = (async () => {
+      set({ gitLoading: true });
+      try {
+        const git = await bridge.invoke("git_status", { repoPath: path });
+        if (get().activePath === path) {
+          set({ git, ...statsOf(git), gitError: null, gitLoading: false });
+        }
+      } catch (error) {
+        if (get().activePath === path) {
+          set({ git: null, gitStats: null, fileStats: {}, gitError: errorText(error), gitLoading: false });
+        }
+      }
+    })();
+    inFlight = { path, promise };
     try {
-      const git = await bridge.invoke("git_status", { repoPath: path });
-      const stats = await computeStats(bridge, path, git.files);
-      if (get().activePath === path) {
-        set({ git, ...stats, gitError: null, gitLoading: false });
-      }
-    } catch (error) {
-      if (get().activePath === path) {
-        set({ git: null, gitStats: null, fileStats: {}, gitError: errorText(error), gitLoading: false });
-      }
+      await promise;
+    } finally {
+      if (inFlight?.path === path) inFlight = null;
     }
   },
 
@@ -182,8 +173,7 @@ export const useContextStore = create<ContextState>((set, get) => ({
     if (!path || paths.length === 0) return null;
     try {
       const git = await bridge.invoke("git_stage", { repoPath: path, paths, staged });
-      const stats = await computeStats(bridge, path, git.files);
-      if (get().activePath === path) set({ git, ...stats, gitError: null });
+      if (get().activePath === path) set({ git, ...statsOf(git), gitError: null });
       return git;
     } catch (error) {
       set({ gitError: errorText(error) });
@@ -196,8 +186,7 @@ export const useContextStore = create<ContextState>((set, get) => ({
     if (!path) return null;
     try {
       const git = await bridge.invoke("git_commit", { repoPath: path, message, paths });
-      const stats = await computeStats(bridge, path, git.files);
-      if (get().activePath === path) set({ git, ...stats, gitError: null });
+      if (get().activePath === path) set({ git, ...statsOf(git), gitError: null });
       return git;
     } catch (error) {
       set({ gitError: errorText(error) });

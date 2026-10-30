@@ -11,7 +11,9 @@
       "index": "M",
       "worktree": " ",
       "staged": true,
-      "untracked": false
+      "untracked": false,
+      "added": 12,
+      "removed": 3
     },
     {
       "path": "docs/notes.md",
@@ -19,7 +21,9 @@
       "index": " ",
       "worktree": "M",
       "staged": false,
-      "untracked": false
+      "untracked": false,
+      "added": 4,
+      "removed": 1
     },
     {
       "path": "src/renamed.ts",
@@ -27,7 +31,9 @@
       "index": "R",
       "worktree": " ",
       "staged": true,
-      "untracked": false
+      "untracked": false,
+      "added": 0,
+      "removed": 0
     },
     {
       "path": "scratch.txt",
@@ -35,7 +41,9 @@
       "index": "?",
       "worktree": "?",
       "staged": false,
-      "untracked": true
+      "untracked": true,
+      "added": 7,
+      "removed": 0
     }
   ]
 }

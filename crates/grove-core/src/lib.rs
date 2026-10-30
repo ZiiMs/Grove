@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod mcp;
 pub mod paths;
 pub mod plan;
+mod process;
 pub mod projects;
 pub mod providers;
 pub mod reveal;

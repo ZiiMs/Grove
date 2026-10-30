@@ -20,6 +20,10 @@ pub struct GitStatusFile {
     pub worktree: String,
     pub staged: bool,
     pub untracked: bool,
+    /// Lines added by this change. An untracked file counts as all added.
+    pub added: u32,
+    /// Lines removed by this change; always `0` for an untracked file.
+    pub removed: u32,
 }
 
 /// Working tree state for one repository. Fixture: `contract/fixtures/git-status.json`.
